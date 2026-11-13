@@ -14,3 +14,9 @@ export {
   type MigrationFile,
   migrate,
 } from './migrate.ts';
+export * from './queries/maintenance.ts';
+export * from './queries/matches.ts';
+export * from './queries/patches.ts';
+export * from './queries/players.ts';
+export * from './queries/queues.ts';
+export type * from './types.ts';
