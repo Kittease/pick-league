@@ -248,10 +248,20 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
           points: 260000,
           lastPlayedAt: new Date('2026-11-02T00:00:00Z'),
         },
+        // Real payloads hold ids beyond Data Dragon and the smallint range (seen on KR).
+        {
+          championId: 60018,
+          level: 1,
+          points: 1429,
+          lastPlayedAt: new Date('2026-10-01T00:00:00Z'),
+        },
       ]);
       const masteries =
-        await db`SELECT champion_id, level FROM champion_masteries WHERE puuid = ${p}`;
-      expect(masteries.map((m) => [m.champion_id, m.level])).toEqual([[12, 8]]);
+        await db`SELECT champion_id, level FROM champion_masteries WHERE puuid = ${p} ORDER BY champion_id`;
+      expect(masteries.map((m) => [m.champion_id, m.level])).toEqual([
+        [12, 8],
+        [60018, 1],
+      ]);
 
       await updatePlayerRank(db, p, {
         tier: 'MASTER',

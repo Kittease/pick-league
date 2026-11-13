@@ -174,7 +174,7 @@ CREATE TABLE ladder_entries (
 
 CREATE TABLE champion_masteries (
   puuid          text     NOT NULL REFERENCES players ON DELETE CASCADE,
-  champion_id    smallint NOT NULL,
+  champion_id    integer  NOT NULL,          -- not smallint: the API also returns ids like 60018
   level          smallint NOT NULL,
   points         integer  NOT NULL,
   last_played_at timestamptz NOT NULL,
