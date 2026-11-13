@@ -128,6 +128,44 @@ describe('HostLimiter', () => {
     expect(granted).toBe(3);
   });
 
+  test('warm-up: one request at a time until Riot reports its counts', async () => {
+    const clock = new FakeClock();
+    const limiter = new HostLimiter('h', clock, {
+      appLimits: [{ limit: 100, windowMs: 120_000 }],
+      marginMs: 0,
+      warmUpProbeMs: 20_000,
+    });
+    let granted = 0;
+    for (let i = 0; i < 5; i++) limiter.acquire('m', 1).then(() => granted++);
+    await flushMicrotasks();
+    expect(granted).toBe(1);
+    // A previous process used the whole budget: nothing more until it expires.
+    limiter.observe(
+      'm',
+      new Headers({ 'x-app-rate-limit': '100:120', 'x-app-rate-limit-count': '100:120' }),
+    );
+    await flushMicrotasks();
+    expect(granted).toBe(1);
+    await clock.advance(120_000);
+    expect(granted).toBe(5);
+  });
+
+  test('warm-up: sends another probe when the first one gets no response', async () => {
+    const clock = new FakeClock();
+    const limiter = new HostLimiter('h', clock, { marginMs: 0, warmUpProbeMs: 20_000 });
+    let granted = 0;
+    for (let i = 0; i < 3; i++) limiter.acquire('m', 1).then(() => granted++);
+    await flushMicrotasks();
+    expect(granted).toBe(1);
+    await clock.advance(19_999);
+    expect(granted).toBe(1);
+    await clock.advance(1);
+    expect(granted).toBe(2);
+    limiter.observe('m', new Headers({ 'x-app-rate-limit': '20:1,100:120' }));
+    await flushMicrotasks();
+    expect(granted).toBe(3);
+  });
+
   test('block() holds every request until the given time (429 Retry-After)', async () => {
     const clock = new FakeClock();
     const limiter = new HostLimiter('h', clock, { marginMs: 0 });

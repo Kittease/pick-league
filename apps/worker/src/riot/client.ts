@@ -246,7 +246,11 @@ export class RiotClient implements RiotApi {
     const host = new URL(baseUrl).host;
     let limiter = this.limiters.get(host);
     if (!limiter) {
-      limiter = new HostLimiter(host, this.clock, this.options.limiter);
+      // Warm-up probe outlasts the request timeout, so a lost probe never overlaps the next.
+      limiter = new HostLimiter(host, this.clock, {
+        warmUpProbeMs: (this.options.timeoutMs ?? 15_000) + 5_000,
+        ...this.options.limiter,
+      });
       this.limiters.set(host, limiter);
       this.hostCounters.set(host, { rateLimited: 0, serverErrors: 0 });
     }

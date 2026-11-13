@@ -31,6 +31,12 @@ export interface HostLimiterOptions {
    * so network jitter could otherwise squeeze one request too many into a window.
    */
   marginMs?: number;
+  /**
+   * Warm-up (off when undefined): until a response's headers are observed, send one request at a
+   * time — another one only after this long without a response — so usage left by a previous
+   * process is learnt from the `-Count` headers before a burst can hit 429.
+   */
+  warmUpProbeMs?: number;
 }
 
 /** "20:1,100:120" → [{20, 1000}, {100, 120000}]. Invalid parts are ignored. */
@@ -117,6 +123,10 @@ export class HostLimiter {
   private readonly app: Scope;
   private readonly methods = new Map<string, Scope>();
   private readonly marginMs: number;
+  private readonly warmUpProbeMs: number | undefined;
+  /** False until the first response is observed (only when warm-up is on). */
+  private warm: boolean;
+  private probeSentAt = Number.NEGATIVE_INFINITY;
   private waiters: Waiter[] = [];
   private seq = 0;
   private cancelTimer: (() => void) | null = null;
@@ -132,6 +142,8 @@ export class HostLimiter {
   ) {
     this.app = new Scope(options.appLimits ?? DEFAULT_APP_LIMITS);
     this.marginMs = options.marginMs ?? 500;
+    this.warmUpProbeMs = options.warmUpProbeMs;
+    this.warm = options.warmUpProbeMs === undefined;
   }
 
   /**
@@ -166,6 +178,7 @@ export class HostLimiter {
   /** Learns limits and server-side counts from a response's headers. */
   observe(method: string, headers: Headers): void {
     const now = this.clock.now();
+    this.warm = true;
     const appLimits = parseRateLimitHeader(headers.get('x-app-rate-limit'));
     if (appLimits.length > 0) this.app.limits = appLimits;
     this.syncCounts(this.app, parseRateLimitHeader(headers.get('x-app-rate-limit-count')), now);
@@ -240,7 +253,8 @@ export class HostLimiter {
         remaining.push(w);
         continue;
       }
-      const appWait = this.app.waitMs(now, this.marginMs);
+      const probeWait = this.warm ? 0 : this.probeSentAt + (this.warmUpProbeMs ?? 0) - now;
+      const appWait = Math.max(this.app.waitMs(now, this.marginMs), probeWait);
       if (appWait > 0) {
         // The host budget is shared: nobody else may go before the best-priority waiter.
         appBlocked = true;
@@ -256,6 +270,7 @@ export class HostLimiter {
         remaining.push(w);
         continue;
       }
+      if (!this.warm) this.probeSentAt = now;
       this.app.record(now);
       scope.record(now);
       this.granted++;
