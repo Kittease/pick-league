@@ -24,6 +24,9 @@ export const STATS_REFRESH_ORDER: readonly {
   { view: 'stats_choices', concurrent: true },
   { view: 'stats_choice_matchups', concurrent: true },
   { view: 'stats_choice_traits', concurrent: true },
+  // Tier list ban rates (0003_stats_bans.sql).
+  { view: 'stats_patch_matches', concurrent: true },
+  { view: 'stats_champion_bans', concurrent: true },
 ];
 
 export const STATS_REFRESH_LOCK_KEY = 7_316_221_905;
