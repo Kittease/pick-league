@@ -330,7 +330,7 @@ export function BuildPanel({ state, lookup }: { state: AppState; lookup: StaticL
           size={44}
           mastery={state.mastery[buildTarget.championId]}
         />
-        <div className="flex flex-col leading-tight">
+        <div className="flex min-w-0 flex-col leading-tight">
           <span className="flex items-baseline gap-2">
             <span className="text-lg font-semibold">{name}</span>
             <span
@@ -343,7 +343,7 @@ export function BuildPanel({ state, lookup }: { state: AppState; lookup: StaticL
             </span>
           </span>
           {data && (
-            <span className="num text-[11px] whitespace-nowrap text-muted-foreground">
+            <span className="num truncate text-[11px] text-muted-foreground">
               patch {data.patchUsed} · {compact(data.games)} games ·{' '}
               {confidenceLabel(data.confidence).toLowerCase()} confidence
             </span>
@@ -373,36 +373,51 @@ export function BuildPanel({ state, lookup }: { state: AppState; lookup: StaticL
           </div>
         )}
         {data && (
-          <div className="flex flex-col gap-6 p-4">
-            <section className="grid grid-cols-[1fr_1fr_1.3fr_1.3fr] gap-4">
-              <ItemGroup title="Starting" items={data.items.starting} lookup={lookup} />
-              <ItemGroup title="Early" items={data.items.early} lookup={lookup} ordered />
-              <ItemGroup title="Core · buy order" items={data.items.core} lookup={lookup} ordered />
-              <div className="min-w-0">
-                <SectionTitle>Situational</SectionTitle>
-                <div className="flex flex-col gap-1">
-                  {data.items.situational.length === 0 && (
-                    <p className="text-xs text-muted-foreground">No adaptation needed.</p>
-                  )}
-                  {data.items.situational.map((rec) => (
-                    <ItemTile key={rec.itemId} rec={rec} lookup={lookup} variant="situational" />
-                  ))}
-                </div>
-              </div>
-            </section>
-            <div className="grid grid-cols-2 gap-6">
-              <Runes build={data} lookup={lookup} />
-              <div className="flex flex-col gap-6">
-                <Spells
-                  build={data}
-                  lookup={lookup}
-                  mySpells={state.champSelect?.mySpells ?? null}
-                />
-                <SkillOrder build={data} />
-              </div>
-            </div>
-          </div>
+          <BuildDetails
+            build={data}
+            lookup={lookup}
+            mySpells={state.champSelect?.mySpells ?? null}
+          />
         )}
+      </div>
+    </div>
+  );
+}
+
+/** Items, runes, spells and skill order of a build, each with its reasons. */
+export function BuildDetails({
+  build,
+  lookup,
+  mySpells,
+}: {
+  build: BuildResponse;
+  lookup: StaticLookup | null;
+  mySpells: [number, number] | null;
+}) {
+  return (
+    <div className="flex flex-col gap-6 p-4">
+      <section className="grid grid-cols-[1fr_1fr_1.3fr_1.3fr] gap-4">
+        <ItemGroup title="Starting" items={build.items.starting} lookup={lookup} />
+        <ItemGroup title="Early" items={build.items.early} lookup={lookup} ordered />
+        <ItemGroup title="Core · buy order" items={build.items.core} lookup={lookup} ordered />
+        <div className="min-w-0">
+          <SectionTitle>Situational</SectionTitle>
+          <div className="flex flex-col gap-1">
+            {build.items.situational.length === 0 && (
+              <p className="text-xs text-muted-foreground">No adaptation needed.</p>
+            )}
+            {build.items.situational.map((rec) => (
+              <ItemTile key={rec.itemId} rec={rec} lookup={lookup} variant="situational" />
+            ))}
+          </div>
+        </div>
+      </section>
+      <div className="grid grid-cols-2 gap-6">
+        <Runes build={build} lookup={lookup} />
+        <div className="flex flex-col gap-6">
+          <Spells build={build} lookup={lookup} mySpells={mySpells} />
+          <SkillOrder build={build} />
+        </div>
       </div>
     </div>
   );

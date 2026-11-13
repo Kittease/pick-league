@@ -12,7 +12,7 @@ import { ChampionIcon } from './game-icon';
 import { Notice } from './notice';
 import { DeltaText, ReasonHeadline, ReasonList, ReasonStrip } from './reasons';
 
-function ConfidencePips({ confidence }: { confidence: number }) {
+export function ConfidencePips({ confidence }: { confidence: number }) {
   const filled = confidence >= 0.75 ? 3 : confidence >= 0.4 ? 2 : 1;
   return (
     <span className="flex gap-0.5" title={`${confidenceLabel(confidence)} confidence`}>

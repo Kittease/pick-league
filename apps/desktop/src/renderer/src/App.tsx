@@ -8,6 +8,8 @@ import { BuildPanel } from './components/build-panel';
 import { ChampSelectBoard } from './components/champ-select-board';
 import { PicksPanel } from './components/picks-panel';
 import { StatusBar } from './components/status-bar';
+import { TierListPage } from './components/tier-list';
+import { useAutoView, ViewNav } from './components/view-nav';
 import { type StaticLookup, useAppState, useStatic } from './hooks/use-app';
 
 type Tab = 'picks' | 'build';
@@ -85,6 +87,7 @@ function ChampSelect({ state, lookup }: { state: AppState; lookup: StaticLookup 
 export function App() {
   const state = useAppState();
   const lookup = useStatic(state?.staticVersion);
+  const { view, setView, setBusy } = useAutoView(Boolean(state?.champSelect));
 
   // Toast each finished apply once.
   const lastApplyAt = useRef<string | null>(null);
@@ -104,11 +107,22 @@ export function App() {
     <TooltipProvider>
       <div className="flex h-full flex-col bg-background text-foreground">
         <StatusBar state={state} />
-        {state.champSelect ? (
-          <ChampSelect state={state} lookup={lookup} />
-        ) : (
-          <Waiting state={state} />
-        )}
+        <div className="flex min-h-0 flex-1">
+          <ViewNav view={view} onChange={setView} liveSelect={state.champSelect !== null} />
+          {/* Kept mounted so role, filters and selection survive a trip to champ select. */}
+          <div className={view === 'tierlist' ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}>
+            <TierListPage state={state} lookup={lookup} onBusyChange={setBusy} />
+          </div>
+          {view === 'select' && (
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {state.champSelect ? (
+                <ChampSelect state={state} lookup={lookup} />
+              ) : (
+                <Waiting state={state} />
+              )}
+            </div>
+          )}
+        </div>
       </div>
       <Toaster theme="dark" position="bottom-right" />
     </TooltipProvider>
