@@ -29,7 +29,49 @@ If port 3000 is already taken, set `API_PORT=3001` in `.env`.
 
 ### Desktop app
 
-_To be completed._
+The helper runs on the computer where you play (Windows, macOS or Linux), next to the League
+client — ideally on a second screen.
+
+```sh
+bun install
+bun run dev:desktop      # opens the app; start League whenever you like
+```
+
+- It finds the League client by itself (and reconnects when the client restarts). During
+  champion select it shows the best picks for your assigned role, each with its reasons
+  (win-rate delta + number of games) and **your mastery level on the champion icon**. Banned,
+  picked and not-owned champions are left out.
+- When you lock in it switches to the build: items in buy order (starting, early, core,
+  situational), runes, summoner spells and skill order, every element with its reasons.
+- Runes and summoner spells are **applied automatically when you lock in** (setting
+  "Apply runes and spells on lock-in", on by default; an "Apply runes + spells" button does it
+  by hand). Runes go to a page named `PickLeague`; if every page slot holds one of your pages,
+  the app warns you instead of deleting anything. Flash stays on the key you already use.
+- It never picks, bans, locks in or accepts for you, and never shows other players' names.
+
+**API address.** By default the app talks to `http://localhost:3000` (the Docker stack on the
+same computer). If the stack runs on a server, open Settings (gear icon) and set
+`http://<vps-ip>:3000` — the port must be reachable from your computer. Settings are saved in
+the app's user data folder. `PICKLEAGUE_API_URL=http://<vps-ip>:3000` also overrides it for one
+run.
+
+**Demo mode, without League.** `bun run dev:desktop:mock` (or the "Demo mode" switch in
+Settings) replays a scripted champion select with a fake account, fake owned champions and
+mastery, and fake rune pages. To also run without the API stack, start the dev-only fake API,
+which answers with made-up numbers in the contract's shape:
+
+```sh
+cd apps/desktop
+bun run fake-api                                     # http://localhost:3000 (PORT=3100 to change)
+PICKLEAGUE_API_URL=http://localhost:3100 bun run dev:mock   # if you changed the port
+```
+
+**Installers.** `bun run --filter @pick-league/desktop package` builds an installer for the
+current OS into `apps/desktop/dist/` (unsigned).
+
+**Troubleshooting.** "League client not found": start League (the app retries every few
+seconds). "Cannot reach the API": check the address in Settings and that `docker compose ps`
+shows the api running. "No data yet": the worker needs time to collect matches.
 
 ## Development
 
