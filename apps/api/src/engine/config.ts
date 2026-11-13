@@ -81,6 +81,27 @@ export const ENGINE_CONFIG = {
     confidenceK: 300,
   },
 
+  /**
+   * Tier list (GET /tierlist). Score = (champion win rate − role average win rate) shrunk with
+   * `picks.shrinkK.base`; matchups/duos use `picks.shrinkK.matchup` / `.duo`. Champions under
+   * `minCandidateGames` are left out.
+   *
+   * Tiers come from the score percentile within the role (midpoint rank `(i + 0.5) / n`, ties
+   * share the best tier): top 10 % → S, next 20 % → A, next 35 % → B, next 20 % → C, rest → D.
+   * A champion whose score is not positive (at or below the role average once shrunk) is capped
+   * at B, so a weak role never gets fake S/A picks.
+   */
+  tierList: {
+    /** Cumulative upper percentile bounds of S, A, B, C (D = the rest). */
+    tierPercentiles: { S: 0.1, A: 0.3, B: 0.65, C: 0.85 },
+    /** Best tier allowed for a champion with score <= 0. */
+    nonPositiveBestTier: 'B',
+    /** Matchups/duos need at least this many games to be listed. */
+    minRelationGames: 15,
+    /** Matchups (best/worst) and duos listed per champion. */
+    relationsShown: 3,
+  },
+
   /** Picks confidence: weighted mean of n / (n + k) of each scored component. */
   confidenceK: {
     base: 200,

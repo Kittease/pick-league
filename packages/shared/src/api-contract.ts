@@ -402,3 +402,68 @@ export interface BuildResponse {
   summonerSpells: SummonerSpellsRecommendation;
   skillOrder: SkillOrderRecommendation;
 }
+
+// ---------------------------------------------------------------------------
+// GET /tierlist?role=UTILITY&patch=latest
+// (kept in its own block: route, query schema and response types)
+// ---------------------------------------------------------------------------
+
+export const TIER_LIST_ROUTE = '/tierlist';
+
+export const TIERS = ['S', 'A', 'B', 'C', 'D'] as const;
+export type Tier = (typeof TIERS)[number];
+
+/** Query string of `GET /tierlist`. `patch` = a patch id or 'latest' (default). */
+export const tierListQuerySchema = z.object({
+  role: positionSchema,
+  patch: z.union([z.literal('latest'), patchIdSchema]).default('latest'),
+});
+export type TierListQuery = z.infer<typeof tierListQuerySchema>;
+export type TierListQueryInput = z.input<typeof tierListQuerySchema>;
+
+/** A lane opponent or a duo partner of a tier list entry. */
+export interface TierListRelation {
+  championId: number;
+  /** Role of the opponent / partner (bot lane opponents can be BOTTOM or UTILITY). */
+  role: Position;
+  /** Win-rate delta vs the entry's own baseline, shrunk by sample size like the picks engine. */
+  delta: number;
+  /** Raw win rate of the entry in those games. */
+  winRate: number;
+  games: number;
+}
+
+export interface TierListEntry {
+  championId: number;
+  tier: Tier;
+  /** Shrunk win-rate delta vs the role average (higher = better); entries are sorted by it. */
+  score: number;
+  /** Win rate of champion+role on `patchUsed`. */
+  winRate: number;
+  /** Games of champion+role on `patchUsed`. */
+  games: number;
+  /** Share of the role's games on `patchUsed` played by this champion (sums to ~1 over a role). */
+  pickRate: number;
+  /** Share of matches of `patchUsed` where this champion was banned (by either team). */
+  banRate: number;
+  /** 0..1, derived from the sample size. */
+  confidence: number;
+  /** Current patch, or the previous one when the current has too few games (like the picks engine). */
+  patchUsed: PatchId;
+  /** Up to 3 best lane opponents, best first (positive deltas only). */
+  bestMatchups: TierListRelation[];
+  /** Up to 3 worst lane opponents, worst first (negative deltas only). */
+  worstMatchups: TierListRelation[];
+  /** Up to 3 best duo partners (UTILITY↔BOTTOM, MIDDLE↔JUNGLE, TOP↔JUNGLE), positive deltas only. */
+  bestDuos: TierListRelation[];
+}
+
+export interface TierListResponse {
+  role: Position;
+  /** Requested patch ('latest' resolved to the current patch). */
+  patch: PatchId;
+  /** Games played in this role on `patch` (one per team per match). */
+  roleGames: number;
+  /** Sorted by score, descending. */
+  entries: TierListEntry[];
+}

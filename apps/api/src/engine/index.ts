@@ -4,5 +4,12 @@ export * from './math.ts';
 export { type PicksData, recommendPicks, sideTraits } from './picks.ts';
 export * from './roles.ts';
 export * from './skills.ts';
+export {
+  assignTiers,
+  type BanRow,
+  buildTierList,
+  type PatchMatchesRow,
+  type TierListData,
+} from './tierlist.ts';
 export * from './traits.ts';
 export type * from './types.ts';
