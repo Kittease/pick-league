@@ -120,7 +120,10 @@ function rand(...parts: number[]): number {
 const round = (n: number, digits = 4) => Number(n.toFixed(digits));
 const delta = (...seed: number[]) => round((rand(...seed) - 0.42) * 0.06);
 const games = (...seed: number[]) => 40 + Math.floor(rand(...seed, 7) * 900);
-const pct = (d: number) => `${d >= 0 ? '+' : ''}${(d * 100).toFixed(1)}%`;
+const pct = (d: number) => {
+  const p = Math.round(d * 1000) / 10;
+  return `${p > 0 ? '+' : p < 0 ? '-' : ''}${Math.abs(p).toFixed(1)}%`;
+};
 
 const ROLE_TAGS: Record<Position, string[]> = {
   TOP: ['Fighter', 'Tank'],

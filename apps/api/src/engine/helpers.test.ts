@@ -17,7 +17,8 @@ describe('formatting', () => {
   test('deltas and games', () => {
     expect(formatDelta(0.0281)).toBe('+2.8%');
     expect(formatDelta(-0.013)).toBe('−1.3%');
-    expect(formatDelta(0.0001)).toBe('±0.0%');
+    expect(formatDelta(0.0001)).toBe('0.0%');
+    expect(formatDelta(-0.0004)).toBe('0.0%');
     expect(formatGames(1240)).toBe('1,240');
   });
 });

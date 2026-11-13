@@ -8,11 +8,18 @@ export const ROLE_LABEL: Record<Position, string> = {
   UTILITY: 'Support',
 };
 
-/** +0.028 → "+2.8" (points). */
+/** Sign of a delta once rounded for display (−0.0003 shows as 0.0 → 0). */
+export function deltaSign(delta: number, digits = 1): -1 | 0 | 1 {
+  const f = 10 ** digits;
+  const r = Math.round(delta * 100 * f) / f;
+  return r > 0 ? 1 : r < 0 ? -1 : 0;
+}
+
+/** +0.028 → "+2.8" (points); anything that rounds to zero → "0.0", without a sign. */
 export function deltaPoints(delta: number, digits = 1): string {
-  const v = delta * 100;
-  const s = v.toFixed(digits);
-  return v > 0 ? `+${s}` : v < 0 ? s : `±${Math.abs(v).toFixed(digits)}`;
+  const sign = deltaSign(delta, digits);
+  const s = Math.abs(delta * 100).toFixed(digits);
+  return sign > 0 ? `+${s}` : sign < 0 ? `-${s}` : (0).toFixed(digits);
 }
 
 /** 0.513 → "51.3%". */

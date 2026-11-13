@@ -1,5 +1,5 @@
 import type { Reason } from '@pick-league/shared';
-import { compact, deltaPoints, REASON_KIND_LABEL, sampleWeight } from '@/lib/format';
+import { compact, deltaPoints, deltaSign, REASON_KIND_LABEL, sampleWeight } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 /** Scale of the diverging bar: ±5 points fills one half. */
@@ -34,11 +34,12 @@ export function DeltaBar({
 }
 
 export function DeltaText({ delta, className }: { delta: number; className?: string }) {
+  const sign = deltaSign(delta);
   return (
     <span
       className={cn(
         'num tabular-nums',
-        delta > 0 ? 'text-up' : delta < 0 ? 'text-down' : 'text-muted-foreground',
+        sign > 0 ? 'text-up' : sign < 0 ? 'text-down' : 'text-muted-foreground',
         className,
       )}
     >

@@ -35,10 +35,10 @@ export function formatGames(n: number): string {
   return intFormat.format(n);
 }
 
-/** 0.0281 → "+2.8%" */
+/** 0.0281 → "+2.8%"; anything that rounds to zero → "0.0%", without a sign. */
 export function formatDelta(delta: number): string {
   const pct = Math.round(delta * 1000) / 10;
-  const sign = pct > 0 ? '+' : pct < 0 ? '−' : '±';
+  const sign = pct > 0 ? '+' : pct < 0 ? '−' : '';
   return `${sign}${Math.abs(pct).toFixed(1)}%`;
 }
 
