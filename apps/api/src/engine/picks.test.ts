@@ -98,7 +98,7 @@ describe('recommendPicks', () => {
     const naut = result.candidates[0];
     expect(naut).toMatchObject({ championId: 111, patchUsed: PREV, games: 900 });
     expect(naut?.reasons[0]).toMatchObject({ kind: 'patch_fallback', games: 900 });
-    expect(naut?.reasons[0]?.label).toContain('only 40 Nautilus support games on 15.22');
+    expect(naut?.reasons[0]?.label).toContain('only 40 games of Nautilus support on 15.22');
   });
 
   test('vs enemy composition traits, net of the role-wide effect', () => {

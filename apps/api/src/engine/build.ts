@@ -200,7 +200,7 @@ function contextReason(res: ContextResult, what: string): Reason | null {
   const c = res.context;
   return {
     kind: c.kind,
-    label: `${formatDelta(res.delta)} ${c.label} with ${what} (${c.note ? `${c.note}, ` : ''}${formatGames(res.games)} games)`,
+    label: `${formatDelta(res.delta)} ${c.label} with ${what} (${c.note ? `${c.note}, ` : ''}${formatGames(res.games)})`,
     delta: round(res.delta),
     games: res.games,
     ...(c.championIds ? { championIds: c.championIds } : {}),
@@ -213,7 +213,7 @@ function baseReason(s: Scored | null, what: string): Reason[] {
   return [
     {
       kind: 'base',
-      label: `${what}: ${formatRate(winRate(s.row))} win rate, picked in ${formatRate(s.share)} of games (${formatGames(s.row.games)} games)`,
+      label: `${what}: ${formatRate(winRate(s.row))} win rate, picked in ${formatRate(s.share)} of games (${formatGames(s.row.games)})`,
       delta: round(s.delta),
       games: s.row.games,
     },
@@ -231,7 +231,7 @@ export function recommendBuild(req: BuildRequest, data: BuildData): BuildRespons
     ? [
         {
           kind: 'patch_fallback',
-          label: `Patch ${data.patch.patch} data: only ${formatGames(data.patch.currentGames)} games on ${data.currentPatch}`,
+          label: `Patch ${data.patch.patch} data: only ${formatGames(data.patch.currentGames)} on ${data.currentPatch}`,
           delta: 0,
           games: baseline.games,
         },
@@ -548,7 +548,7 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
     return [
       {
         kind: 'popularity',
-        label: `Built in ${formatRate(share)} of games, ${formatRate(winRate(r))} win rate (${formatGames(r.games)} games)`,
+        label: `Built in ${formatRate(share)} of games, ${formatRate(winRate(r))} win rate (${formatGames(r.games)})`,
         delta: round(shrink(winRate(r) - baseWr, r.games, B.shrinkK)),
         games: r.games,
         itemId: id,
@@ -628,7 +628,7 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
       reasons: [
         {
           kind: 'popularity',
-          label: `Bought before the first item in ${formatRate(r.games / baseline.games)} of games (${formatGames(r.games)} games)`,
+          label: `Bought before the first item in ${formatRate(r.games / baseline.games)} of games (${formatGames(r.games)})`,
           delta: 0,
           games: r.games,
           itemId: Number(r.choice),
@@ -691,7 +691,7 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
       const replaces = weakestCore(primaryMatchup);
       addSituational(swap.itemId, replaces, {
         kind: 'matchup',
-        label: `${formatDelta(swap.delta)} ${primaryMatchup.label} when built (${formatGames(swap.games)} games)`,
+        label: `${formatDelta(swap.delta)} ${primaryMatchup.label} when built (${formatGames(swap.games)})`,
         delta: round(swap.delta),
         games: swap.games,
         ...(primaryMatchup.championIds ? { championIds: primaryMatchup.championIds } : {}),
@@ -705,7 +705,7 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
       const replaces = weakestCore(ctx);
       addSituational(swap.itemId, replaces, {
         kind: 'item_swap',
-        label: `${formatDelta(swap.delta)} ${ctx.label} when built${replaces !== null ? ` instead of ${names.item(replaces)}` : ''} (${formatGames(swap.games)} games)`,
+        label: `${formatDelta(swap.delta)} ${ctx.label} when built${replaces !== null ? ` instead of ${names.item(replaces)}` : ''} (${formatGames(swap.games)})`,
         delta: round(swap.delta),
         games: swap.games,
         trait,

@@ -30,9 +30,9 @@ export function sumStats(rows: readonly GamesWins[]): GamesWins {
 
 const intFormat = new Intl.NumberFormat('en-US');
 
-/** 1240 → "1,240" */
+/** 1240 → "1,240 games", 1 → "1 game" */
 export function formatGames(n: number): string {
-  return intFormat.format(n);
+  return `${intFormat.format(n)} ${n === 1 ? 'game' : 'games'}`;
 }
 
 /** 0.0281 → "+2.8%"; anything that rounds to zero → "0.0%", without a sign. */

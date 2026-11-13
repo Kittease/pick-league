@@ -175,7 +175,7 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
     components.push({
       reason: {
         kind: 'base',
-        label: `${formatRate(baseWr)} win rate as ${ROLE_LABELS[role]} (${formatGames(base.games)} games)`,
+        label: `${formatRate(baseWr)} win rate as ${ROLE_LABELS[role]} (${formatGames(base.games)})`,
         delta: round(baseDelta),
         games: base.games,
       },
@@ -204,7 +204,7 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
           kind: 'matchup',
           label:
             stats.games > 0
-              ? `${formatDelta(shrunk)} vs ${names.champion(enemy.championId)} (${where}, ${formatGames(stats.games)} games)`
+              ? `${formatDelta(shrunk)} vs ${names.champion(enemy.championId)} (${where}, ${formatGames(stats.games)})`
               : `No games vs ${names.champion(enemy.championId)} yet (${where})`,
           delta: round(shrunk),
           games: stats.games,
@@ -232,7 +232,7 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
           kind: isDuo ? 'duo' : 'with_comp',
           label:
             stats.games > 0
-              ? `${formatDelta(shrunk)} with ${names.champion(ally.championId)} (${where}, ${formatGames(stats.games)} games)`
+              ? `${formatDelta(shrunk)} with ${names.champion(ally.championId)} (${where}, ${formatGames(stats.games)})`
               : `No games with ${names.champion(ally.championId)} yet (${where})`,
           delta: round(shrunk),
           games: stats.games,
@@ -261,7 +261,7 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
             kind: side === 'enemy' ? 'vs_comp' : 'with_comp',
             label:
               games > 0
-                ? `${formatDelta(shrunk)} ${what} (${formatGames(games)} games)`
+                ? `${formatDelta(shrunk)} ${what} (${formatGames(games)})`
                 : `No games ${what} yet`,
             delta: round(shrunk),
             games,
@@ -302,7 +302,7 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
     if (pc.fellBack) {
       reasons.unshift({
         kind: 'patch_fallback',
-        label: `Patch ${patch} data: only ${formatGames(pc.currentGames)} ${champName} ${ROLE_LABELS[role]} games on ${data.currentPatch}`,
+        label: `Patch ${patch} data: only ${formatGames(pc.currentGames)} of ${champName} ${ROLE_LABELS[role]} on ${data.currentPatch}`,
         delta: 0,
         games: base.games,
       });
