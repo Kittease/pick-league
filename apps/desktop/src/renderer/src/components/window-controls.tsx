@@ -49,16 +49,18 @@ function ControlButton({
 
 /** Minimize / maximize-restore / close, at the right end of the header (Windows/Linux). */
 export function WindowControls({ maximized }: { maximized: boolean }) {
+  // Arrow functions: passing the bridged functions as handlers would hand them the click event,
+  // which the context bridge cannot clone ("An object could not be cloned").
   const w = window.pickleague.window;
   return (
     <div className="flex h-full shrink-0 items-stretch border-l border-border">
-      <ControlButton label="Minimize" onClick={w.minimize}>
+      <ControlButton label="Minimize" onClick={() => w.minimize()}>
         <MinusIcon />
       </ControlButton>
-      <ControlButton label={maximized ? 'Restore' : 'Maximize'} onClick={w.toggleMaximize}>
+      <ControlButton label={maximized ? 'Restore' : 'Maximize'} onClick={() => w.toggleMaximize()}>
         {maximized ? <CopyIcon className="-scale-x-100" /> : <SquareIcon className="size-3!" />}
       </ControlButton>
-      <ControlButton label="Close" onClick={w.close} danger>
+      <ControlButton label="Close" onClick={() => w.close()} danger>
         <XIcon />
       </ControlButton>
     </div>
