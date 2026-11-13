@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createDdragonClient } from '@pick-league/shared';
 import { app, BrowserWindow, ipcMain, powerSaveBlocker, shell } from 'electron';
-import { IPC, type Settings } from '../core/app-state.ts';
+import { IPC, type Settings, type WindowState } from '../core/app-state.ts';
 import { staticResponseFromDdragon } from '../core/static-from-ddragon.ts';
 import { createApiClient } from './api-client.ts';
 import { Controller } from './controller.ts';
@@ -15,6 +15,36 @@ app.setName('PickLeague');
 const forcedMock = process.env.PICKLEAGUE_MOCK_LCU === '1';
 const log = (message: string) => console.log(`[pickleague] ${message}`);
 
+/**
+ * Windows and Linux: no native title bar nor menu bar; the app header is the drag region and
+ * draws its own window controls. macOS keeps its native title bar and traffic lights.
+ * Dev only: PICKLEAGUE_FORCE_FRAMELESS=1 applies the Windows setup on any OS (to check it on a Mac).
+ */
+const frameless =
+  process.platform !== 'darwin' ||
+  (!app.isPackaged && process.env.PICKLEAGUE_FORCE_FRAMELESS === '1');
+
+function windowState(win: BrowserWindow): WindowState {
+  return { customControls: frameless, maximized: win.isMaximized() || win.isFullScreen() };
+}
+
+/** Without a menu, the dev accelerators it provided are gone: keep reload + devtools in dev. */
+function devShortcuts(win: BrowserWindow): void {
+  if (app.isPackaged) return;
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const mod = input.control || input.meta;
+    const key = input.key.toLowerCase();
+    if (input.key === 'F12' || (mod && input.shift && key === 'i')) {
+      win.webContents.toggleDevTools();
+      event.preventDefault();
+    } else if ((mod && key === 'r') || input.key === 'F5') {
+      win.webContents.reloadIgnoringCache();
+      event.preventDefault();
+    }
+  });
+}
+
 function createWindow(controller: Controller): BrowserWindow {
   const win = new BrowserWindow({
     width: 1180,
@@ -24,6 +54,7 @@ function createWindow(controller: Controller): BrowserWindow {
     title: 'PickLeague',
     backgroundColor: '#0b0d10',
     autoHideMenuBar: true,
+    frame: !frameless,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -39,6 +70,26 @@ function createWindow(controller: Controller): BrowserWindow {
     return { action: 'deny' };
   });
   win.webContents.on('will-navigate', (e) => e.preventDefault());
+
+  if (frameless) {
+    win.removeMenu();
+    devShortcuts(win);
+    // Window managers may resize a maximized window without an 'unmaximize' event: also
+    // re-check on resize, sending only changes.
+    let lastMaximized: boolean | null = null;
+    const sendWindowState = () => {
+      if (win.isDestroyed()) return;
+      const state = windowState(win);
+      if (state.maximized === lastMaximized) return;
+      lastMaximized = state.maximized;
+      win.webContents.send(IPC.windowState, state);
+    };
+    win.on('maximize', sendWindowState);
+    win.on('unmaximize', sendWindowState);
+    win.on('resize', sendWindowState);
+    win.on('enter-full-screen', sendWindowState);
+    win.on('leave-full-screen', sendWindowState);
+  }
 
   const unsubscribe = controller.onChange((state) => {
     if (!win.isDestroyed()) win.webContents.send(IPC.state, state);
@@ -108,6 +159,21 @@ async function main(): Promise<void> {
   );
   ipcMain.handle(IPC.refresh, () => controller.refresh());
   ipcMain.handle(IPC.refreshStats, () => controller.refreshStats());
+  const senderWindow = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent) =>
+    BrowserWindow.fromWebContents(e.sender);
+  ipcMain.handle(IPC.getWindowState, (e) => {
+    const win = senderWindow(e);
+    return win ? windowState(win) : { customControls: frameless, maximized: false };
+  });
+  ipcMain.on(IPC.windowMinimize, (e) => senderWindow(e)?.minimize());
+  ipcMain.on(IPC.windowToggleMaximize, (e) => {
+    const win = senderWindow(e);
+    if (!win) return;
+    if (win.isFullScreen()) win.setFullScreen(false);
+    else if (win.isMaximized()) win.unmaximize();
+    else win.maximize();
+  });
+  ipcMain.on(IPC.windowClose, (e) => senderWindow(e)?.close());
 
   controller.start();
   createWindow(controller);

@@ -113,7 +113,19 @@ export const IPC = {
   previewBuild: 'pickleague:preview-build',
   refresh: 'pickleague:refresh',
   refreshStats: 'pickleague:refresh-stats',
+  getWindowState: 'window:get-state',
+  windowState: 'window:state',
+  windowMinimize: 'window:minimize',
+  windowToggleMaximize: 'window:toggle-maximize',
+  windowClose: 'window:close',
 } as const;
+
+/** Window chrome drawn by the app itself (frameless window on Windows and Linux). */
+export interface WindowState {
+  /** No native title bar: the header is the drag region and shows minimize/maximize/close. */
+  customControls: boolean;
+  maximized: boolean;
+}
 
 /** `window.pickleague` in the renderer. */
 export interface PickLeagueBridge {
@@ -127,5 +139,13 @@ export interface PickLeagueBridge {
   refresh(): Promise<void>;
   /** Asks the API to include every stored game in its stats now; progress arrives in `stats`. */
   refreshStats(): Promise<StatsRefreshOutcome>;
+  /** Frameless window controls. */
+  window: {
+    getState(): Promise<WindowState>;
+    minimize(): void;
+    toggleMaximize(): void;
+    close(): void;
+    onState(listener: (state: WindowState) => void): () => void;
+  };
   onState(listener: (state: AppState) => void): () => void;
 }

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { type AppState, IPC, type PickLeagueBridge } from '../core/app-state.ts';
+import { type AppState, IPC, type PickLeagueBridge, type WindowState } from '../core/app-state.ts';
 
 const bridge: PickLeagueBridge = {
   getState: () => ipcRenderer.invoke(IPC.getState),
@@ -9,6 +9,17 @@ const bridge: PickLeagueBridge = {
   previewBuild: (championId) => ipcRenderer.invoke(IPC.previewBuild, championId),
   refresh: () => ipcRenderer.invoke(IPC.refresh),
   refreshStats: () => ipcRenderer.invoke(IPC.refreshStats),
+  window: {
+    getState: () => ipcRenderer.invoke(IPC.getWindowState),
+    minimize: () => ipcRenderer.send(IPC.windowMinimize),
+    toggleMaximize: () => ipcRenderer.send(IPC.windowToggleMaximize),
+    close: () => ipcRenderer.send(IPC.windowClose),
+    onState(listener) {
+      const handler = (_e: unknown, state: WindowState) => listener(state);
+      ipcRenderer.on(IPC.windowState, handler);
+      return () => ipcRenderer.removeListener(IPC.windowState, handler);
+    },
+  },
   onState(listener) {
     const handler = (_e: unknown, state: AppState) => listener(state);
     ipcRenderer.on(IPC.state, handler);
