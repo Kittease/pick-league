@@ -66,6 +66,7 @@ class FakeRiot implements RiotApi {
   leagues: Record<LadderTier, LeagueListDto> = {
     CHALLENGER: { leagueId: 'l', tier: 'CHALLENGER', name: 'n', queue: 'q', entries: [] },
     GRANDMASTER: { leagueId: 'l', tier: 'GRANDMASTER', name: 'n', queue: 'q', entries: [] },
+    MASTER: { leagueId: 'l', tier: 'MASTER', name: 'n', queue: 'q', entries: [] },
   };
   matchIds = new Map<string, string[]>();
   idQueries: MatchIdsQuery[] = [];
@@ -141,7 +142,7 @@ class FakePatches implements PatchView {
   generation = 1;
   refreshRequests = 0;
   classify(patch: string): PatchVerdict {
-    if (patch === '15.22' || patch === '15.21') return 'keep';
+    if (patch === '15.22') return 'keep';
     return patch === '15.23' ? 'too_new' : 'old';
   }
   requestRefresh() {
@@ -224,6 +225,45 @@ d('PlatformWorker (Postgres)', () => {
     expect((await worker.progress()).playedToList).toBe(4);
   });
 
+  test('ladder refresh keeps only the top Master players by LP, or none with masterPlayers 0', async () => {
+    const master = (lp: number) =>
+      ({
+        ...ladder(1, () => 30)[0],
+        puuid: `fake-master-${lp}`,
+        leaguePoints: lp,
+      }) as LeagueListDto['entries'][number];
+    riot.leagues.MASTER.entries = [master(100), master(300), master(200)];
+    const top2 = new PlatformWorker({
+      platform: 'EUW1',
+      db,
+      riot,
+      patches,
+      clock: fixedClock,
+      options: { masterPlayers: 2 },
+    });
+    expect(await top2.refreshLadder()).toBe(2);
+    const rows = await db<{ puuid: string; tier: string }[]>`
+      SELECT puuid, tier FROM ladder_entries ORDER BY puuid`;
+    expect([...rows]).toEqual([
+      { puuid: 'fake-master-200', tier: 'MASTER' },
+      { puuid: 'fake-master-300', tier: 'MASTER' },
+    ]);
+
+    riot.calls = [];
+    riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
+    const none = new PlatformWorker({
+      platform: 'EUW1',
+      db,
+      riot,
+      patches,
+      clock: fixedClock,
+      options: { masterPlayers: 0 },
+    });
+    await none.refreshLadder();
+    expect(riot.calls).toEqual(['league:CHALLENGER', 'league:GRANDMASTER']);
+    expect(await count(db, 'ladder_entries')).toBe(1);
+  });
+
   test('first listing goes back 14 days, paginates, then continues from matches_synced_until', async () => {
     riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
     await worker.refreshLadder();
@@ -273,8 +313,8 @@ d('PlatformWorker (Postgres)', () => {
     expect(q?.status).toBe('DONE');
   });
 
-  test('old patch: skipped, and older ids are skipped without fetching nor listing', async () => {
-    riot.matches.set('EUW1_7000000100', makeMatch('EUW1_7000000100', '15.20.700.1'));
+  test('previous patch: skipped, and older ids are skipped without fetching nor listing', async () => {
+    riot.matches.set('EUW1_7000000100', makeMatch('EUW1_7000000100', '15.21.700.1'));
     await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000100', 'EUW1_7000000050']);
     const q = (matchId: string) => ({ matchId, platform: 'EUW1' as const, attempts: 0 });
     expect(await worker.processMatch(q('EUW1_7000000100'))).toBe('skipped');
@@ -345,30 +385,34 @@ d('PlatformWorker (Postgres)', () => {
     riot.leagues.CHALLENGER.entries = ladder(2, () => 50);
     riot.matchIds.set(ladderPuuid(0), ['EUW1_7000000502', 'EUW1_7000000501']);
     riot.matchIds.set(ladderPuuid(1), ['EUW1_7000000502']);
-    riot.matches.set('EUW1_7000000501', makeMatch('EUW1_7000000501', '15.22.1.1', ladderPuuid(0)));
-    riot.matches.set('EUW1_7000000502', makeMatch('EUW1_7000000502', '15.21.1.1', ladderPuuid(0)));
+    riot.matches.set('EUW1_7000000501', makeMatch('EUW1_7000000501', '15.21.1.1', ladderPuuid(0)));
+    riot.matches.set('EUW1_7000000502', makeMatch('EUW1_7000000502', '15.22.1.1', ladderPuuid(0)));
 
     const ac = new AbortController();
     const running = worker.start(ac.signal);
     for (let i = 0; i < 200; i++) {
       const n = await count(db, 'player_enrichment_queue');
       const m = await count(db, 'matches');
-      if (m === 2 && n === 0) break;
+      const [p] =
+        await db`SELECT count(*)::int AS n FROM match_fetch_queue WHERE status = 'PENDING'`;
+      if (m === 1 && n === 0 && p?.n === 0) break;
       await Bun.sleep(25);
     }
     ac.abort();
     await running;
 
+    // Only the latest patch is stored: the 15.21 match is skipped before its timeline.
     const m = await count(db, 'matches');
-    expect(m).toBe(2);
+    expect(m).toBe(1);
+    expect(riot.calls).not.toContain('timeline:EUW1_7000000501');
     // Each match fetched once even though two players listed EUW1_7000000502.
     expect(riot.calls.filter((c) => c === 'match:EUW1_7000000502')).toHaveLength(1);
     const enrichCalls = riot.calls.filter((c) => c.startsWith('entries:'));
-    expect(enrichCalls.length).toBe(18);
+    expect(enrichCalls.length).toBe(9);
     const runs =
       await db`SELECT platform, finished_at, matches_added, players_polled FROM worker_runs`;
     expect(runs).toHaveLength(1);
-    expect(runs[0]).toMatchObject({ platform: 'EUW1', matches_added: 2, players_polled: 2 });
+    expect(runs[0]).toMatchObject({ platform: 'EUW1', matches_added: 1, players_polled: 2 });
     expect(runs[0]?.finished_at).not.toBeNull();
   });
 });

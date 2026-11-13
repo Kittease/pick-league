@@ -2,7 +2,7 @@
 
 PickLeague helps one player (a support main, to start) pick the right champion in League of Legends champion select and then build it: items + buy order, runes, summoner spells, skill order — all adapted to the 9 other champions, **always showing the reasons** behind every recommendation.
 
-Data comes from high-elo ranked solo/duo games (Challenger + Grandmaster of KR, EUW1, NA1, VN2), current + previous patch only.
+Data comes from high-elo ranked solo/duo games (Challenger + Grandmaster + the top 1,000 Master players by LP — `MASTER_PLAYERS` — of KR, EUW1, NA1, VN2). Only the current patch is collected; the previous patch stays in the database (collected while it was current) until the next patch replaces it.
 
 ## Components
 
@@ -36,7 +36,7 @@ Everything runs with `docker compose up -d` except the desktop app (it must reac
 - **Rate limits are enforced per host (routing value).** App limit (this key): 20 req / 1 s and 100 req / 2 min per host. Method limits also exist per endpoint. Read the real limits from `X-App-Rate-Limit`, `X-Method-Rate-Limit` (+ `-Count`) response headers rather than hardcoding; on `429` honour `Retry-After`. One limiter per host, so the 4 platforms + 4 clusters progress independently.
 - **Never use a second API key** to go faster (Riot policy).
 - Endpoints:
-  - `GET /lol/league/v4/challengerleagues/by-queue/RANKED_SOLO_5x5`, `.../grandmasterleagues/...` → entries with `puuid`, `leaguePoints`, `wins`, `losses`.
+  - `GET /lol/league/v4/challengerleagues/by-queue/RANKED_SOLO_5x5`, `.../grandmasterleagues/...`, `.../masterleagues/...` (every Master player: the worker keeps the top ones by LP) → entries with `puuid`, `leaguePoints`, `wins`, `losses`.
   - `GET /lol/league/v4/entries/by-puuid/{puuid}` → solo rank of any player (low priority).
   - `GET /lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}`.
   - `GET /riot/account/v1/accounts/by-puuid/{puuid}` → `gameName`, `tagLine`.
@@ -48,13 +48,13 @@ Everything runs with `docker compose up -d` except the desktop app (it must reac
 
 Long-running Bun process. Each platform runs its own loop; work is pulled from priority levels, highest first, as long as rate-limit budget allows:
 
-1. **Ladder refresh** (once per hour per platform): Challenger + Grandmaster lists. Upsert `players` + `ladder_entries`. Players whose `wins + losses` changed (or are new) are marked "played".
-2. **Match id listing** for "played" players, using `startTime = players.matches_synced_until` (first time: start of the previous patch as far as we know, else 14 days ago), paginating until exhausted. New ids go to `match_fetch_queue`.
-3. **Match + timeline fetch** from the queue. Parse, keep only schema fields, insert everything in one transaction (matches, teams, bans, participants + per-minute arrays, item/skill/kill/objective events, `players` rows for all 10 players with their Riot ID from the payload). Matches from patches older than the previous one → `SKIPPED_OLD_PATCH` (and stop paginating that player further back). Non-ladder players are enqueued into `player_enrichment_queue` (respecting the 7-day rule).
+1. **Ladder refresh** (once per hour per platform): Challenger + Grandmaster lists, plus the top `MASTER_PLAYERS` (default 1000) of the Master list by LP. More Master players is the lever for more data, not a longer history. Upsert `players` + `ladder_entries`. Players whose `wins + losses` changed (or are new) are marked "played".
+2. **Match id listing** for "played" players, using `startTime = players.matches_synced_until` (first time: start of the current patch as far as we know, else 14 days ago), paginating until exhausted. New ids go to `match_fetch_queue`.
+3. **Match + timeline fetch** from the queue. Parse, keep only schema fields, insert everything in one transaction (matches, teams, bans, participants + per-minute arrays, item/skill/kill/objective events, `players` rows for all 10 players with their Riot ID from the payload). Matches from a patch older than the current one → `SKIPPED_OLD_PATCH` before their timeline is fetched; the first one seen bounds every listing (older ids are skipped unfetched, and paginating stops there). Non-ladder players are enqueued into `player_enrichment_queue` (respecting the 7-day rule).
 4. **Daily refresh of tracked ladder players**: account-v1 (Riot ID) + mastery, if older than 24 h.
 5. **Lowest priority**: `player_enrichment_queue` → mastery + `entries/by-puuid` rank. Only when levels 1–4 have nothing ready.
 
-Also, at least hourly: Data Dragon check → new patch row + static data ingest (champions, spells, items, runes, summoner spells, per patch); keep only the 2 latest patches (delete older patch rows → cascades; delete orphan non-tracked players). Every cycle writes a `worker_runs` row. Structured logs to stdout. Graceful shutdown on SIGTERM. Config via env: `RIOT_API_KEY`, `DATABASE_URL`, `PLATFORMS` (default `KR,EUW1,NA1,VN2`), `LOG_LEVEL`.
+Also, at least hourly: Data Dragon check → new patch row + static data ingest (champions, spells, items, runes, summoner spells, per patch); keep only the 2 latest patches (delete older patch rows → cascades; delete orphan non-tracked players). Every cycle writes a `worker_runs` row. Structured logs to stdout. Graceful shutdown on SIGTERM. Config via env: `RIOT_API_KEY`, `DATABASE_URL`, `PLATFORMS` (default `KR,EUW1,NA1,VN2`), `MASTER_PLAYERS` (default 1000, 0 = Challenger + Grandmaster only), `LOG_LEVEL`.
 
 ## API
 

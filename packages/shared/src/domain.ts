@@ -17,7 +17,7 @@ export function parsePosition(value: string | null | undefined): Position | null
 }
 
 /** Ladders crawled by the worker (Postgres enum `ladder_tier`). */
-export const LADDER_TIERS = ['CHALLENGER', 'GRANDMASTER'] as const;
+export const LADDER_TIERS = ['CHALLENGER', 'GRANDMASTER', 'MASTER'] as const;
 export type LadderTier = (typeof LADDER_TIERS)[number];
 
 /** Solo-queue tiers, lowest first (Postgres enum `solo_tier`). */

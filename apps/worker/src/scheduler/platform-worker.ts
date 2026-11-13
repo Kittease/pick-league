@@ -53,6 +53,7 @@ import {
   RANKED_SOLO_QUEUE,
 } from '@pick-league/shared';
 import { type Clock, isAbortError, systemClock } from '../clock.ts';
+import { DEFAULT_MASTER_PLAYERS } from '../config.ts';
 import { errorMessage, type Logger, silentLogger } from '../log.ts';
 import { MatchParseError, parseMatch } from '../parser/parse-match.ts';
 import type { PatchVerdict } from '../patches.ts';
@@ -65,7 +66,10 @@ const DAY = 24 * HOUR;
 export interface SchedulerOptions {
   /** Ladder refresh period (default 1 h). */
   ladderIntervalMs: number;
-  /** First listing of a player goes back at most this far (default 14 days). */
+  /**
+   * First listing of a player goes back at most this far (default 14 days). It normally stops
+   * sooner, at the start of the latest patch (the first older-patch match seen).
+   */
   firstListingMaxMs: number;
   /**
    * `matches_synced_until` is set this far before the listing time, so games that were still
@@ -79,6 +83,8 @@ export interface SchedulerOptions {
   /** Pause after an auth error (expired key) (default 5 min). */
   authErrorPauseMs: number;
   concurrency: { listing: number; match: number; daily: number; enrichment: number };
+  /** Master players tracked besides Challenger + Grandmaster: the top N by LP (default 1000). */
+  masterPlayers: number;
 }
 
 export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
@@ -89,9 +95,10 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   deferMs: 15 * 60_000,
   authErrorPauseMs: 5 * 60_000,
   concurrency: { listing: 2, match: 3, daily: 1, enrichment: 2 },
+  masterPlayers: DEFAULT_MASTER_PLAYERS,
 };
 
-/** What the worker needs to know about kept patches. */
+/** What the worker needs to know about patches (only the latest is collected). */
 export interface PatchView {
   readonly ready: boolean;
   readonly generation: number;
@@ -144,6 +151,11 @@ export function toLadderEntries(list: LeagueListDto, tier: LadderTier): LadderEn
     }));
 }
 
+/** The `n` entries with the most LP (Riot lists a league in no particular order). */
+export function topByLp(entries: LadderEntryInput[], n: number): LadderEntryInput[] {
+  return [...entries].sort((a, b) => b.leaguePoints - a.leaguePoints).slice(0, n);
+}
+
 export function toMasteries(list: readonly ChampionMasteryDto[]): MasteryInput[] {
   return list.map((m) => ({
     championId: m.championId,
@@ -178,7 +190,10 @@ export class PlatformWorker {
   /** Players to list (insertion order = FIFO). */
   private readonly played = new Set<string>();
   private readonly listingInFlight = new Set<string>();
-  /** Highest game id seen with a patch older than the kept ones: older ids are skipped unfetched. */
+  /**
+   * Highest game id seen with a patch older than the latest: older ids are skipped unfetched, and
+   * listings stop there (the first previous-patch match bounds every history).
+   */
   private oldPatchMaxGameId = 0;
   /** Start time of that match: first listings never go back further. */
   private oldPatchCutoffMs = 0;
@@ -257,15 +272,21 @@ export class PlatformWorker {
   // Level 1: ladder
   // -------------------------------------------------------------------------
 
-  /** Fetches Challenger + Grandmaster, upserts them, marks who played. Returns how many played. */
+  /**
+   * Fetches Challenger, Grandmaster and the top `masterPlayers` of Master, upserts them, marks who
+   * played. Returns how many played.
+   */
   async refreshLadder(signal?: AbortSignal): Promise<number> {
-    const [challenger, grandmaster] = await Promise.all([
+    const masterPlayers = this.opts.masterPlayers;
+    const [challenger, grandmaster, master] = await Promise.all([
       this.riot.getLeague(this.platform, 'CHALLENGER', signal),
       this.riot.getLeague(this.platform, 'GRANDMASTER', signal),
+      masterPlayers > 0 ? this.riot.getLeague(this.platform, 'MASTER', signal) : null,
     ]);
     const entries = [
       ...toLadderEntries(challenger, 'CHALLENGER'),
       ...toLadderEntries(grandmaster, 'GRANDMASTER'),
+      ...(master ? topByLp(toLadderEntries(master, 'MASTER'), masterPlayers) : []),
     ];
     if (entries.length === 0) {
       this.log.warn('empty ladder from Riot, not stored');
@@ -307,7 +328,7 @@ export class PlatformWorker {
         { startTime: Math.floor(startMs / 1000), start, count: 100 },
         signal,
       );
-      // Ids come newest first: once one is known to be from an old patch, the rest are too.
+      // Ids come newest first: once one is known to be from an older patch, the rest are too.
       const oldAt = ids.findIndex((id) => (gameIdOf(id) ?? 0) <= this.oldPatchMaxGameId);
       const kept = (oldAt >= 0 ? ids.slice(0, oldAt) : ids).filter(
         (id) => platformFromMatchId(id) === this.platform,

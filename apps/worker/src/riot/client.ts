@@ -139,7 +139,7 @@ export class RiotClient implements RiotApi {
   }
 
   getLeague(platform: Platform, tier: LadderTier, signal?: AbortSignal) {
-    const kind = tier === 'CHALLENGER' ? 'challengerleagues' : 'grandmasterleagues';
+    const kind = `${tier.toLowerCase()}leagues`;
     return this.getOrThrow<LeagueListDto>(
       platform,
       platformBaseUrl(platform),

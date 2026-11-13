@@ -7,7 +7,7 @@
 // league-v4
 // ---------------------------------------------------------------------------
 
-/** Entry of `GET /lol/league/v4/{challenger|grandmaster}leagues/by-queue/{queue}`. */
+/** Entry of `GET /lol/league/v4/{challenger|grandmaster|master}leagues/by-queue/{queue}`. */
 export interface LeagueItemDto {
   puuid: string;
   /** Deprecated by Riot, may be absent. */
@@ -23,7 +23,7 @@ export interface LeagueItemDto {
   hotStreak: boolean;
 }
 
-/** `GET /lol/league/v4/challengerleagues/by-queue/RANKED_SOLO_5x5` (same for grandmaster). */
+/** `GET /lol/league/v4/{challenger|grandmaster|master}leagues/by-queue/RANKED_SOLO_5x5`. */
 export interface LeagueListDto {
   leagueId: string;
   /** 'CHALLENGER' | 'GRANDMASTER' | 'MASTER' */

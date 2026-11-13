@@ -3,7 +3,8 @@
 PickLeague helps you pick the right champion in League of Legends champion select, then build it:
 items and buy order, runes, summoner spells and skill order, adapted to the 9 other champions.
 Every recommendation shows its reasons. The data comes from high-elo ranked solo/duo games
-(Challenger + Grandmaster of KR, EUW, NA and VN) on the current and previous patch.
+(Challenger, Grandmaster and the top 1,000 Master players of KR, EUW, NA and VN) on the current
+patch, plus the previous patch for champions with few matchups on the current one.
 
 It has three parts:
 
@@ -26,6 +27,10 @@ recommendations improve as matches come in. Use `docker compose logs -f worker` 
 progress and `docker compose down` to stop everything (your data is kept).
 
 If port 3000 is already taken, set `API_PORT=3001` in `.env`.
+
+The worker tracks the top 1,000 Master players of each server besides Challenger and
+Grandmaster. For more data, raise `MASTER_PLAYERS` in `.env` (0 = Challenger and Grandmaster
+only), then run `docker compose up -d` again.
 
 **Windows: Docker using too much memory (`VmmemWSL`).** The stack itself needs about 1.5 GB,
 but Docker's WSL2 virtual machine may grow to half your RAM and keeps memory it used as file

@@ -39,7 +39,7 @@ worker_runs                           (monitoring)
 CREATE TYPE platform AS ENUM ('KR', 'EUW1', 'NA1', 'VN2');
 -- match-v5 routing cluster is derived in code: KR→asia, EUW1→europe, NA1→americas, VN2→sea
 
-CREATE TYPE ladder_tier AS ENUM ('CHALLENGER', 'GRANDMASTER');
+CREATE TYPE ladder_tier AS ENUM ('CHALLENGER', 'GRANDMASTER', 'MASTER');  -- MASTER: top MASTER_PLAYERS by LP
 
 CREATE TYPE position AS ENUM ('TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY');
 

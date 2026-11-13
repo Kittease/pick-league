@@ -8,7 +8,10 @@ import { comparePatches, type DdragonClient, type PatchId } from '@pick-league/s
 import { type Clock, isAbortError, systemClock } from './clock.ts';
 import { errorMessage, type Logger, silentLogger } from './log.ts';
 
-/** Where a match's patch stands relative to the kept patches. */
+/**
+ * Where a match's patch stands for collection: only the latest patch is fetched. The previous one
+ * stays in the database (fetched while it was the latest) but is no longer collected.
+ */
 export type PatchVerdict = 'keep' | 'old' | 'too_new';
 
 export const KEPT_PATCHES = 2;
@@ -49,9 +52,8 @@ export class PatchTracker {
 
   classify(patch: PatchId): PatchVerdict {
     if (this.latest === null) return 'too_new';
-    if (comparePatches(patch, this.latest) > 0) return 'too_new';
-    const oldest = this.previous ?? this.latest;
-    return comparePatches(patch, oldest) < 0 ? 'old' : 'keep';
+    const c = comparePatches(patch, this.latest);
+    return c > 0 ? 'too_new' : c < 0 ? 'old' : 'keep';
   }
 
   /** Checks Data Dragon, ingests missing patches, deletes old ones. Concurrent calls share one run. */
