@@ -4,6 +4,7 @@ import { createDdragonClient, isPosition } from '@pick-league/shared';
 import { app, BrowserWindow, ipcMain, powerSaveBlocker, shell } from 'electron';
 import { IPC, type Settings, type WindowState } from '../core/app-state.ts';
 import { staticResponseFromDdragon } from '../core/static-from-ddragon.ts';
+import { DEFAULT_ZOOM, stepZoom, zoomShortcut } from '../core/zoom.ts';
 import { createApiClient } from './api-client.ts';
 import { Controller } from './controller.ts';
 import { createMockLcuSource } from './lcu/mock.ts';
@@ -44,6 +45,24 @@ function devShortcuts(win: BrowserWindow): void {
   });
 }
 
+/**
+ * Ctrl (Cmd) + / - / 0 and Ctrl + mouse wheel change the zoom setting, so it always matches
+ * what Settings shows (there is no menu to provide them on Windows/Linux anyway).
+ */
+function zoomShortcuts(win: BrowserWindow, controller: Controller): void {
+  const setZoom = (zoom: number) => void controller.updateSettings({ zoom });
+  const step = (direction: 1 | -1) =>
+    setZoom(stepZoom(controller.getState().settings.zoom, direction));
+  win.webContents.on('before-input-event', (event, input) => {
+    const action = zoomShortcut(input);
+    if (action === null) return;
+    if (action === 'reset') setZoom(DEFAULT_ZOOM);
+    else step(action === 'in' ? 1 : -1);
+    event.preventDefault();
+  });
+  win.webContents.on('zoom-changed', (_e, direction) => step(direction === 'in' ? 1 : -1));
+}
+
 function createWindow(controller: Controller): BrowserWindow {
   const win = new BrowserWindow({
     width: 1180,
@@ -61,6 +80,7 @@ function createWindow(controller: Controller): BrowserWindow {
       sandbox: true,
       // A second-screen companion lives behind the game window: keep it rendering.
       backgroundThrottling: false,
+      zoomFactor: controller.getState().settings.zoom,
     },
   });
   // Links (none expected) open in the browser, never inside the app.
@@ -90,8 +110,19 @@ function createWindow(controller: Controller): BrowserWindow {
     win.on('leave-full-screen', sendWindowState);
   }
 
+  // The zoom setting is the source of truth; reapplied after reloads too.
+  const applyZoom = (zoom: number) => {
+    if (!win.isDestroyed() && win.webContents.getZoomFactor() !== zoom) {
+      win.webContents.setZoomFactor(zoom);
+    }
+  };
+  win.webContents.on('did-finish-load', () => applyZoom(controller.getState().settings.zoom));
+  zoomShortcuts(win, controller);
+
   const unsubscribe = controller.onChange((state) => {
-    if (!win.isDestroyed()) win.webContents.send(IPC.state, state);
+    if (win.isDestroyed()) return;
+    applyZoom(state.settings.zoom);
+    win.webContents.send(IPC.state, state);
   });
   win.on('closed', unsubscribe);
 

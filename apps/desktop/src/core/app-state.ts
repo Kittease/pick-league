@@ -25,6 +25,8 @@ export interface Settings {
   fallbackRole: Position;
   /** Only recommend champions the account can play. */
   ownedOnly: boolean;
+  /** Zoom factor of the whole UI (1 = 100%), one of ZOOM_LEVELS. */
+  zoom: number;
 }
 
 export interface LcuStatus {

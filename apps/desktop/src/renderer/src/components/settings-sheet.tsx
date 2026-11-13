@@ -16,6 +16,7 @@ import { Switch } from '@/components/ui/switch';
 import { ROLE_LABEL } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState, Settings } from '../../../core/app-state.ts';
+import { ZOOM_LEVELS } from '../../../core/zoom.ts';
 
 function update(patch: Partial<Settings>) {
   void window.pickleague.updateSettings(patch);
@@ -128,6 +129,29 @@ export function SettingsSheet({ state }: { state: AppState }) {
                   onClick={() => update({ fallbackRole: p })}
                 >
                   {ROLE_LABEL[p]}
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 border-b border-border py-4">
+            <Label>Zoom</Label>
+            <p className="text-xs text-muted-foreground">
+              Bigger text and icons on a large or distant screen. Also{' '}
+              <span className="num">Ctrl +</span> / <span className="num">Ctrl −</span> /{' '}
+              <span className="num">Ctrl 0</span>, or <span className="num">Ctrl</span> + mouse
+              wheel.
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {ZOOM_LEVELS.map((z) => (
+                <Button
+                  key={z}
+                  size="xs"
+                  variant={settings.zoom === z ? 'secondary' : 'ghost'}
+                  className={cn('num', settings.zoom === z && 'text-foreground')}
+                  onClick={() => update({ zoom: z })}
+                >
+                  {Math.round(z * 100)}%
                 </Button>
               ))}
             </div>
