@@ -1,0 +1,37 @@
+import postgres from 'postgres';
+
+/** A connection pool. */
+export type Db = postgres.Sql;
+/** A pool or an open transaction: every query function accepts either. */
+export type Queryable = postgres.Sql | postgres.TransactionSql;
+
+export interface CreateDbOptions {
+  /** Pool size (default 10). */
+  max?: number;
+  /** Seconds before an idle connection is closed (default 30). */
+  idleTimeout?: number;
+}
+
+/**
+ * Creates a `postgres` (porsager) pool. Column names are returned as-is (snake_case);
+ * the query functions of this package map them to camelCase objects.
+ * Call `await db.end()` on shutdown.
+ */
+export function createDb(databaseUrl: string, options: CreateDbOptions = {}): Db {
+  return postgres(databaseUrl, {
+    max: options.max ?? 10,
+    idle_timeout: options.idleTimeout ?? 30,
+    onnotice: () => {},
+  });
+}
+
+/**
+ * Runs `fn` in a transaction: a new one on a pool, a savepoint inside an existing transaction.
+ */
+export async function inTransaction<T>(
+  q: Queryable,
+  fn: (tx: postgres.TransactionSql) => Promise<T>,
+): Promise<T> {
+  if ('savepoint' in q) return (await q.savepoint(fn)) as T;
+  return (await q.begin(fn)) as T;
+}
