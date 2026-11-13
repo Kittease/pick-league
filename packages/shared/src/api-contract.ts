@@ -1,0 +1,365 @@
+/**
+ * HTTP contract between apps/api (server) and apps/desktop (client).
+ *
+ * Rules both sides rely on:
+ * - JSON everywhere, `Content-Type: application/json`. CORS is open.
+ * - Champion ids are Riot numeric ids (e.g. 266), item/rune/spell ids are numeric Data Dragon ids.
+ * - Rates are fractions in [0, 1] (0.513 = 51.3 %); deltas are win-rate differences (+0.028 = +2.8 points).
+ * - Timestamps are ISO-8601 strings.
+ * - Errors: any non-2xx response has an `ApiErrorResponse` body.
+ * - This module is runtime-agnostic (no Bun/Node APIs) so the Electron renderer can import it.
+ */
+
+import { z } from 'zod';
+import { POSITIONS, type Position } from './domain.ts';
+import type { PatchId } from './patch.ts';
+import type { Platform } from './platform.ts';
+import type {
+  ChampionInfo,
+  StaticItem,
+  StaticRune,
+  StaticRuneTree,
+  StaticSummonerSpell,
+  StatShardRow,
+} from './static-data.ts';
+
+export const API_DEFAULT_PORT = 3000;
+export const API_DEFAULT_URL = `http://localhost:${API_DEFAULT_PORT}`;
+
+export const API_ROUTES = {
+  health: '/health',
+  patches: '/patches',
+  /** `patch` = a patch id ('15.22') or 'latest'. */
+  static: (patch: PatchId | 'latest') => `/static/${patch}`,
+  picks: '/recommendations/picks',
+  build: '/recommendations/build',
+} as const;
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+export const API_ERROR_CODES = [
+  /** 400: invalid body/params (details = zod issues). */
+  'BAD_REQUEST',
+  /** 404: unknown route, unknown patch, unknown champion. */
+  'NOT_FOUND',
+  /** 429: per-IP rate limit; see `Retry-After` header. */
+  'RATE_LIMITED',
+  /** 503: the database has no usable data yet (no patch / no matches ingested). */
+  'NO_DATA',
+  /** 500 */
+  'INTERNAL',
+] as const;
+export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
+
+export interface ApiErrorResponse {
+  error: {
+    code: ApiErrorCode;
+    message: string;
+    details?: unknown;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Reasons
+// ---------------------------------------------------------------------------
+
+export const REASON_KINDS = [
+  /** Champion's own baseline (win rate / most common winning choice for champion+role). */
+  'base',
+  /** Lane matchup vs. the enemy in the same role (or a known enemy when roles are unknown). */
+  'matchup',
+  /** Synergy with the duo ally (UTILITY↔BOTTOM, MIDDLE↔JUNGLE, TOP↔JUNGLE). */
+  'duo',
+  /** Against an enemy composition trait (e.g. "vs AD-heavy"). */
+  'vs_comp',
+  /** With an ally composition trait. */
+  'with_comp',
+  /** Build: an item replaced by another, backed by match data. */
+  'item_swap',
+  /** Build: adaptation from Data Dragon item tags when samples are too small (delta = 0, games = 0). */
+  'tag_rule',
+  /** How often high-elo players make this choice (delta = 0 unless meaningful). */
+  'popularity',
+  /** Previous patch data used because the current patch has too few games. */
+  'patch_fallback',
+] as const;
+export type ReasonKind = (typeof REASON_KINDS)[number];
+
+/** Composition traits computed from match data (see architecture.md "Engine"). */
+export const COMP_TRAITS = [
+  'AD_HEAVY',
+  'AP_HEAVY',
+  'HIGH_CC',
+  'HIGH_HEALING',
+  'TANKY',
+  'POKE_RANGED',
+  'MELEE_HEAVY',
+] as const;
+export type CompTrait = (typeof COMP_TRAITS)[number];
+
+export interface Reason {
+  kind: ReasonKind;
+  /** Human-readable, ready to display, e.g. "+2.8% vs Nautilus (bot lane, 412 games)". */
+  label: string;
+  /** Win-rate delta after shrinkage (0.028 = +2.8 points). 0 when not applicable. */
+  delta: number;
+  /** Sample size behind the delta. 0 when not applicable. */
+  games: number;
+  /** Other champion(s) involved (matchup opponent, duo partner…) — lets the UI show icons. */
+  championIds?: number[];
+  /** Item involved (the recommended one for item_swap/tag_rule). */
+  itemId?: number;
+  /** item_swap: the base-build item this one replaces. */
+  replacesItemId?: number;
+  /** vs_comp / with_comp / tag_rule: the trait that triggered the reason. */
+  trait?: CompTrait;
+}
+
+// ---------------------------------------------------------------------------
+// GET /health
+// ---------------------------------------------------------------------------
+
+export interface HealthResponse {
+  /** true when the API is up and the database answered. */
+  ok: boolean;
+  /** Database reachable. */
+  db: boolean;
+  /** Newest kept patch, null before the first Data Dragon ingest. */
+  latestPatch: PatchId | null;
+  /** Matches stored across kept patches. */
+  matchCount: number;
+}
+
+// ---------------------------------------------------------------------------
+// GET /patches
+// ---------------------------------------------------------------------------
+
+export interface PatchSummary {
+  patch: PatchId;
+  ddragonVersion: string;
+  detectedAt: string;
+  /** Total matches of this patch (all platforms). */
+  matchCount: number;
+  /** Every crawled platform is present (0 when none). */
+  matchCountByPlatform: Record<Platform, number>;
+}
+
+export interface PatchesResponse {
+  /** Kept patches, newest first (at most 2). */
+  patches: PatchSummary[];
+}
+
+// ---------------------------------------------------------------------------
+// GET /static/:patch
+// ---------------------------------------------------------------------------
+
+export interface StaticChampionSpellDto {
+  /** 1=Q 2=W 3=E 4=R */
+  slot: number;
+  name: string;
+  iconUrl: string;
+}
+
+export interface StaticChampionDto {
+  id: number;
+  slug: string;
+  name: string;
+  tags: string[];
+  attackRange: number;
+  info: ChampionInfo;
+  iconUrl: string;
+  /** Q, W, E, R. */
+  spells: StaticChampionSpellDto[];
+}
+
+export interface StaticItemDto extends StaticItem {
+  iconUrl: string;
+}
+
+export interface StaticRuneTreeDto extends StaticRuneTree {
+  iconUrl: string;
+}
+
+export interface StaticRuneDto extends StaticRune {
+  iconUrl: string;
+}
+
+export interface StaticStatShardDto {
+  id: number;
+  name: string;
+  iconUrl: string;
+}
+
+export interface StaticSummonerSpellDto extends StaticSummonerSpell {
+  iconUrl: string;
+}
+
+/** Everything the desktop needs to render names and icons for one patch. Image URLs are Data Dragon CDN URLs. */
+export interface StaticDataResponse {
+  patch: PatchId;
+  ddragonVersion: string;
+  /** Sorted by name. */
+  champions: StaticChampionDto[];
+  items: StaticItemDto[];
+  runeTrees: StaticRuneTreeDto[];
+  runes: StaticRuneDto[];
+  /** Options per row, in display order. */
+  statShards: Record<StatShardRow, StaticStatShardDto[]>;
+  summonerSpells: StaticSummonerSpellDto[];
+}
+
+// ---------------------------------------------------------------------------
+// Request schemas (zod v4) — the API validates bodies with these.
+// ---------------------------------------------------------------------------
+
+export const positionSchema = z.enum(POSITIONS);
+export const championIdSchema = z.number().int().positive();
+export const patchIdSchema = z.string().regex(/^\d+\.\d+$/, 'expected a patch id like "15.22"');
+
+/** A teammate in champion select. `championId` null = not picked/hovered yet; `role` null = unknown. */
+export const pickAllySchema = z.object({
+  championId: championIdSchema.nullable(),
+  role: positionSchema.nullable(),
+});
+
+export const picksRequestSchema = z.object({
+  /** Role the user is picking for. */
+  role: positionSchema,
+  /** The user's 4 teammates (the user excluded), in any order. */
+  allies: z.array(pickAllySchema).max(4).default([]),
+  /** Enemy champions (roles are unknown during champ select); null = not picked yet. */
+  enemies: z.array(championIdSchema.nullable()).max(5).default([]),
+  /** All bans of both teams; excluded from candidates. */
+  bans: z.array(championIdSchema).max(10).default([]),
+  /** If given, candidates are restricted to these (e.g. the user's owned champions). */
+  availableChampionIds: z.array(championIdSchema).optional(),
+  /** Max candidates returned (default 20). */
+  limit: z.number().int().min(1).max(100).optional(),
+  /** Force a patch instead of the automatic current/previous fallback. */
+  patch: patchIdSchema.optional(),
+});
+
+/** Parsed body of `POST /recommendations/picks` (defaults applied). */
+export type PicksRequest = z.infer<typeof picksRequestSchema>;
+/** What a client may send (defaulted fields optional). */
+export type PicksRequestInput = z.input<typeof picksRequestSchema>;
+
+export const buildParticipantSchema = z.object({
+  championId: championIdSchema,
+  role: positionSchema.nullable(),
+});
+
+export const buildRequestSchema = z.object({
+  /** The champion the user picked. */
+  championId: championIdSchema,
+  role: positionSchema,
+  /** Picked teammates (the user excluded). */
+  allies: z.array(buildParticipantSchema).max(4).default([]),
+  /** Picked enemies; `role` null when unknown (the API then guesses the lane opponent). */
+  enemies: z.array(buildParticipantSchema).max(5).default([]),
+  patch: patchIdSchema.optional(),
+});
+
+/** Parsed body of `POST /recommendations/build` (defaults applied). */
+export type BuildRequest = z.infer<typeof buildRequestSchema>;
+export type BuildRequestInput = z.input<typeof buildRequestSchema>;
+
+// ---------------------------------------------------------------------------
+// POST /recommendations/picks
+// ---------------------------------------------------------------------------
+
+export interface PickCandidate {
+  championId: number;
+  /** Sum of shrunk win-rate deltas (higher = better); candidates are sorted by it, descending. */
+  score: number;
+  /** 0..1, derived from sample sizes. */
+  confidence: number;
+  /** Patch whose data was used for this champion (current, or previous as fallback). */
+  patchUsed: PatchId;
+  /** Games of champion+role on `patchUsed`. */
+  games: number;
+  /** Baseline win rate of champion+role on `patchUsed`. */
+  winRate: number;
+  /** Ordered by importance (matchup, duo, vs_comp, with_comp, …). */
+  reasons: Reason[];
+}
+
+export interface PicksResponse {
+  role: Position;
+  /** Current patch at request time (candidates may individually fall back, see `PickCandidate.patchUsed`). */
+  patch: PatchId;
+  candidates: PickCandidate[];
+}
+
+// ---------------------------------------------------------------------------
+// POST /recommendations/build
+// ---------------------------------------------------------------------------
+
+export interface RecommendedItem {
+  itemId: number;
+  /** Situational items: the core item it would replace, null if it is an addition. */
+  replacesItemId?: number | null;
+  reasons: Reason[];
+}
+
+export interface ItemsRecommendation {
+  /** Starting purchase, e.g. [World Atlas, Health Potion x2] → item ids, duplicates allowed. */
+  starting: RecommendedItem[];
+  /** Early purchases before the first completed item (components, boots), in buy order. */
+  early: RecommendedItem[];
+  /** Completed items in buy order (boots included at their usual slot). */
+  core: RecommendedItem[];
+  /** Adaptations to this game's enemies/allies. */
+  situational: RecommendedItem[];
+}
+
+export interface RunesRecommendation {
+  primaryTreeId: number;
+  secondaryTreeId: number;
+  /** 6 ids: keystone, 3 primary, 2 secondary (same order as Riot's perks). */
+  runeIds: number[];
+  /** 3 ids: offense, flex, defense. */
+  statShardIds: number[];
+  /** LCU-ready `selectedPerkIds`: `[...runeIds, ...statShardIds]` (9 ids). */
+  selectedPerkIds: number[];
+  games: number;
+  winRate: number;
+  reasons: Reason[];
+}
+
+export interface SummonerSpellsRecommendation {
+  /** Two spell ids, most common D/F order (the desktop keeps Flash on the user's key). */
+  spellIds: [number, number];
+  games: number;
+  winRate: number;
+  reasons: Reason[];
+}
+
+export interface SkillOrderRecommendation {
+  /** Skill slots (1=Q 2=W 3=E 4=R) taken at levels 1, 2, 3. */
+  firstLevels: number[];
+  /** Basic abilities in max order, e.g. [1, 3, 2] = max Q, then E, then W. */
+  maxOrder: number[];
+  /** Full level 1..18 sequence when available (may be shorter). */
+  sequence: number[];
+  games: number;
+  winRate: number;
+  reasons: Reason[];
+}
+
+export interface BuildResponse {
+  championId: number;
+  role: Position;
+  /** Patch whose data was used (current, or previous as fallback). */
+  patchUsed: PatchId;
+  /** Games of champion+role on `patchUsed`. */
+  games: number;
+  /** 0..1 */
+  confidence: number;
+  items: ItemsRecommendation;
+  runes: RunesRecommendation;
+  summonerSpells: SummonerSpellsRecommendation;
+  skillOrder: SkillOrderRecommendation;
+}
