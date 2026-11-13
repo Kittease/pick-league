@@ -14,6 +14,7 @@ import {
   getLatestPatch,
   getMatchesSyncedUntil,
   insertParsedMatch,
+  listMigrationFiles,
   listPatches,
   markMatchDone,
   markMatchFailed,
@@ -60,10 +61,11 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       const other = testDb();
       try {
         const [a, b] = await Promise.all([migrate(db), migrate(other)]);
-        expect([...a.applied, ...b.applied]).toEqual(['0001_init.sql']);
+        const files = await listMigrationFiles();
+        expect([...a.applied, ...b.applied].sort()).toEqual(files.map((f) => f.name));
         expect((await migrate(db)).applied).toEqual([]);
-        const rows = await db`SELECT version FROM schema_migrations`;
-        expect(rows.map((r) => r.version)).toEqual(['0001']);
+        const rows = await db`SELECT version FROM schema_migrations ORDER BY version`;
+        expect(rows.map((r) => r.version)).toEqual(files.map((f) => f.version));
       } finally {
         await other.end();
       }
