@@ -1,0 +1,1344 @@
+{
+  "metadata": {
+    "dataVersion": "2",
+    "matchId": "EUW1_7000000001",
+    "participants": [
+      "fake-puuid-01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "fake-puuid-02-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "fake-puuid-03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "fake-puuid-04-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "fake-puuid-05-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "fake-puuid-06-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "fake-puuid-07-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "fake-puuid-08-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "fake-puuid-09-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "fake-puuid-10-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    ]
+  },
+  "info": {
+    "endOfGameResult": "GameComplete",
+    "frameInterval": 60000,
+    "frames": [
+      {
+        "timestamp": 0,
+        "participantFrames": {
+          "1": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 0,
+              "totalDamageDoneToChampions": 1,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 1,
+            "minionsKilled": 0,
+            "participantId": 1,
+            "position": {
+              "x": 501,
+              "y": 401
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 501,
+            "xp": 1
+          },
+          "2": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 0,
+              "totalDamageDoneToChampions": 2,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 1,
+            "minionsKilled": 0,
+            "participantId": 2,
+            "position": {
+              "x": 502,
+              "y": 402
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 502,
+            "xp": 2
+          },
+          "3": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 0,
+              "totalDamageDoneToChampions": 3,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 1,
+            "minionsKilled": 0,
+            "participantId": 3,
+            "position": {
+              "x": 503,
+              "y": 403
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 503,
+            "xp": 3
+          },
+          "4": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 0,
+              "totalDamageDoneToChampions": 4,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 1,
+            "minionsKilled": 0,
+            "participantId": 4,
+            "position": {
+              "x": 504,
+              "y": 404
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 504,
+            "xp": 4
+          },
+          "5": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 0,
+              "totalDamageDoneToChampions": 5,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 1,
+            "minionsKilled": 0,
+            "participantId": 5,
+            "position": {
+              "x": 505,
+              "y": 405
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 505,
+            "xp": 5
+          },
+          "6": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 0,
+              "totalDamageDoneToChampions": 6,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 1,
+            "minionsKilled": 0,
+            "participantId": 6,
+            "position": {
+              "x": 506,
+              "y": 406
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 506,
+            "xp": 6
+          },
+          "7": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 0,
+              "totalDamageDoneToChampions": 7,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 1,
+            "minionsKilled": 0,
+            "participantId": 7,
+            "position": {
+              "x": 507,
+              "y": 407
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 507,
+            "xp": 7
+          },
+          "8": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 0,
+              "totalDamageDoneToChampions": 8,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 1,
+            "minionsKilled": 0,
+            "participantId": 8,
+            "position": {
+              "x": 508,
+              "y": 408
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 508,
+            "xp": 8
+          },
+          "9": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 0,
+              "totalDamageDoneToChampions": 9,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 1,
+            "minionsKilled": 0,
+            "participantId": 9,
+            "position": {
+              "x": 509,
+              "y": 409
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 509,
+            "xp": 9
+          },
+          "10": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 0,
+              "totalDamageDoneToChampions": 10,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 1,
+            "minionsKilled": 0,
+            "participantId": 10,
+            "position": {
+              "x": 510,
+              "y": 410
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 510,
+            "xp": 10
+          }
+        },
+        "events": [
+          {
+            "realTimestamp": 1762000060000,
+            "timestamp": 0,
+            "type": "PAUSE_END"
+          },
+          {
+            "itemId": 1055,
+            "participantId": 1,
+            "timestamp": 1500,
+            "type": "ITEM_PURCHASED"
+          },
+          {
+            "itemId": 2003,
+            "participantId": 1,
+            "timestamp": 1700,
+            "type": "ITEM_PURCHASED"
+          },
+          {
+            "afterId": 0,
+            "beforeId": 2003,
+            "goldGain": 50,
+            "participantId": 1,
+            "timestamp": 2000,
+            "type": "ITEM_UNDO"
+          },
+          {
+            "itemId": 3340,
+            "participantId": 1,
+            "timestamp": 2100,
+            "type": "ITEM_PURCHASED"
+          },
+          {
+            "itemId": 3850,
+            "participantId": 5,
+            "timestamp": 1900,
+            "type": "ITEM_PURCHASED"
+          },
+          {
+            "itemId": 3340,
+            "participantId": 0,
+            "timestamp": 2200,
+            "type": "ITEM_PURCHASED"
+          }
+        ]
+      },
+      {
+        "timestamp": 60010,
+        "participantFrames": {
+          "1": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 1000,
+              "totalDamageDoneToChampions": 101,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 2,
+            "minionsKilled": 7,
+            "participantId": 1,
+            "position": {
+              "x": 1501,
+              "y": 1401
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 901,
+            "xp": 301
+          },
+          "2": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 1000,
+              "totalDamageDoneToChampions": 102,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 4,
+            "level": 2,
+            "minionsKilled": 0,
+            "participantId": 2,
+            "position": {
+              "x": 1502,
+              "y": 1402
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 902,
+            "xp": 302
+          },
+          "3": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 1000,
+              "totalDamageDoneToChampions": 103,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 2,
+            "minionsKilled": 7,
+            "participantId": 3,
+            "position": {
+              "x": 1503,
+              "y": 1403
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 903,
+            "xp": 303
+          },
+          "4": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 1000,
+              "totalDamageDoneToChampions": 104,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 2,
+            "minionsKilled": 7,
+            "participantId": 4,
+            "position": {
+              "x": 1504,
+              "y": 1404
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 904,
+            "xp": 304
+          },
+          "5": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 1000,
+              "totalDamageDoneToChampions": 105,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 2,
+            "minionsKilled": 7,
+            "participantId": 5,
+            "position": {
+              "x": 1505,
+              "y": 1405
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 905,
+            "xp": 305
+          },
+          "6": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 1000,
+              "totalDamageDoneToChampions": 106,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 2,
+            "minionsKilled": 7,
+            "participantId": 6,
+            "position": {
+              "x": 1506,
+              "y": 1406
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 906,
+            "xp": 306
+          },
+          "7": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 1000,
+              "totalDamageDoneToChampions": 107,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 2,
+            "minionsKilled": 7,
+            "participantId": 7,
+            "position": {
+              "x": 1507,
+              "y": 1407
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 907,
+            "xp": 307
+          },
+          "8": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 1000,
+              "totalDamageDoneToChampions": 108,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 2,
+            "minionsKilled": 7,
+            "participantId": 8,
+            "position": {
+              "x": 1508,
+              "y": 1408
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 908,
+            "xp": 308
+          },
+          "9": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 1000,
+              "totalDamageDoneToChampions": 109,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 2,
+            "minionsKilled": 7,
+            "participantId": 9,
+            "position": {
+              "x": 1509,
+              "y": 1409
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 909,
+            "xp": 309
+          },
+          "10": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 1000,
+              "totalDamageDoneToChampions": 110,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 2,
+            "minionsKilled": 7,
+            "participantId": 10,
+            "position": {
+              "x": 1510,
+              "y": 1410
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 910,
+            "xp": 310
+          }
+        },
+        "events": [
+          {
+            "levelUpType": "NORMAL",
+            "participantId": 1,
+            "skillSlot": 1,
+            "timestamp": 61000,
+            "type": "SKILL_LEVEL_UP"
+          },
+          {
+            "levelUpType": "NORMAL",
+            "participantId": 6,
+            "skillSlot": 3,
+            "timestamp": 61500,
+            "type": "SKILL_LEVEL_UP"
+          },
+          {
+            "creatorId": 5,
+            "timestamp": 62000,
+            "type": "WARD_PLACED",
+            "wardType": "YELLOW_TRINKET"
+          },
+          {
+            "level": 2,
+            "participantId": 1,
+            "timestamp": 63000,
+            "type": "LEVEL_UP"
+          },
+          {
+            "levelUpType": "NORMAL",
+            "participantId": 1,
+            "skillSlot": 3,
+            "timestamp": 63100,
+            "type": "SKILL_LEVEL_UP"
+          }
+        ]
+      },
+      {
+        "timestamp": 120020,
+        "participantFrames": {
+          "1": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 2000,
+              "totalDamageDoneToChampions": 201,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 3,
+            "minionsKilled": 14,
+            "participantId": 1,
+            "position": {
+              "x": 2501,
+              "y": 2401
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1301,
+            "xp": 601
+          },
+          "2": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 2000,
+              "totalDamageDoneToChampions": 202,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 8,
+            "level": 3,
+            "minionsKilled": 0,
+            "participantId": 2,
+            "position": {
+              "x": 2502,
+              "y": 2402
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1302,
+            "xp": 602
+          },
+          "3": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 2000,
+              "totalDamageDoneToChampions": 203,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 3,
+            "minionsKilled": 14,
+            "participantId": 3,
+            "position": {
+              "x": 2503,
+              "y": 2403
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1303,
+            "xp": 603
+          },
+          "4": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 2000,
+              "totalDamageDoneToChampions": 204,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 3,
+            "minionsKilled": 14,
+            "participantId": 4,
+            "position": {
+              "x": 2504,
+              "y": 2404
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1304,
+            "xp": 604
+          },
+          "5": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 2000,
+              "totalDamageDoneToChampions": 205,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 3,
+            "minionsKilled": 14,
+            "participantId": 5,
+            "position": {
+              "x": 2505,
+              "y": 2405
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1305,
+            "xp": 605
+          },
+          "6": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 2000,
+              "totalDamageDoneToChampions": 206,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 3,
+            "minionsKilled": 14,
+            "participantId": 6,
+            "position": {
+              "x": 2506,
+              "y": 2406
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1306,
+            "xp": 606
+          },
+          "8": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 2000,
+              "totalDamageDoneToChampions": 208,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 3,
+            "minionsKilled": 14,
+            "participantId": 8,
+            "position": {
+              "x": 2508,
+              "y": 2408
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1308,
+            "xp": 608
+          },
+          "9": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 2000,
+              "totalDamageDoneToChampions": 209,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 3,
+            "minionsKilled": 14,
+            "participantId": 9,
+            "position": {
+              "x": 2509,
+              "y": 2409
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1309,
+            "xp": 609
+          },
+          "10": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 2000,
+              "totalDamageDoneToChampions": 210,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 3,
+            "minionsKilled": 14,
+            "participantId": 10,
+            "position": {
+              "x": 2510,
+              "y": 2410
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1310,
+            "xp": 610
+          }
+        },
+        "events": [
+          {
+            "assistingParticipantIds": [2, 3],
+            "bounty": 300,
+            "killStreakLength": 0,
+            "killerId": 1,
+            "position": {
+              "x": 2500,
+              "y": 11000
+            },
+            "shutdownBounty": 150,
+            "timestamp": 100000,
+            "type": "CHAMPION_KILL",
+            "victimDamageDealt": [],
+            "victimDamageReceived": [],
+            "victimId": 6
+          },
+          {
+            "killType": "KILL_FIRST_BLOOD",
+            "killerId": 1,
+            "position": {
+              "x": 2500,
+              "y": 11000
+            },
+            "timestamp": 100000,
+            "type": "CHAMPION_SPECIAL_KILL"
+          },
+          {
+            "bounty": 0,
+            "killStreakLength": 0,
+            "killerId": 0,
+            "position": {
+              "x": 13000,
+              "y": 2000
+            },
+            "shutdownBounty": 0,
+            "timestamp": 110000,
+            "type": "CHAMPION_KILL",
+            "victimId": 4
+          },
+          {
+            "itemId": 1055,
+            "participantId": 1,
+            "timestamp": 111000,
+            "type": "ITEM_SOLD"
+          },
+          {
+            "itemId": 2010,
+            "participantId": 3,
+            "timestamp": 112000,
+            "type": "ITEM_DESTROYED"
+          },
+          {
+            "afterId": 1055,
+            "beforeId": 0,
+            "goldGain": -140,
+            "participantId": 1,
+            "timestamp": 112500,
+            "type": "ITEM_UNDO"
+          },
+          {
+            "levelUpType": "EVOLVE",
+            "participantId": 8,
+            "skillSlot": 4,
+            "timestamp": 113000,
+            "type": "SKILL_LEVEL_UP"
+          },
+          {
+            "levelUpType": "NORMAL",
+            "participantId": 8,
+            "skillSlot": 0,
+            "timestamp": 113001,
+            "type": "SKILL_LEVEL_UP"
+          },
+          {
+            "assistingParticipantIds": [1],
+            "bounty": 0,
+            "killerId": 2,
+            "killerTeamId": 100,
+            "monsterType": "HORDE",
+            "position": {
+              "x": 5000,
+              "y": 10500
+            },
+            "timestamp": 114000,
+            "type": "ELITE_MONSTER_KILL"
+          },
+          {
+            "killerId": 7,
+            "killerTeamId": 200,
+            "monsterSubType": "FIRE_DRAGON",
+            "monsterType": "DRAGON",
+            "position": {
+              "x": 9866,
+              "y": 4414
+            },
+            "timestamp": 115000,
+            "type": "ELITE_MONSTER_KILL"
+          },
+          {
+            "killerId": 0,
+            "laneType": "BOT_LANE",
+            "position": {
+              "x": 10504,
+              "y": 1029
+            },
+            "teamId": 200,
+            "timestamp": 116000,
+            "type": "TURRET_PLATE_DESTROYED"
+          },
+          {
+            "killerId": 4,
+            "laneType": "BOT_LANE",
+            "position": {
+              "x": 10504,
+              "y": 1029
+            },
+            "teamId": 200,
+            "timestamp": 116500,
+            "type": "TURRET_PLATE_DESTROYED"
+          },
+          {
+            "featType": 0,
+            "featValue": 1,
+            "teamId": 100,
+            "timestamp": 116600,
+            "type": "FEAT_UPDATE"
+          },
+          {
+            "actualStartTime": 117000,
+            "teamId": 100,
+            "timestamp": 117000,
+            "type": "OBJECTIVE_BOUNTY_PRESTART"
+          }
+        ]
+      },
+      {
+        "timestamp": 1834000,
+        "participantFrames": {
+          "1": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 3000,
+              "totalDamageDoneToChampions": 301,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 4,
+            "minionsKilled": 21,
+            "participantId": 1,
+            "position": {
+              "x": 3501,
+              "y": 3401
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1701,
+            "xp": 901
+          },
+          "2": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 3000,
+              "totalDamageDoneToChampions": 302,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 12,
+            "level": 4,
+            "minionsKilled": 0,
+            "participantId": 2,
+            "position": {
+              "x": 3502,
+              "y": 3402
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1702,
+            "xp": 902
+          },
+          "3": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 3000,
+              "totalDamageDoneToChampions": 303,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 4,
+            "minionsKilled": 21,
+            "participantId": 3,
+            "position": {
+              "x": 3503,
+              "y": 3403
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1703,
+            "xp": 903
+          },
+          "4": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 3000,
+              "totalDamageDoneToChampions": 304,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 4,
+            "minionsKilled": 21,
+            "participantId": 4,
+            "position": {
+              "x": 3504,
+              "y": 3404
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1704,
+            "xp": 904
+          },
+          "5": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 3000,
+              "totalDamageDoneToChampions": 305,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 4,
+            "minionsKilled": 21,
+            "participantId": 5,
+            "position": {
+              "x": 3505,
+              "y": 3405
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1705,
+            "xp": 905
+          },
+          "6": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 3000,
+              "totalDamageDoneToChampions": 306,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 4,
+            "minionsKilled": 21,
+            "participantId": 6,
+            "position": {
+              "x": 3506,
+              "y": 3406
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1706,
+            "xp": 906
+          },
+          "7": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 3000,
+              "totalDamageDoneToChampions": 307,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 4,
+            "minionsKilled": 21,
+            "participantId": 7,
+            "position": {
+              "x": 3507,
+              "y": 3407
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1707,
+            "xp": 907
+          },
+          "8": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 3000,
+              "totalDamageDoneToChampions": 308,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 4,
+            "minionsKilled": 21,
+            "participantId": 8,
+            "position": {
+              "x": 3508,
+              "y": 3408
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1708,
+            "xp": 908
+          },
+          "9": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 3000,
+              "totalDamageDoneToChampions": 309,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 4,
+            "minionsKilled": 21,
+            "participantId": 9,
+            "position": {
+              "x": 3509,
+              "y": 3409
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1709,
+            "xp": 909
+          },
+          "10": {
+            "championStats": {
+              "armor": 30
+            },
+            "currentGold": 500,
+            "damageStats": {
+              "magicDamageDone": 0,
+              "totalDamageDone": 3000,
+              "totalDamageDoneToChampions": 310,
+              "totalDamageTaken": 0
+            },
+            "goldPerSecond": 0,
+            "jungleMinionsKilled": 0,
+            "level": 4,
+            "minionsKilled": 21,
+            "participantId": 10,
+            "position": {
+              "x": 3510,
+              "y": 3410
+            },
+            "timeEnemySpentControlled": 0,
+            "totalGold": 1710,
+            "xp": 910
+          }
+        },
+        "events": [
+          {
+            "assistingParticipantIds": [3],
+            "bounty": 0,
+            "killerId": 2,
+            "killerTeamId": 100,
+            "monsterType": "RIFTHERALD",
+            "position": {
+              "x": 5000,
+              "y": 10500
+            },
+            "timestamp": 900000,
+            "type": "ELITE_MONSTER_KILL"
+          },
+          {
+            "assistingParticipantIds": [],
+            "bounty": 0,
+            "buildingType": "TOWER_BUILDING",
+            "killerId": 3,
+            "laneType": "MID_LANE",
+            "position": {
+              "x": 8955,
+              "y": 8510
+            },
+            "teamId": 200,
+            "timestamp": 901000,
+            "towerType": "OUTER_TURRET",
+            "type": "BUILDING_KILL"
+          },
+          {
+            "bounty": 0,
+            "buildingType": "TOWER_BUILDING",
+            "killerId": 0,
+            "laneType": "TOP_LANE",
+            "position": {
+              "x": 981,
+              "y": 10441
+            },
+            "teamId": 100,
+            "timestamp": 902000,
+            "towerType": "OUTER_TURRET",
+            "type": "BUILDING_KILL"
+          },
+          {
+            "killerId": 2,
+            "killerTeamId": 100,
+            "monsterSubType": "ATAKHAN_RUINOUS",
+            "monsterType": "ATAKHAN",
+            "position": {
+              "x": 9000,
+              "y": 6000
+            },
+            "timestamp": 1200000,
+            "type": "ELITE_MONSTER_KILL"
+          },
+          {
+            "killerId": 2,
+            "killerTeamId": 100,
+            "monsterType": "BARON_NASHOR",
+            "position": {
+              "x": 5007,
+              "y": 10471
+            },
+            "timestamp": 1300000,
+            "type": "ELITE_MONSTER_KILL"
+          },
+          {
+            "bounty": 0,
+            "buildingType": "INHIBITOR_BUILDING",
+            "killerId": 4,
+            "laneType": "MID_LANE",
+            "position": {
+              "x": 11598,
+              "y": 11667
+            },
+            "teamId": 200,
+            "timestamp": 1400000,
+            "type": "BUILDING_KILL"
+          },
+          {
+            "killerId": 9,
+            "killerTeamId": 200,
+            "monsterSubType": "ELDER_DRAGON",
+            "monsterType": "DRAGON",
+            "position": {
+              "x": 9866,
+              "y": 4414
+            },
+            "timestamp": 1500000,
+            "type": "ELITE_MONSTER_KILL"
+          },
+          {
+            "killerTeamId": 200,
+            "name": "Infernal",
+            "teamId": 200,
+            "timestamp": 1500001,
+            "type": "DRAGON_SOUL_GIVEN"
+          },
+          {
+            "gameId": 7000000001,
+            "realTimestamp": 1762001900000,
+            "timestamp": 1834000,
+            "type": "GAME_END",
+            "winningTeam": 100
+          }
+        ]
+      }
+    ],
+    "gameId": 7000000001,
+    "participants": [
+      {
+        "participantId": 1,
+        "puuid": "fake-puuid-01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+        "participantId": 2,
+        "puuid": "fake-puuid-02-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+        "participantId": 3,
+        "puuid": "fake-puuid-03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+        "participantId": 4,
+        "puuid": "fake-puuid-04-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+        "participantId": 5,
+        "puuid": "fake-puuid-05-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+        "participantId": 6,
+        "puuid": "fake-puuid-06-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+        "participantId": 7,
+        "puuid": "fake-puuid-07-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+        "participantId": 8,
+        "puuid": "fake-puuid-08-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+        "participantId": 9,
+        "puuid": "fake-puuid-09-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+        "participantId": 10,
+        "puuid": "fake-puuid-10-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    ]
+  }
+}
