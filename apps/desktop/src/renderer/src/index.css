@@ -168,3 +168,30 @@
     -webkit-app-region: no-drag;
   }
 }
+
+/*
+ * Themed scrollbars everywhere instead of the platform ones (Windows' grey bar with arrows):
+ * thin, square, no arrows, like the shadcn ScrollArea. Do not set the standard
+ * scrollbar-color / scrollbar-width here: Chromium then ignores these ::-webkit-scrollbar rules.
+ */
+@layer base {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--input);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklab, var(--muted-foreground) 60%, transparent);
+  }
+  ::-webkit-scrollbar-thumb:active {
+    background-color: var(--muted-foreground);
+  }
+}
