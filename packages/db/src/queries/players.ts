@@ -197,3 +197,21 @@ export async function playersNeedingDailyRefresh(
     needsMastery: r.needs_mastery,
   }));
 }
+
+/**
+ * Tracked (ladder) players of a platform whose match ids were never listed
+ * (`matches_synced_until` IS NULL), e.g. after a restart interrupted the first listing.
+ */
+export async function trackedPlayersNeverListed(
+  q: Queryable,
+  platform: Platform,
+  limit = 10_000,
+): Promise<string[]> {
+  const rows = await q<{ puuid: string }[]>`
+    SELECT le.puuid FROM ladder_entries le
+    JOIN players p USING (puuid)
+    WHERE le.platform = ${platform} AND p.matches_synced_until IS NULL
+    ORDER BY le.league_points DESC, le.puuid
+    LIMIT ${limit}`;
+  return rows.map((r) => r.puuid);
+}
