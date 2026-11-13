@@ -59,7 +59,10 @@ function useTierList(role: Position, apiKey: string) {
       return;
     }
     let alive = true;
-    setState({ status: 'loading' });
+    // Same role re-fetched (stats refreshed): keep showing the old list until the new one lands.
+    setState((prev) =>
+      prev.status === 'ok' && prev.data.role === role ? prev : { status: 'loading' },
+    );
     void window.pickleague.getTierList(role).then((result) => {
       if (!alive) return;
       cache.current.set(role, { at: Date.now(), result });
@@ -434,26 +437,33 @@ function GenericBuild({
   lookup,
   mastery,
   onBack,
+  refreshKey,
 }: {
   championId: number;
   role: Position;
   lookup: StaticLookup | null;
   mastery: AppState['mastery'];
   onBack: () => void;
+  /** Changes when the API's stats were refreshed: re-fetch the build. */
+  refreshKey: string;
 }) {
   const [state, setState] = useState<Loaded<BuildResponse>>({ status: 'loading' });
   const [nonce, setNonce] = useState(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: nonce re-runs the fetch on retry
+  // biome-ignore lint/correctness/useExhaustiveDependencies: nonce and refreshKey re-run the fetch
   useEffect(() => {
     let alive = true;
-    setState({ status: 'loading' });
+    setState((prev) =>
+      prev.status === 'ok' && prev.data.championId === championId && prev.data.role === role
+        ? prev
+        : { status: 'loading' },
+    );
     void window.pickleague.getGenericBuild(championId, role).then((r) => {
       if (alive) setState(r.ok ? { status: 'ok', data: r.data } : { status: 'error', ...r });
     });
     return () => {
       alive = false;
     };
-  }, [championId, role, nonce]);
+  }, [championId, role, nonce, refreshKey]);
   const champ = lookup?.champion(championId);
   const name = champ?.name ?? `#${championId}`;
   const data = state.status === 'ok' ? state.data : null;
@@ -523,7 +533,9 @@ export function TierListPage({
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: 'score', desc: true });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [buildOf, setBuildOf] = useState<number | null>(null);
-  const apiKey = `${state.api.url}|${state.api.latestPatch}|${state.api.state === 'ok'}`;
+  // A new API, patch or stats refresh (manual or background) drops the cached tier lists.
+  const lastRefreshedAt = state.stats.status?.lastRefreshedAt ?? null;
+  const apiKey = `${state.api.url}|${state.api.latestPatch}|${state.api.state === 'ok'}|${lastRefreshedAt}`;
   const { state: tl, retry } = useTierList(role, apiKey);
 
   useEffect(() => {
@@ -567,6 +579,7 @@ export function TierListPage({
         lookup={lookup}
         mastery={state.mastery}
         onBack={() => setBuildOf(null)}
+        refreshKey={apiKey}
       />
     );
   }
