@@ -1,24 +1,55 @@
 /**
- * Placeholder entry point: applies migrations, then idles until SIGTERM/SIGINT.
- * Replaced by the real api implementation.
+ * PickLeague API: migrations at startup, Hono app on Bun, stats views refreshed in the background.
  */
 import { createDb, migrate } from '@pick-league/db';
+import { loadConfig } from './config.ts';
+import { createApp } from './http/app.ts';
+import { TtlCache } from './http/cache.ts';
+import { TokenBucketLimiter } from './http/rate-limit.ts';
+import { createLogger } from './logger.ts';
+import { StatsRefresher } from './stats/refresh.ts';
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) {
-  console.error('[api] DATABASE_URL is not set');
-  process.exit(1);
-}
+const config = (() => {
+  try {
+    return loadConfig();
+  } catch (err) {
+    console.error(`[api] ${(err as Error).message}`);
+    process.exit(1);
+  }
+})();
+const log = createLogger(config.logLevel);
 
-const db = createDb(databaseUrl, { max: 2 });
-const { applied } = await migrate(db, { log: (m) => console.log(`[api] ${m}`) });
-console.log(`[api] migrations ok (${applied.length} applied)`);
-console.log('[api] not implemented yet');
+const db = createDb(config.databaseUrl, { max: 10 });
+const { applied } = await migrate(db, { log: (m) => log.info(m) });
+log.info('migrations ok', { applied: applied.length });
 
-const keepAlive = setInterval(() => {}, 60_000);
+const cache = new TtlCache<unknown>(config.cacheTtlMs);
+const limiter =
+  config.rateLimitPerMinute > 0
+    ? new TokenBucketLimiter({ burst: config.rateLimitBurst, perMinute: config.rateLimitPerMinute })
+    : null;
+const sweep = setInterval(() => limiter?.sweep(), 60_000);
+
+// The refresh uses its own small pool so it never starves request queries.
+const refreshDb = createDb(config.databaseUrl, { max: 2 });
+const refresher = new StatsRefresher(refreshDb, {
+  intervalMs: config.statsRefreshIntervalMs,
+  log: (msg, fields) => log.info(msg, fields),
+  onRefreshed: () => cache.clear(),
+  onError: (err) => log.error('stats refresh failed', { error: (err as Error).message }),
+});
+refresher.start();
+
+const app = createApp({ db, cache, limiter, log, trustProxy: config.trustProxy });
+const server = Bun.serve({ port: config.port, fetch: app.fetch });
+log.info('listening', { port: server.port });
+
 const shutdown = async () => {
-  clearInterval(keepAlive);
-  await db.end();
+  log.info('shutting down');
+  clearInterval(sweep);
+  await server.stop();
+  await refresher.stop();
+  await Promise.all([db.end(), refreshDb.end()]);
   process.exit(0);
 };
 process.on('SIGTERM', shutdown);

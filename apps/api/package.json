@@ -6,10 +6,13 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --env-file=../../.env --watch run src/index.ts",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p .",
+    "perf": "bun run scripts/perf.ts"
   },
   "dependencies": {
     "@pick-league/db": "workspace:*",
-    "@pick-league/shared": "workspace:*"
+    "@pick-league/shared": "workspace:*",
+    "hono": "4.13.14",
+    "zod": "4.6.7"
   }
 }

@@ -1,0 +1,137 @@
+/** Loads the stats rows a request needs, then runs the pure engine. */
+import { listPatches, type Queryable } from '@pick-league/db';
+import type {
+  BuildRequest,
+  BuildResponse,
+  CompTrait,
+  PatchId,
+  PicksRequest,
+  PicksResponse,
+} from '@pick-league/shared';
+import {
+  choosePatch,
+  LANE_ROLES,
+  recommendBuild,
+  recommendPicks,
+  sideTraits,
+} from '../engine/index.ts';
+import { ApiError } from '../errors.ts';
+import * as repo from '../stats/repository.ts';
+
+export interface PatchContext {
+  current: PatchId;
+  previous: PatchId | null;
+  /** current + previous (when any). */
+  patches: PatchId[];
+}
+
+/** Current/previous patch, or the forced one (`patch` in the body: no fallback). */
+export async function patchContext(q: Queryable, forced?: PatchId): Promise<PatchContext> {
+  const kept = (await listPatches(q)).map((p) => p.id);
+  if (forced !== undefined) {
+    if (!kept.includes(forced)) throw new ApiError('NOT_FOUND', `Unknown patch ${forced}`);
+    return { current: forced, previous: null, patches: [forced] };
+  }
+  const [current, previous] = kept;
+  if (!current) throw new ApiError('NO_DATA', 'No patch ingested yet');
+  return {
+    current,
+    previous: previous ?? null,
+    patches: previous ? [current, previous] : [current],
+  };
+}
+
+export async function picks(q: Queryable, req: PicksRequest): Promise<PicksResponse> {
+  const ctx = await patchContext(q, req.patch);
+  const enemyIds = req.enemies.filter((e): e is number => e !== null);
+  const allyIds = req.allies.flatMap((a) => (a.championId !== null ? [a.championId] : []));
+  const [roleStats, vs, withRows, compTraits, championTraits, thresholds, names] =
+    await Promise.all([
+      repo.loadRoleStats(q, ctx.patches),
+      repo.loadVsByEnemies(q, ctx.patches, req.role, enemyIds),
+      repo.loadWithByAllies(q, ctx.patches, req.role, allyIds),
+      repo.loadCompTraits(q, ctx.patches, req.role),
+      repo.loadChampionTraits(q, ctx.patches, [...enemyIds, ...allyIds]),
+      repo.loadThresholds(q, ctx.patches),
+      repo.loadNames(q, ctx.patches),
+    ]);
+  if (!roleStats.some((r) => r.position === req.role)) {
+    throw new ApiError('NO_DATA', `No stats for role ${req.role} yet`);
+  }
+  return recommendPicks(req, {
+    currentPatch: ctx.current,
+    previousPatch: ctx.previous,
+    roleStats,
+    vs,
+    with: withRows,
+    compTraits,
+    championTraits,
+    thresholds,
+    names,
+  });
+}
+
+export async function build(q: Queryable, req: BuildRequest): Promise<BuildResponse> {
+  const ctx = await patchContext(q, req.patch);
+  if (!(await repo.championExists(q, ctx.patches, req.championId))) {
+    throw new ApiError('NOT_FOUND', `Unknown champion ${req.championId}`);
+  }
+  const enemyIds = req.enemies.map((e) => e.championId);
+  const allyIds = req.allies.map((a) => a.championId);
+  const [roleStats, championTraits, thresholds] = await Promise.all([
+    repo.loadRoleStats(q, ctx.patches),
+    repo.loadChampionTraits(q, ctx.patches, [req.championId, ...enemyIds, ...allyIds]),
+    repo.loadThresholds(q, ctx.patches),
+  ]);
+  const find = (patch: PatchId | null) =>
+    roleStats.find(
+      (r) => r.patch === patch && r.championId === req.championId && r.position === req.role,
+    );
+  const cur = find(ctx.current);
+  const prev = find(ctx.previous);
+  const pc = choosePatch(ctx.current, ctx.previous, cur?.games ?? 0, prev?.games ?? 0);
+  const baseline = (pc.fellBack ? prev : cur) ?? { games: 0, wins: 0 };
+  if (baseline.games === 0) {
+    throw new ApiError('NO_DATA', `No games of champion ${req.championId} as ${req.role} yet`);
+  }
+  const patch = pc.patch;
+  // Only lane opponents matter for choice matchups; enemies with unknown roles are all candidates.
+  const laneRoles = LANE_ROLES[req.role];
+  const opponentIds = req.enemies
+    .filter((e) => e.role === null || laneRoles.includes(e.role))
+    .map((e) => e.championId);
+  const enemyTraits: CompTrait[] = sideTraits(enemyIds, {
+    championTraits,
+    thresholds,
+    currentPatch: ctx.current,
+    previousPatch: ctx.previous,
+  });
+  const [choices, choiceMatchups, choiceTraits, compTraits, vs, items, names] = await Promise.all([
+    repo.loadChoices(q, patch, req.championId, req.role),
+    repo.loadChoiceMatchups(q, patch, req.championId, req.role, opponentIds),
+    repo.loadChoiceTraits(q, patch, req.championId, req.role, enemyTraits),
+    repo.loadCompTraits(q, [patch], req.role, req.championId, 'enemy'),
+    repo.loadVsForChampion(q, patch, req.championId, req.role, opponentIds),
+    repo.loadItems(q, patch),
+    repo.loadNames(q, ctx.patches),
+  ]);
+  const result = recommendBuild(req, {
+    currentPatch: ctx.current,
+    previousPatch: ctx.previous,
+    patch: pc,
+    baseline,
+    roleStats,
+    choices,
+    choiceMatchups,
+    choiceTraits,
+    compTraits,
+    vs,
+    championTraits,
+    thresholds,
+    items,
+    names,
+  });
+  if (!result)
+    throw new ApiError('NO_DATA', `No build data for champion ${req.championId} as ${req.role}`);
+  return result;
+}
