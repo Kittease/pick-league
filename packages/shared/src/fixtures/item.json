@@ -1,0 +1,72 @@
+{
+  "type": "item",
+  "version": "15.22.1",
+  "data": {
+    "1001": {
+      "name": "Boots",
+      "gold": { "base": 300, "total": 300, "sell": 210, "purchasable": true },
+      "tags": ["Boots"],
+      "into": ["3006", "3111"],
+      "stats": { "FlatMovementSpeedMod": 25 },
+      "depth": 1,
+      "maps": { "11": true, "12": true }
+    },
+    "3006": {
+      "name": "Berserker's Greaves",
+      "gold": { "base": 800, "total": 1100, "sell": 770, "purchasable": true },
+      "tags": ["AttackSpeed", "Boots"],
+      "from": ["1001"],
+      "stats": { "PercentAttackSpeedMod": 0.25, "FlatMovementSpeedMod": 45 },
+      "depth": 2,
+      "maps": { "11": true, "12": true }
+    },
+    "3111": {
+      "name": "Mercury's Treads",
+      "gold": { "base": 750, "total": 1250, "sell": 875, "purchasable": true },
+      "tags": ["Boots", "SpellBlock", "Tenacity"],
+      "from": ["1001", "1033"],
+      "stats": { "FlatSpellBlockMod": 20, "FlatMovementSpeedMod": 45 },
+      "depth": 2,
+      "maps": { "11": true }
+    },
+    "1033": {
+      "name": "Null-Magic Mantle",
+      "gold": { "base": 400, "total": 400, "sell": 280, "purchasable": true },
+      "tags": ["SpellBlock"],
+      "into": ["3111", "3156"],
+      "stats": { "FlatSpellBlockMod": 25 },
+      "maps": { "11": true }
+    },
+    "3156": {
+      "name": "Maw of Malmortius",
+      "gold": { "base": 800, "total": 3100, "sell": 2170, "purchasable": true },
+      "tags": ["Damage", "SpellBlock"],
+      "from": ["1033", "3133"],
+      "stats": { "FlatPhysicalDamageMod": 60 },
+      "depth": 3,
+      "maps": { "11": true }
+    },
+    "2003": {
+      "name": "Health Potion",
+      "gold": { "base": 50, "total": 50, "sell": 20, "purchasable": true },
+      "tags": ["Consumable", "Active"],
+      "stats": {},
+      "consumed": true,
+      "maps": { "11": true }
+    },
+    "3340": {
+      "name": "Stealth Ward",
+      "gold": { "base": 0, "total": 0, "sell": 0, "purchasable": true },
+      "tags": ["Trinket", "Vision"],
+      "stats": {},
+      "maps": { "11": true }
+    },
+    "223006": {
+      "name": "Arena-only Greaves",
+      "gold": { "base": 800, "total": 1100, "sell": 770, "purchasable": true },
+      "tags": ["Boots"],
+      "stats": {},
+      "maps": { "11": false, "30": true }
+    }
+  }
+}

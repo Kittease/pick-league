@@ -1,0 +1,53 @@
+{
+  "type": "champion",
+  "format": "full",
+  "version": "15.22.1",
+  "data": {
+    "MonkeyKing": {
+      "id": "MonkeyKing",
+      "key": "62",
+      "name": "Wukong",
+      "tags": ["Fighter", "Tank"],
+      "info": { "attack": 8, "defense": 5, "magic": 2, "difficulty": 3 },
+      "stats": { "attackrange": 175, "hp": 610 },
+      "image": { "full": "MonkeyKing.png" },
+      "spells": [
+        {
+          "id": "MonkeyKingDoubleAttack",
+          "name": "Crushing Blow",
+          "image": { "full": "MonkeyKingDoubleAttack.png" }
+        },
+        {
+          "id": "MonkeyKingDecoy",
+          "name": "Warrior Trickster",
+          "image": { "full": "MonkeyKingDecoy.png" }
+        },
+        {
+          "id": "MonkeyKingNimbus",
+          "name": "Nimbus Strike",
+          "image": { "full": "MonkeyKingNimbus.png" }
+        },
+        {
+          "id": "MonkeyKingSpinToWin",
+          "name": "Cyclone",
+          "image": { "full": "MonkeyKingSpinToWin.png" }
+        }
+      ]
+    },
+    "Annie": {
+      "id": "Annie",
+      "key": "1",
+      "name": "Annie",
+      "tags": ["Mage"],
+      "info": { "attack": 2, "defense": 3, "magic": 10, "difficulty": 6 },
+      "stats": { "attackrange": 625, "hp": 560 },
+      "image": { "full": "Annie.png" },
+      "spells": [
+        { "id": "AnnieQ", "name": "Disintegrate", "image": { "full": "AnnieQ.png" } },
+        { "id": "AnnieW", "name": "Incinerate", "image": { "full": "AnnieW.png" } },
+        { "id": "AnnieE", "name": "Molten Shield", "image": { "full": "AnnieE.png" } },
+        { "id": "AnnieR", "name": "Summon: Tibbers", "image": { "full": "AnnieR.png" } }
+      ]
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "type": "summoner",
+  "version": "15.22.1",
+  "data": {
+    "SummonerFlash": {
+      "id": "SummonerFlash",
+      "key": "4",
+      "name": "Flash",
+      "modes": ["CLASSIC", "ARAM"],
+      "image": { "full": "SummonerFlash.png" }
+    },
+    "SummonerDot": {
+      "id": "SummonerDot",
+      "key": "14",
+      "name": "Ignite",
+      "modes": ["CLASSIC"],
+      "image": { "full": "SummonerDot.png" }
+    },
+    "SummonerHeal": {
+      "id": "SummonerHeal",
+      "key": "7",
+      "name": "Heal",
+      "modes": ["CLASSIC"],
+      "image": { "full": "SummonerHeal.png" }
+    }
+  }
+}
