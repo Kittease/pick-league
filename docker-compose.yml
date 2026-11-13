@@ -1,0 +1,55 @@
+# PickLeague server stack: Postgres + worker (Riot crawler) + API (http://localhost:3000).
+#   cp .env.example .env   # then put your Riot API key in it
+#   docker compose up -d
+# To reach Postgres from the host (bun run dev:*), see docker-compose.override.example.yml.
+name: pick-league
+
+x-app: &app
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pickleague
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pickleague}
+      POSTGRES_DB: pickleague
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pickleague -d pickleague"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  worker:
+    <<: *app
+    build:
+      context: .
+      target: worker
+    image: pick-league-worker
+    environment:
+      DATABASE_URL: postgres://pickleague:${POSTGRES_PASSWORD:-pickleague}@postgres:5432/pickleague
+
+  api:
+    <<: *app
+    build:
+      context: .
+      target: api
+    image: pick-league-api
+    environment:
+      DATABASE_URL: postgres://pickleague:${POSTGRES_PASSWORD:-pickleague}@postgres:5432/pickleague
+      PORT: "3000"
+    ports:
+      - "${API_PORT:-3000}:3000"
+
+volumes:
+  pgdata:

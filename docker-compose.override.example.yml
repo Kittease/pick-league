@@ -1,0 +1,10 @@
+# Opt-in: publish Postgres on the host (localhost only) to run apps outside Docker
+# (bun run dev:worker / dev:api) or inspect the database.
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+#   docker compose up -d
+# docker compose loads docker-compose.override.yml automatically (it is git-ignored).
+# Then use DATABASE_URL=postgres://pickleague:<POSTGRES_PASSWORD>@localhost:5432/pickleague
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"

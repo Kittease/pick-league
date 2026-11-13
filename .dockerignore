@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+**/out
+.git
+.env
+.env.*
+!.env.example
+docs
+apps/desktop/*
+!apps/desktop/package.json
+**/*.test.ts
+**/fixtures
+*.md
+Dockerfile
+docker-compose*.yml
