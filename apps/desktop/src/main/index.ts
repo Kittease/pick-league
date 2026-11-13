@@ -1,13 +1,16 @@
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createDdragonClient } from '@pick-league/shared';
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, powerSaveBlocker, shell } from 'electron';
 import { IPC, type Settings } from '../core/app-state.ts';
 import { staticResponseFromDdragon } from '../core/static-from-ddragon.ts';
 import { createApiClient } from './api-client.ts';
 import { Controller } from './controller.ts';
 import { createMockLcuSource } from './lcu/mock.ts';
 import { createRealLcuSource } from './lcu/real.ts';
-import { loadSettings, saveSettings } from './settings.ts';
+import { loadSettings, sanitizeSettings, saveSettings } from './settings.ts';
+
+app.setName('PickLeague');
 
 const forcedMock = process.env.PICKLEAGUE_MOCK_LCU === '1';
 const log = (message: string) => console.log(`[pickleague] ${message}`);
@@ -26,6 +29,8 @@ function createWindow(controller: Controller): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // A second-screen companion lives behind the game window: keep it rendering.
+      backgroundThrottling: false,
     },
   });
   // Links (none expected) open in the browser, never inside the app.
@@ -43,13 +48,38 @@ function createWindow(controller: Controller): BrowserWindow {
   const devUrl = process.env.ELECTRON_RENDERER_URL;
   if (!app.isPackaged && devUrl) void win.loadURL(devUrl);
   else void win.loadFile(join(__dirname, '../renderer/index.html'));
+  startDevCaptures(win);
   return win;
+}
+
+/**
+ * Dev only: PICKLEAGUE_CAPTURE_DIR=<dir> saves a PNG of the window every 5 s, so the UI can be
+ * checked without screen-recording permissions (used with the mock LCU + fake API).
+ */
+function startDevCaptures(win: BrowserWindow): void {
+  const dir = process.env.PICKLEAGUE_CAPTURE_DIR;
+  if (!dir || app.isPackaged) return;
+  const started = Date.now();
+  powerSaveBlocker.start('prevent-app-suspension');
+  const timer = setInterval(async () => {
+    if (win.isDestroyed()) {
+      clearInterval(timer);
+      return;
+    }
+    const image = await win.webContents.capturePage();
+    const seconds = String(Math.round((Date.now() - started) / 1000)).padStart(3, '0');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `capture-${seconds}s.png`), image.toPNG());
+  }, 5_000);
 }
 
 async function main(): Promise<void> {
   await app.whenReady();
   const settingsPath = join(app.getPath('userData'), 'settings.json');
-  const settings = await loadSettings(settingsPath);
+  const saved = await loadSettings(settingsPath);
+  // PICKLEAGUE_API_URL overrides the saved address for this run (dev / fake API).
+  const envApiUrl = process.env.PICKLEAGUE_API_URL;
+  const settings = envApiUrl ? sanitizeSettings({ ...saved, apiUrl: envApiUrl }) : saved;
   const ddragon = createDdragonClient();
 
   const controller = new Controller({

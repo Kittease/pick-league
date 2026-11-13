@@ -5,10 +5,11 @@
   "description": "PickLeague champion-select helper",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
-    "dev:mock": "PICKLEAGUE_MOCK_LCU=1 electron-vite dev",
+    "electron:install": "install-electron",
+    "dev": "install-electron && electron-vite dev",
+    "dev:mock": "install-electron && PICKLEAGUE_MOCK_LCU=1 electron-vite dev",
     "build": "electron-vite build",
-    "start": "electron-vite preview",
+    "start": "install-electron && electron-vite preview",
     "fake-api": "bun run scripts/fake-api.ts",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.json",
     "test": "bun test"
@@ -16,6 +17,7 @@
   "dependencies": {
     "@base-ui/react": "1.9.0",
     "@fontsource-variable/figtree": "5.3.0",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
     "@pick-league/shared": "workspace:*",
     "class-variance-authority": "0.7.1",
     "cn": "0.5.2",
