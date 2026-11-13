@@ -1,0 +1,27 @@
+# Installers for the desktop helper: `bun run package` (current OS) or `bun run package:dir`.
+# Main, preload and renderer are fully bundled by electron-vite into out/, so every npm package
+# is a devDependency and no node_modules ship in the app (keep it that way when adding deps,
+# including the ones the shadcn CLI adds).
+appId: gg.pickleague.desktop
+productName: PickLeague
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - out/**/*
+  - package.json
+npmRebuild: false
+asar: true
+mac:
+  category: public.app-category.games
+  target: dmg
+  identity: null
+win:
+  target: nsis
+nsis:
+  artifactName: ${productName}-${version}-setup.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+linux:
+  target: AppImage
+  category: Game
