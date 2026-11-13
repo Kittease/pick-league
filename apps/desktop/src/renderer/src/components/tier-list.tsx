@@ -22,7 +22,14 @@ import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { compact, confidenceLabel, deltaPoints, percent, ROLE_LABEL } from '@/lib/format';
+import {
+  compact,
+  confidenceLabel,
+  deltaPoints,
+  patchesText,
+  percent,
+  ROLE_LABEL,
+} from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { ApiResult, AppState } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
@@ -207,7 +214,7 @@ function EntryRow({
   onSelect: () => void;
   narrow: boolean;
 }) {
-  const fallback = entry.patchUsed !== currentPatch;
+  const merged = entry.patchesUsed.length > 1;
   return (
     <button
       type="button"
@@ -232,12 +239,12 @@ function EntryRow({
         />
         <span className="flex min-w-0 flex-col leading-tight">
           <span className="truncate text-sm font-medium">{name}</span>
-          {fallback && (
+          {merged && (
             <span
               className="truncate text-[10px] text-gold"
-              title={`Too few games on ${currentPatch}: data from ${entry.patchUsed}`}
+              title={`Too few matchups on ${currentPatch} alone: both patches combined`}
             >
-              {entry.patchUsed} data
+              {patchesText(entry.patchesUsed)} data
             </span>
           )}
         </span>
@@ -357,7 +364,7 @@ function DetailPanel({
 }) {
   const champ = lookup?.champion(entry.championId);
   const name = champ?.name ?? `#${entry.championId}`;
-  const fallback = entry.patchUsed !== currentPatch;
+  const merged = entry.patchesUsed.length > 1;
   const isBot = role === 'BOTTOM' || role === 'UTILITY';
   return (
     <aside className="flex w-[340px] shrink-0 flex-col border-l border-border bg-card/40">
@@ -393,8 +400,10 @@ function DetailPanel({
             <Stat label="Ban rate" value={percent(entry.banRate)} />
             <Stat
               label="Patch"
-              value={<span className={cn(fallback && 'text-gold')}>{entry.patchUsed}</span>}
-              sub={fallback ? `too few games on ${currentPatch}` : undefined}
+              value={
+                <span className={cn(merged && 'text-gold')}>{patchesText(entry.patchesUsed)}</span>
+              }
+              sub={merged ? `too few matchups on ${currentPatch} alone` : undefined}
             />
           </div>
           <RelationList
@@ -485,7 +494,7 @@ function GenericBuild({
           </span>
           <span className="num text-[11px] text-muted-foreground">
             {data
-              ? `patch ${data.patchUsed} · ${compact(data.games)} games · ${confidenceLabel(data.confidence).toLowerCase()} confidence · no allies or enemies taken into account`
+              ? `patch ${patchesText(data.patchesUsed)} · ${compact(data.games)} games · ${confidenceLabel(data.confidence).toLowerCase()} confidence · no allies or enemies taken into account`
               : 'Most common winning build, without game context'}
           </span>
         </div>

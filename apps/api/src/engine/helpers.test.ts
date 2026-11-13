@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { thresholds, traitsOf } from './fixtures.ts';
-import { choosePatch, formatDelta, formatGames, shrink } from './math.ts';
+import { choosePatches, formatDelta, formatGames, patchesLabel, shrink, sumByKey } from './math.ts';
 import { assignRoles, rolePlayRates } from './roles.ts';
 import { skillMaxOrder, synthesiseSkillSequence } from './skills.ts';
 import { compProfile, compTraits } from './traits.ts';
@@ -24,24 +24,39 @@ describe('formatting', () => {
   });
 });
 
-describe('choosePatch', () => {
-  test('keeps the current patch above the threshold', () => {
-    expect(choosePatch('15.22', '15.21', 150, 900, 150)).toMatchObject({
-      patch: '15.22',
-      fellBack: false,
+describe('choosePatches', () => {
+  test('keeps the current patch alone from the threshold on', () => {
+    expect(choosePatches('15.22', '15.21', 150, 900, 150)).toEqual({
+      patches: ['15.22'],
+      merged: false,
+      currentGames: 150,
     });
   });
-  test('falls back to the previous patch when it has more games', () => {
-    expect(choosePatch('15.22', '15.21', 40, 900, 150)).toMatchObject({
-      patch: '15.21',
-      fellBack: true,
-      games: 900,
+  test('adds the previous patch below the threshold', () => {
+    expect(choosePatches('15.22', '15.21', 40, 10, 150)).toEqual({
+      patches: ['15.22', '15.21'],
+      merged: true,
       currentGames: 40,
     });
+    expect(patchesLabel(['15.22', '15.21'])).toBe('15.22 + 15.21');
   });
-  test('stays on the current patch when the previous one is no better', () => {
-    expect(choosePatch('15.22', '15.21', 40, 10, 150).patch).toBe('15.22');
-    expect(choosePatch('15.22', null, 40, 0, 150).patch).toBe('15.22');
+  test('stays on the current patch when there is no previous data', () => {
+    expect(choosePatches('15.22', '15.21', 40, 0, 150).merged).toBe(false);
+    expect(choosePatches('15.22', null, 40, 0, 150).patches).toEqual(['15.22']);
+  });
+});
+
+describe('sumByKey', () => {
+  test('adds games and wins of rows sharing a key', () => {
+    const rows = [
+      { id: 1, patch: '15.22', games: 10, wins: 6 },
+      { id: 2, patch: '15.22', games: 5, wins: 1 },
+      { id: 1, patch: '15.21', games: 90, wins: 40 },
+    ];
+    expect(sumByKey(rows, (r) => String(r.id))).toEqual([
+      { id: 1, patch: '15.22', games: 100, wins: 46 },
+      { id: 2, patch: '15.22', games: 5, wins: 1 },
+    ]);
   });
 });
 

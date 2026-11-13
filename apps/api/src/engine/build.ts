@@ -30,6 +30,7 @@ import {
   formatGames,
   formatRate,
   type PatchChoice,
+  patchesLabel,
   round,
   sampleConfidence,
   shrink,
@@ -56,21 +57,21 @@ import type {
 export interface BuildData {
   currentPatch: PatchId;
   previousPatch: PatchId | null;
-  /** Patch whose stats are used (see `choosePatch`). */
+  /** Patches whose stats are used (see `choosePatches`). */
   patch: PatchChoice;
-  /** Champion + role on `patch.patch`. */
+  /** Champion + role on `patch.patches`. */
   baseline: GamesWins;
   /** stats_champion_roles of both patches (to guess enemy roles). */
   roleStats: readonly RoleStatRow[];
-  /** stats_choices of champion + role on the patch used. */
+  /** stats_choices of champion + role on the patches used (summed). */
   choices: readonly ChoiceRow[];
-  /** stats_choice_matchups of champion + role on the patch used, vs the request's enemies. */
+  /** stats_choice_matchups of champion + role on the patches used (summed), vs the request's enemies. */
   choiceMatchups: readonly ChoiceMatchupRow[];
-  /** stats_choice_traits of champion + role on the patch used. */
+  /** stats_choice_traits of champion + role on the patches used (summed). */
   choiceTraits: readonly ChoiceTraitRow[];
-  /** stats_champion_comp_traits (side enemy) of champion + role on the patch used. */
+  /** stats_champion_comp_traits (side enemy) of champion + role on the patches used (summed). */
   compTraits: readonly CompTraitRow[];
-  /** stats_champion_vs of champion + role on the patch used, vs the request's enemies. */
+  /** stats_champion_vs of champion + role on the patches used (summed), vs the request's enemies. */
   vs: readonly VsRow[];
   /** stats_champion_traits of the champion, its allies and enemies (both patches). */
   championTraits: readonly ChampionTraitRow[];
@@ -227,11 +228,11 @@ export function recommendBuild(req: BuildRequest, data: BuildData): BuildRespons
   const baseline = data.baseline;
   const baseWr = winRate(baseline);
   const byKind = (kind: ChoiceKind) => data.choices.filter((c) => c.kind === kind);
-  const fallback: Reason[] = data.patch.fellBack
+  const fallback: Reason[] = data.patch.merged
     ? [
         {
           kind: 'patch_fallback',
-          label: `Patch ${data.patch.patch} data: only ${formatGames(data.patch.currentGames)} on ${data.currentPatch}`,
+          label: `${patchesLabel(data.patch.patches)} data: only ${formatGames(data.patch.currentGames)} on ${data.currentPatch}`,
           delta: 0,
           games: baseline.games,
         },
@@ -255,7 +256,7 @@ export function recommendBuild(req: BuildRequest, data: BuildData): BuildRespons
 
   const selfTraits =
     data.championTraits.find(
-      (t) => t.championId === req.championId && t.patch === data.patch.patch,
+      (t) => t.championId === req.championId && t.patch === data.currentPatch,
     ) ?? data.championTraits.find((t) => t.championId === req.championId);
   const damage: 'physical' | 'magic' =
     (selfTraits?.physicalShare ?? 0.5) >= (selfTraits?.magicShare ?? 0.5) ? 'physical' : 'magic';
@@ -285,7 +286,7 @@ export function recommendBuild(req: BuildRequest, data: BuildData): BuildRespons
   return {
     championId: req.championId,
     role,
-    patchUsed: data.patch.patch,
+    patchesUsed: data.patch.patches,
     games: baseline.games,
     confidence: round(sampleConfidence(baseline.games, B.confidenceK), 3),
     items,

@@ -15,7 +15,7 @@ function data(overrides: Partial<TierListData> = {}): TierListData {
       role(CUR, 412, 'UTILITY', 2000, 900), // Thresh 45 %
       role(CUR, 89, 'UTILITY', 10, 9), // Leona: too few games everywhere
       role(CUR, 40, 'UTILITY', 50, 30), // Janna: few games on current…
-      role(PREV, 40, 'UTILITY', 600, 330), // …so previous patch (55 %)
+      role(PREV, 40, 'UTILITY', 600, 330), // …so both patches combined (360 / 650)
       role(PREV, 111, 'UTILITY', 600, 300),
       role(CUR, 222, 'BOTTOM', 3000, 1500),
     ],
@@ -46,7 +46,7 @@ describe('buildTierList', () => {
     expect(ids.at(-1)).toBe(412);
 
     const naut = t.entries[0];
-    expect(naut?.patchUsed).toBe(CUR);
+    expect(naut?.patchesUsed).toEqual([CUR]);
     expect(naut?.winRate).toBe(0.55);
     expect(naut?.pickRate).toBeCloseTo(2000 / t.roleGames, 4);
     expect(naut?.banRate).toBe(0.1);
@@ -55,10 +55,12 @@ describe('buildTierList', () => {
     expect(naut?.score).toBeLessThan(0.05);
 
     const janna = t.entries.find((e) => e.championId === 40);
-    expect(janna?.patchUsed).toBe(PREV);
-    expect(janna?.games).toBe(600);
-    expect(janna?.pickRate).toBe(0.5); // 600 of 1200 role games on PREV
-    expect(janna?.banRate).toBe(0.1);
+    expect(janna?.patchesUsed).toEqual([CUR, PREV]);
+    expect(janna?.games).toBe(650);
+    expect(janna?.winRate).toBeCloseTo(360 / 650, 4);
+    // 650 of the role's 6,060 + 1,200 games on both patches; banned in 60 of 3,600 matches.
+    expect(janna?.pickRate).toBeCloseTo(650 / 7260, 4);
+    expect(janna?.banRate).toBeCloseTo(60 / 3600, 4);
     // Smaller sample than Nautilus with the same raw delta → shrunk harder.
     expect(janna?.score).toBeLessThan(naut?.score ?? 0);
     expect(janna?.confidence).toBeLessThan(naut?.confidence ?? 1);
@@ -92,6 +94,17 @@ describe('buildTierList', () => {
     expect(best?.winRate).toBe(0.7);
     expect(best?.games).toBe(400);
     expect(naut?.bestDuos.map((d) => d.championId)).toEqual([222]);
+  });
+
+  test('matchups of a combined entry are summed over both patches', () => {
+    const t = buildTierList(
+      'UTILITY',
+      data({
+        vs: [vs(CUR, 40, 412, 'UTILITY', 10, 9), vs(PREV, 40, 412, 'UTILITY', 90, 71)],
+      }),
+    );
+    const janna = t.entries.find((e) => e.championId === 40);
+    expect(janna?.bestMatchups[0]).toMatchObject({ championId: 412, games: 100, winRate: 0.8 });
   });
 
   test('empty role', () => {

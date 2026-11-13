@@ -27,6 +27,11 @@ export function percent(rate: number, digits = 1): string {
   return `${(rate * 100).toFixed(digits)}%`;
 }
 
+/** ["16.22", "16.21"] → "16.22 + 16.21" (patches whose stats were combined). */
+export function patchesText(patches: readonly string[]): string {
+  return patches.join(' + ');
+}
+
 /** 48213 → "48.2k". */
 export function compact(n: number): string {
   if (n >= 10_000) return `${(n / 1000).toFixed(0)}k`;
@@ -43,7 +48,7 @@ export const REASON_KIND_LABEL: Record<ReasonKind, string> = {
   item_swap: 'Item swap',
   tag_rule: 'Item rule',
   popularity: 'Popularity',
-  patch_fallback: 'Previous patch',
+  patch_fallback: 'Previous patch added',
 };
 
 /** Sample-size confidence used to fade thin evidence: 0 games → 0.25, ≥ 1000 → 1. */

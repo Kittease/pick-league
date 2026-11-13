@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Skeleton } from '@/components/ui/skeleton';
-import { compact, confidenceLabel, percent, ROLE_LABEL } from '@/lib/format';
+import { compact, confidenceLabel, patchesText, percent, ROLE_LABEL } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
@@ -48,7 +48,7 @@ function CandidateRow({
   const open = toggled ?? defaultOpen;
   const champ = lookup?.champion(candidate.championId);
   const name = champ?.name ?? `#${candidate.championId}`;
-  const fallback = candidate.patchUsed !== currentPatch;
+  const merged = candidate.patchesUsed.length > 1;
   return (
     <Collapsible
       open={open}
@@ -66,12 +66,12 @@ function CandidateRow({
         <span className="flex min-w-0 flex-col gap-1.5">
           <span className="flex items-baseline gap-2">
             <span className="truncate text-sm font-semibold">{name}</span>
-            {fallback && (
+            {merged && (
               <span
                 className="text-[10px] text-gold"
-                title={`Too few games on ${currentPatch}: data from ${candidate.patchUsed}`}
+                title={`Too few matchups on ${currentPatch} alone: both patches combined`}
               >
-                {candidate.patchUsed} data
+                {patchesText(candidate.patchesUsed)} data
               </span>
             )}
           </span>
@@ -113,7 +113,8 @@ function CandidateRow({
               {previewing ? 'Hide build preview' : 'Preview build'}
             </Button>
             <span className="text-[11px] text-muted-foreground">
-              {confidenceLabel(candidate.confidence)} confidence · patch {candidate.patchUsed}
+              {confidenceLabel(candidate.confidence)} confidence · patch{' '}
+              {patchesText(candidate.patchesUsed)}
             </span>
           </div>
         </div>

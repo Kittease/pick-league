@@ -9,11 +9,13 @@ import type {
   PicksResponse,
 } from '@pick-league/shared';
 import {
-  choosePatch,
+  choosePatches,
   LANE_ROLES,
   recommendBuild,
   recommendPicks,
   sideTraits,
+  sumByKey,
+  sumStats,
 } from '../engine/index.ts';
 import { ApiError } from '../errors.ts';
 import * as repo from '../stats/repository.ts';
@@ -25,7 +27,7 @@ export interface PatchContext {
   patches: PatchId[];
 }
 
-/** Current/previous patch, or the forced one (`patch` in the body: no fallback). */
+/** Current/previous patch, or the forced one (`patch` in the body: no previous patch added). */
 export async function patchContext(q: Queryable, forced?: PatchId): Promise<PatchContext> {
   const kept = (await listPatches(q)).map((p) => p.id);
   if (forced !== undefined) {
@@ -89,12 +91,12 @@ export async function build(q: Queryable, req: BuildRequest): Promise<BuildRespo
     );
   const cur = find(ctx.current);
   const prev = find(ctx.previous);
-  const pc = choosePatch(ctx.current, ctx.previous, cur?.games ?? 0, prev?.games ?? 0);
-  const baseline = (pc.fellBack ? prev : cur) ?? { games: 0, wins: 0 };
+  const pc = choosePatches(ctx.current, ctx.previous, cur?.games ?? 0, prev?.games ?? 0);
+  const baseline = sumStats(pc.merged ? [cur, prev].flatMap((r) => r ?? []) : cur ? [cur] : []);
   if (baseline.games === 0) {
     throw new ApiError('NO_DATA', `No games of champion ${req.championId} as ${req.role} yet`);
   }
-  const patch = pc.patch;
+  const { patches } = pc;
   // Only lane opponents matter for choice matchups; enemies with unknown roles are all candidates.
   const laneRoles = LANE_ROLES[req.role];
   const opponentIds = req.enemies
@@ -106,15 +108,17 @@ export async function build(q: Queryable, req: BuildRequest): Promise<BuildRespo
     currentPatch: ctx.current,
     previousPatch: ctx.previous,
   });
-  const [choices, choiceMatchups, choiceTraits, compTraits, vs, items, names] = await Promise.all([
-    repo.loadChoices(q, patch, req.championId, req.role),
-    repo.loadChoiceMatchups(q, patch, req.championId, req.role, opponentIds),
-    repo.loadChoiceTraits(q, patch, req.championId, req.role, enemyTraits),
-    repo.loadCompTraits(q, [patch], req.role, req.championId, 'enemy'),
-    repo.loadVsForChampion(q, patch, req.championId, req.role, opponentIds),
-    repo.loadItems(q, patch),
-    repo.loadNames(q, ctx.patches),
-  ]);
+  const [choices, choiceMatchups, choiceTraits, compTraitRows, vs, items, names] =
+    await Promise.all([
+      repo.loadChoices(q, patches, req.championId, req.role),
+      repo.loadChoiceMatchups(q, patches, req.championId, req.role, opponentIds),
+      repo.loadChoiceTraits(q, patches, req.championId, req.role, enemyTraits),
+      repo.loadCompTraits(q, patches, req.role, req.championId, 'enemy'),
+      repo.loadVsForChampion(q, patches, req.championId, req.role, opponentIds),
+      repo.loadItems(q, ctx.current),
+      repo.loadNames(q, ctx.patches),
+    ]);
+  const compTraits = sumByKey(compTraitRows, (r) => `${r.side}|${r.trait}`);
   const result = recommendBuild(req, {
     currentPatch: ctx.current,
     previousPatch: ctx.previous,

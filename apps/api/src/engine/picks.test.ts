@@ -88,17 +88,37 @@ describe('recommendPicks', () => {
     expect(result.candidates.map((c) => c.championId).sort()).toEqual([111, 117]);
   });
 
-  test('falls back to the previous patch and says so', () => {
+  test('adds the previous patch when the current one has too few games, and says so', () => {
     const result = recommendPicks(
-      req({ role: 'UTILITY' }),
+      req({ role: 'UTILITY', enemies: [40] }),
       data({
-        roleStats: [role(CUR, 111, 'UTILITY', 40, 20), role(PREV, 111, 'UTILITY', 900, 500)],
+        roleStats: [
+          role(CUR, 111, 'UTILITY', 40, 20),
+          role(PREV, 111, 'UTILITY', 900, 500),
+          role(CUR, 40, 'UTILITY', 2000, 1000),
+        ],
+        vs: [vs(CUR, 111, 40, 'UTILITY', 10, 6), vs(PREV, 111, 40, 'UTILITY', 90, 54)],
       }),
     );
     const naut = result.candidates[0];
-    expect(naut).toMatchObject({ championId: 111, patchUsed: PREV, games: 900 });
-    expect(naut?.reasons[0]).toMatchObject({ kind: 'patch_fallback', games: 900 });
-    expect(naut?.reasons[0]?.label).toContain('only 40 games of Nautilus support on 15.22');
+    expect(naut).toMatchObject({ championId: 111, patchesUsed: [CUR, PREV], games: 940 });
+    expect(naut?.winRate).toBeCloseTo(520 / 940, 4);
+    expect(naut?.reasons[0]).toMatchObject({ kind: 'patch_fallback', games: 940 });
+    expect(naut?.reasons[0]?.label).toBe(
+      '15.22 + 15.21 data: only 40 games of Nautilus support on 15.22',
+    );
+    expect(naut?.reasons.find((r) => r.kind === 'matchup')?.games).toBe(100);
+  });
+
+  test('keeps the current patch alone from the threshold on', () => {
+    const result = recommendPicks(
+      req({ role: 'UTILITY' }),
+      data({
+        roleStats: [role(CUR, 111, 'UTILITY', 150, 75), role(PREV, 111, 'UTILITY', 900, 500)],
+      }),
+    );
+    expect(result.candidates[0]).toMatchObject({ patchesUsed: [CUR], games: 150 });
+    expect(result.candidates[0]?.reasons.some((r) => r.kind === 'patch_fallback')).toBe(false);
   });
 
   test('vs enemy composition traits, net of the role-wide effect', () => {

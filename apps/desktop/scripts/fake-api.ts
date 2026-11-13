@@ -156,6 +156,11 @@ function patchOf(s: StaticDataResponse): string {
   return s.patch;
 }
 
+/** Like the real API: below 300 games the previous patch is added to the current one. */
+function patchesOf(s: StaticDataResponse, games: number): string[] {
+  return games < 300 ? [patchOf(s), previousPatch(patchOf(s))] : [patchOf(s)];
+}
+
 async function picks(body: unknown): Promise<PicksResponse> {
   const req = picksRequestSchema.parse(body);
   const s = await getStatic();
@@ -237,7 +242,7 @@ async function picks(body: unknown): Promise<PicksResponse> {
         championId: c.id,
         score: round(shrunk + (winRate - 0.5) * 0.5),
         confidence: round(Math.min(1, baseGames / 2000)),
-        patchUsed: baseGames < 300 ? previousPatch(patchOf(s)) : patchOf(s),
+        patchesUsed: patchesOf(s, baseGames),
         games: baseGames,
         winRate,
         reasons,
@@ -403,11 +408,10 @@ async function build(body: unknown): Promise<BuildResponse> {
     sequence.push(slot);
   }
 
-  const patchUsed = patchOf(s);
   return {
     championId: id,
     role: req.role,
-    patchUsed,
+    patchesUsed: [patchOf(s)],
     games: n(1) * 3,
     confidence: round(Math.min(1, (n(1) * 3) / 2000)),
     items: {
@@ -525,7 +529,7 @@ async function tierList(params: URLSearchParams): Promise<TierListResponse> {
       games: n,
       banRate: round(rand(c.id, 6) ** 3 * 0.35),
       confidence: round(n / (n + 200), 3),
-      patchUsed: n < 300 ? previousPatch(patchOf(s)) : patchOf(s),
+      patchesUsed: patchesOf(s, n),
       bestMatchups: matchups.filter((m) => m.delta > 0).slice(0, 3),
       worstMatchups: matchups
         .filter((m) => m.delta < 0)

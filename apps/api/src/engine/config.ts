@@ -8,7 +8,10 @@
 import type { CompTrait, Position } from '@pick-league/shared';
 
 export const ENGINE_CONFIG = {
-  /** Use the current patch for a champion+role when it has at least this many games, else the previous one. */
+  /**
+   * Use the current patch alone for a champion+role when it has at least this many games, else the
+   * current and previous patches combined.
+   */
   patchFallbackMinGames: 150,
   /** Champions with fewer games in the role (on the patch used) are not candidates. */
   minCandidateGames: 20,

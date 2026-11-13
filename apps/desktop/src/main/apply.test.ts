@@ -7,7 +7,7 @@ import type { LcuApi } from './lcu/api.ts';
 const build = {
   championId: 267,
   role: 'UTILITY',
-  patchUsed: '15.22',
+  patchesUsed: ['15.22'],
   games: 500,
   confidence: 0.8,
   items: { starting: [], early: [], core: [], situational: [] },

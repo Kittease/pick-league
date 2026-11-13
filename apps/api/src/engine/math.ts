@@ -53,26 +53,46 @@ export const round = (x: number, digits = 4) => {
 };
 
 export interface PatchChoice {
-  patch: PatchId;
-  games: number;
-  /** True when the previous patch is used because the current one lacks games. */
-  fellBack: boolean;
+  /** Patches whose stats are combined, newest first: [current], or [current, previous]. */
+  patches: PatchId[];
+  /** True when the previous patch is added because the current one lacks games. */
+  merged: boolean;
+  /** Games of champion+role on the current patch alone. */
   currentGames: number;
 }
 
 /**
- * Current patch when it has at least `patchFallbackMinGames` games for the champion+role,
- * else the previous patch if it has more games.
+ * The current patch alone when it has at least `patchFallbackMinGames` games for the
+ * champion+role, else the current and previous patches combined (when the previous has any).
  */
-export function choosePatch(
+export function choosePatches(
   current: PatchId,
   previous: PatchId | null,
   currentGames: number,
   previousGames: number,
   minGames: number = ENGINE_CONFIG.patchFallbackMinGames,
 ): PatchChoice {
-  if (currentGames >= minGames || previous === null || previousGames <= currentGames) {
-    return { patch: current, games: currentGames, fellBack: false, currentGames };
+  if (currentGames >= minGames || previous === null || previousGames === 0) {
+    return { patches: [current], merged: false, currentGames };
   }
-  return { patch: previous, games: previousGames, fellBack: true, currentGames };
+  return { patches: [current, previous], merged: true, currentGames };
+}
+
+/** "15.22" or "15.22 + 15.21" */
+export function patchesLabel(patches: readonly PatchId[]): string {
+  return patches.join(' + ');
+}
+
+/**
+ * Rows summed per key (games and wins added, other fields from the first row), e.g. the same
+ * matchup on both patches of a `PatchChoice`.
+ */
+export function sumByKey<T extends GamesWins>(rows: readonly T[], key: (r: T) => string): T[] {
+  const out = new Map<string, T>();
+  for (const r of rows) {
+    const k = key(r);
+    const seen = out.get(k);
+    out.set(k, seen ? { ...seen, games: seen.games + r.games, wins: seen.wins + r.wins } : r);
+  }
+  return [...out.values()];
 }

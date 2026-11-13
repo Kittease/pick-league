@@ -84,7 +84,7 @@ export const REASON_KINDS = [
   'tag_rule',
   /** How often high-elo players make this choice (delta = 0 unless meaningful). */
   'popularity',
-  /** Previous patch data used because the current patch has too few games. */
+  /** Previous patch data added to the current one because the current has too few games. */
   'patch_fallback',
 ] as const;
 export type ReasonKind = (typeof REASON_KINDS)[number];
@@ -315,11 +315,14 @@ export interface PickCandidate {
   score: number;
   /** 0..1, derived from sample sizes. */
   confidence: number;
-  /** Patch whose data was used for this champion (current, or previous as fallback). */
-  patchUsed: PatchId;
-  /** Games of champion+role on `patchUsed`. */
+  /**
+   * Patches whose data was used for this champion, newest first: the current one, plus the
+   * previous one when the current has too few games of champion+role.
+   */
+  patchesUsed: PatchId[];
+  /** Games of champion+role on `patchesUsed`. */
   games: number;
-  /** Baseline win rate of champion+role on `patchUsed`. */
+  /** Baseline win rate of champion+role on `patchesUsed`. */
   winRate: number;
   /** Ordered by importance (matchup, duo, vs_comp, with_comp, …). */
   reasons: Reason[];
@@ -327,7 +330,7 @@ export interface PickCandidate {
 
 export interface PicksResponse {
   role: Position;
-  /** Current patch at request time (candidates may individually fall back, see `PickCandidate.patchUsed`). */
+  /** Current patch at request time (candidates may add the previous one, see `PickCandidate.patchesUsed`). */
   patch: PatchId;
   candidates: PickCandidate[];
 }
@@ -391,9 +394,9 @@ export interface SkillOrderRecommendation {
 export interface BuildResponse {
   championId: number;
   role: Position;
-  /** Patch whose data was used (current, or previous as fallback). */
-  patchUsed: PatchId;
-  /** Games of champion+role on `patchUsed`. */
+  /** Patches whose data was used, newest first (see `PickCandidate.patchesUsed`). */
+  patchesUsed: PatchId[];
+  /** Games of champion+role on `patchesUsed`. */
   games: number;
   /** 0..1 */
   confidence: number;
@@ -438,18 +441,18 @@ export interface TierListEntry {
   tier: Tier;
   /** Shrunk win-rate delta vs the role average (higher = better); entries are sorted by it. */
   score: number;
-  /** Win rate of champion+role on `patchUsed`. */
+  /** Win rate of champion+role on `patchesUsed`. */
   winRate: number;
-  /** Games of champion+role on `patchUsed`. */
+  /** Games of champion+role on `patchesUsed`. */
   games: number;
-  /** Share of the role's games on `patchUsed` played by this champion (sums to ~1 over a role). */
+  /** Share of the role's games on `patchesUsed` played by this champion (~1 summed over a role). */
   pickRate: number;
-  /** Share of matches of `patchUsed` where this champion was banned (by either team). */
+  /** Share of matches of `patchesUsed` where this champion was banned (by either team). */
   banRate: number;
   /** 0..1, derived from the sample size. */
   confidence: number;
-  /** Current patch, or the previous one when the current has too few games (like the picks engine). */
-  patchUsed: PatchId;
+  /** Current patch, plus the previous one when the current has too few games (like the picks engine). */
+  patchesUsed: PatchId[];
   /** Up to 3 best lane opponents, best first (positive deltas only). */
   bestMatchups: TierListRelation[];
   /** Up to 3 worst lane opponents, worst first (negative deltas only). */

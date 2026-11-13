@@ -27,7 +27,7 @@ function data(overrides: Partial<BuildData> = {}): BuildData {
   return {
     currentPatch: CUR,
     previousPatch: null,
-    patch: { patch: CUR, games: 1000, fellBack: false, currentGames: 1000 },
+    patch: { patches: [CUR], merged: false, currentGames: 1000 },
     baseline: { games: 1000, wins: 500 },
     roleStats: [
       role(CUR, 89, 'UTILITY', 1000, 500),
@@ -80,7 +80,7 @@ describe('recommendBuild', () => {
     const b = recommendBuild(req(LEONA), data());
     expect(b).not.toBeNull();
     if (!b) return;
-    expect(b.patchUsed).toBe(CUR);
+    expect(b.patchesUsed).toEqual([CUR]);
     expect(b.runes.runeIds[0]).toBe(8439);
     expect(b.runes.selectedPerkIds).toHaveLength(9);
     expect(b.summonerSpells.spellIds).toEqual([4, 14]);
@@ -194,6 +194,22 @@ describe('recommendBuild', () => {
       delta: 0,
       games: 0,
       trait: 'HIGH_HEALING',
+    });
+  });
+
+  test('says when the previous patch is added to the current one', () => {
+    const b = recommendBuild(
+      req(LEONA),
+      data({
+        previousPatch: '15.21',
+        patch: { patches: [CUR, '15.21'], merged: true, currentGames: 40 },
+      }),
+    );
+    expect(b?.patchesUsed).toEqual([CUR, '15.21']);
+    expect(b?.runes.reasons[0]).toMatchObject({
+      kind: 'patch_fallback',
+      label: '15.22 + 15.21 data: only 40 games on 15.22',
+      games: 1000,
     });
   });
 

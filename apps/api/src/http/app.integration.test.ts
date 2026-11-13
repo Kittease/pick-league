@@ -136,7 +136,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(reason?.label).toMatch(/^\+\d+\.\d% vs Janna \(likely lane, support, [\d,]+ games\)$/);
   });
 
-  test('picks: duo synergy and previous-patch fallback', async () => {
+  test('picks: duo synergy and previous patch added for a rare pick', async () => {
     const res = await post('/recommendations/picks', {
       role: 'UTILITY',
       allies: [{ championId: PLANTED.duo.allyId, role: 'BOTTOM' }],
@@ -148,7 +148,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(body.candidates.slice(0, 2).map((c) => c.championId)).toContain(PLANTED.duo.championId);
 
     const braum = body.candidates.find((c) => c.championId === PLANTED.rareOnCurrent);
-    expect(braum?.patchUsed).toBe(PREV);
+    expect(braum?.patchesUsed).toEqual([CUR, PREV]);
     expect(braum?.reasons[0]?.kind).toBe('patch_fallback');
   });
 
@@ -172,7 +172,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     });
     expect(res.status).toBe(200);
     const b = (await res.json()) as BuildResponse;
-    expect(b.patchUsed).toBe(CUR);
+    expect(b.patchesUsed).toEqual([CUR]);
     expect(b.games).toBeGreaterThan(200);
     expect(b.runes.runeIds[0]).toBe(PLANTED.runeMatchup.keystone);
     expect(b.runes.selectedPerkIds).toHaveLength(9);
@@ -275,8 +275,8 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(lulu?.bestDuos[0]?.role).toBe('BOTTOM');
 
     const braum = body.entries.find((e) => e.championId === PLANTED.rareOnCurrent);
-    expect(braum?.patchUsed).toBe(PREV);
-    const current = body.entries.filter((e) => e.patchUsed === CUR);
+    expect(braum?.patchesUsed).toEqual([CUR, PREV]);
+    const current = body.entries.filter((e) => e.patchesUsed.length === 1);
     for (const e of body.entries) {
       expect(e.banRate).toBeGreaterThan(0);
       expect(e.banRate).toBeLessThan(1);
@@ -296,7 +296,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       await get(`/tierlist?role=BOTTOM&patch=${PREV}`)
     ).json()) as TierListResponse;
     expect(prev.patch).toBe(PREV);
-    expect(prev.entries.every((e) => e.patchUsed === PREV)).toBe(true);
+    expect(prev.entries.every((e) => e.patchesUsed.join() === PREV)).toBe(true);
     const bad = await get('/tierlist?role=SUPPORT');
     expect(bad.status).toBe(400);
     expect(((await bad.json()) as ApiErrorResponse).error.code).toBe('BAD_REQUEST');

@@ -136,7 +136,7 @@ export const PLANTED = {
   antiHealVsHealing: 0.6,
   /** Leona (89) wins more with Aftershock (8439) than Glacial (8351) vs Thresh (412). */
   runeMatchup: { championId: 89, opponentId: 412, keystone: 8439, logit: 0.7 },
-  /** Braum (201) is rarely picked on the current patch (fallback to the previous one). */
+  /** Braum (201) is rarely picked on the current patch (the previous one is added). */
   rareOnCurrent: 201,
 } as const;
 

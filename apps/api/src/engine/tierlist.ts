@@ -12,7 +12,15 @@ import type {
   TierListResponse,
 } from '@pick-league/shared';
 import { DUO_ROLES, ENGINE_CONFIG, LANE_ROLES } from './config.ts';
-import { choosePatch, round, sampleConfidence, shrink, sumStats, winRate } from './math.ts';
+import {
+  choosePatches,
+  round,
+  sampleConfidence,
+  shrink,
+  sumByKey,
+  sumStats,
+  winRate,
+} from './math.ts';
 import type { GamesWins, RoleStatRow, VsRow, WithRow } from './types.ts';
 
 /** stats_champion_bans */
@@ -92,9 +100,11 @@ function relations<R extends GamesWins>(
 export function buildTierList(role: Position, data: TierListData): TierListResponse {
   const { currentPatch, previousPatch } = data;
   const inRole = data.roleStats.filter((r) => r.position === role);
-  const rolePatch = (patch: PatchId) => sumStats(inRole.filter((r) => r.patch === patch));
+  const onPatches = <T extends { patch: PatchId }>(rows: readonly T[], patches: PatchId[]) =>
+    rows.filter((r) => patches.includes(r.patch));
   const roleTotals = new Map<PatchId, GamesWins>();
-  for (const p of [currentPatch, previousPatch]) if (p) roleTotals.set(p, rolePatch(p));
+  for (const p of [currentPatch, previousPatch])
+    if (p) roleTotals.set(p, sumStats(onPatches(inRole, [p])));
 
   const row = new Map(inRole.map((r) => [`${r.patch}|${r.championId}`, r]));
   const bans = new Map(data.bans.map((b) => [`${b.patch}|${b.championId}`, b.bans]));
@@ -106,19 +116,23 @@ export function buildTierList(role: Position, data: TierListData): TierListRespo
   for (const championId of new Set(inRole.map((r) => r.championId))) {
     const cur = row.get(`${currentPatch}|${championId}`);
     const prev = previousPatch ? row.get(`${previousPatch}|${championId}`) : undefined;
-    const pc = choosePatch(currentPatch, previousPatch, cur?.games ?? 0, prev?.games ?? 0);
-    const base = pc.fellBack ? prev : cur;
-    if (!base || base.games < ENGINE_CONFIG.minCandidateGames) continue;
-    const patch = pc.patch;
+    const pc = choosePatches(currentPatch, previousPatch, cur?.games ?? 0, prev?.games ?? 0);
+    const { patches } = pc;
+    const onEach = <T>(get: (p: PatchId) => T | undefined) => patches.flatMap((p) => get(p) ?? []);
+    const base = sumStats(onEach((p) => row.get(`${p}|${championId}`)));
+    if (base.games < ENGINE_CONFIG.minCandidateGames) continue;
     const baseWr = winRate(base);
-    const roleTotal = roleTotals.get(patch) ?? { games: 0, wins: 0 };
+    const roleTotal = sumStats(onEach((p) => roleTotals.get(p)));
     const score = shrink(baseWr - winRate(roleTotal), base.games, K.base);
-    const patchMatches = matches.get(patch) ?? 0;
+    const patchMatches = onEach((p) => matches.get(p)).reduce((s, n) => s + n, 0);
+    const banned = onEach((p) => bans.get(`${p}|${championId}`)).reduce((s, n) => s + n, 0);
 
     const matchups = relations(
-      data.vs.filter(
-        (r) =>
-          r.patch === patch && r.championId === championId && laneRoles.includes(r.enemyPosition),
+      sumByKey(
+        onPatches(data.vs, patches).filter(
+          (r) => r.championId === championId && laneRoles.includes(r.enemyPosition),
+        ),
+        (r) => `${r.enemyId}|${r.enemyPosition}`,
       ),
       baseWr,
       K.matchup,
@@ -126,9 +140,11 @@ export function buildTierList(role: Position, data: TierListData): TierListRespo
       (r) => r.enemyPosition,
     );
     const duos = relations(
-      data.with.filter(
-        (r) =>
-          r.patch === patch && r.championId === championId && duoRoles.includes(r.allyPosition),
+      sumByKey(
+        onPatches(data.with, patches).filter(
+          (r) => r.championId === championId && duoRoles.includes(r.allyPosition),
+        ),
+        (r) => `${r.allyId}|${r.allyPosition}`,
       ),
       baseWr,
       K.duo,
@@ -149,10 +165,9 @@ export function buildTierList(role: Position, data: TierListData): TierListRespo
       winRate: round(baseWr),
       games: base.games,
       pickRate: roleTotal.games > 0 ? round(base.games / roleTotal.games) : 0,
-      banRate:
-        patchMatches > 0 ? round((bans.get(`${patch}|${championId}`) ?? 0) / patchMatches) : 0,
+      banRate: patchMatches > 0 ? round(banned / patchMatches) : 0,
       confidence: round(sampleConfidence(base.games, ENGINE_CONFIG.confidenceK.base), 3),
-      patchUsed: patch,
+      patchesUsed: patches,
       bestMatchups: best.slice(0, TL.relationsShown),
       worstMatchups: worst,
       bestDuos: duos

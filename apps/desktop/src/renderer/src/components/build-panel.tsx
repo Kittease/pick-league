@@ -8,7 +8,7 @@ import { ArrowRightIcon, CheckIcon, Loader2Icon, WandSparklesIcon } from 'lucide
 import { Button } from '@/components/ui/button';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { compact, confidenceLabel, percent, SKILL_KEY } from '@/lib/format';
+import { compact, confidenceLabel, patchesText, percent, SKILL_KEY } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../../../core/app-state.ts';
 import { arrangeSpells } from '../../../core/spells.ts';
@@ -344,7 +344,7 @@ export function BuildPanel({ state, lookup }: { state: AppState; lookup: StaticL
           </span>
           {data && (
             <span className="num truncate text-[11px] text-muted-foreground">
-              patch {data.patchUsed} · {compact(data.games)} games ·{' '}
+              patch {patchesText(data.patchesUsed)} · {compact(data.games)} games ·{' '}
               {confidenceLabel(data.confidence).toLowerCase()} confidence
             </span>
           )}

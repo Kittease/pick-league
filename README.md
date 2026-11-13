@@ -153,7 +153,8 @@ These commands read `DATABASE_URL` (and the other settings) from the root `.env`
 | `GET /tierlist?role=UTILITY&patch=latest` | tier list of a role: tiers, rates, best/worst matchups, best duos |
 
 Request/response types are in `packages/shared/src/api-contract.ts`. Every reason carries the
-win-rate delta (after shrinkage) and its sample size; `patchUsed` says when the previous patch was used.
+win-rate delta (after shrinkage) and its sample size; `patchesUsed` lists the patches combined (the previous one is added when the
+current patch has fewer than 150 games of the champion in the role).
 
 The API owns the stats layer: materialized views (`packages/db/migrations/0002_stats_views.sql`)
 refreshed in the background every `STATS_REFRESH_MINUTES` (default 15) when matches changed.

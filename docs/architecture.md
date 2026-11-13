@@ -65,9 +65,9 @@ Endpoints (v1):
 - `GET /health` → `{ ok, db, latestPatch, matchCount }`.
 - `GET /patches` → kept patches with match counts per platform.
 - `GET /static/:patch` → champions (id, slug, name, tags, spells), items, runes, summoner spells — what the desktop needs to render icons/names. Image URLs are Data Dragon CDN URLs.
-- `POST /recommendations/picks` — body: `{ role, allies: [{championId|null, role}], enemies: [championId|null], bans: number[], availableChampionIds?: number[] }` → ranked candidates `{ championId, score, confidence, patchUsed, reasons: Reason[] }`.
-- `POST /recommendations/build` — body: `{ championId, role, allies: [{championId, role}], enemies: [{championId, role|null}] }` → `{ patchUsed, items: { starting, early, core, situational }, runes, summonerSpells, skillOrder }`, every piece with `reasons: Reason[]`.
-- `GET /tierlist?role=UTILITY&patch=latest` → `{ role, patch, roleGames, entries }`: every champion of the role with ≥ `minCandidateGames`, scored by its win-rate delta vs the role average (shrunk like the picks engine), tiered S–D by score percentile (non-positive scores capped at B), with win/pick/ban rates, confidence, `patchUsed` (per-champion fallback) and its top 3 best/worst lane matchups and best duos (shrunk deltas + games). Ban rates come from the `stats_champion_bans` / `stats_patch_matches` views.
+- `POST /recommendations/picks` — body: `{ role, allies: [{championId|null, role}], enemies: [championId|null], bans: number[], availableChampionIds?: number[] }` → ranked candidates `{ championId, score, confidence, patchesUsed, reasons: Reason[] }`.
+- `POST /recommendations/build` — body: `{ championId, role, allies: [{championId, role}], enemies: [{championId, role|null}] }` → `{ patchesUsed, items: { starting, early, core, situational }, runes, summonerSpells, skillOrder }`, every piece with `reasons: Reason[]`.
+- `GET /tierlist?role=UTILITY&patch=latest` → `{ role, patch, roleGames, entries }`: every champion of the role with ≥ `minCandidateGames`, scored by its win-rate delta vs the role average (shrunk like the picks engine), tiered S–D by score percentile (non-positive scores capped at B), with win/pick/ban rates, confidence, `patchesUsed` (per champion: the previous patch is added below the threshold) and its top 3 best/worst lane matchups and best duos (shrunk deltas + games). Ban rates come from the `stats_champion_bans` / `stats_patch_matches` views.
 
 `Reason = { kind: 'matchup'|'duo'|'vs_comp'|'with_comp'|'base'|'item_swap'|..., label: string (human readable), delta: number (win-rate delta, e.g. +0.028), games: number }`.
 
@@ -81,7 +81,7 @@ Endpoints (v1):
   Each delta is shrunk toward 0 with empirical-Bayes style shrinkage (`delta * n / (n + k)`) so tiny samples can't dominate. Exclude banned and already-picked champions; if `availableChampionIds` is given, restrict to them. Confidence derives from sample sizes.
 - **Composition traits** come from the data, not hand-written lists: per champion, average physical/magic/true damage share, damage taken + mitigated (tankiness), CC time, healing, plus Data Dragon tags and attack range. Team traits = aggregates of its 5 (or known) champions bucketed (e.g. "AD-heavy", "high CC", "high healing", "tanky", "poke/ranged").
 - **Builds** — layered: (1) base = most common winning choices for champion+role (starter, boots, ordered core from `item_events` replayed with UNDO handling, ignoring consumables/trinkets/components), (2) adjusted for the lane opponent, (3) item swaps driven by enemy traits with data-backed deltas where samples allow, else Data Dragon item tags (anti-heal vs healing, armor vs AD-heavy, MR vs AP-heavy, tenacity/QSS vs CC, armor pen vs tanky). Same layering for runes (full page incl. shards), summoner spells, skill order (first 3 levels + max order). Each choice carries reasons.
-- **Patch fallback** — use the current patch when the champion+role has ≥ a threshold of games (configurable, e.g. 150), else the previous patch; `patchUsed` is returned and shown.
+- **Patch fallback** — use the current patch alone when the champion+role has ≥ a threshold of games (configurable, e.g. 150), else the current and previous patches combined (their games and wins summed); `patchesUsed` (newest first) is returned and shown.
 
 ## Desktop helper
 

@@ -1,6 +1,7 @@
 /**
  * Reads the stats materialized views and static tables. All lookups are on the views' unique
  * indexes (patch + role/champion prefixes), so they stay fast at ~150k matches per patch.
+ * Loaders that return no `patch` column sum their rows over the patches given (see `choosePatches`).
  */
 import type { Queryable } from '@pick-league/db';
 import type { CompTrait, PatchId, Position } from '@pick-league/shared';
@@ -207,15 +208,19 @@ export async function loadThresholds(
 
 export async function loadChoices(
   q: Queryable,
-  patch: PatchId,
+  patches: PatchId[],
   championId: number,
   position: Position,
 ): Promise<ChoiceRow[]> {
   const rows = await q<
     { kind: ChoiceKind; choice: string; games: number; wins: number; avg_pos: number | null }[]
   >`
-    SELECT kind, choice, games, wins, avg_pos FROM stats_choices
-    WHERE patch = ${patch} AND champion_id = ${championId} AND position = ${position}`;
+    SELECT kind, choice, sum(games)::int AS games, sum(wins)::int AS wins,
+           (sum(avg_pos * games) / nullif(sum(games) FILTER (WHERE avg_pos IS NOT NULL), 0))::float8
+             AS avg_pos
+    FROM stats_choices
+    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
+    GROUP BY kind, choice`;
   return rows.map((r) => ({
     kind: r.kind,
     choice: r.choice,
@@ -227,7 +232,7 @@ export async function loadChoices(
 
 export async function loadChoiceMatchups(
   q: Queryable,
-  patch: PatchId,
+  patches: PatchId[],
   championId: number,
   position: Position,
   opponentIds: number[],
@@ -243,9 +248,12 @@ export async function loadChoiceMatchups(
       wins: number;
     }[]
   >`
-    SELECT opponent_id, opponent_position, kind, choice, games, wins FROM stats_choice_matchups
-    WHERE patch = ${patch} AND champion_id = ${championId} AND position = ${position}
-      AND opponent_id IN ${q(opponentIds)}`;
+    SELECT opponent_id, opponent_position, kind, choice,
+           sum(games)::int AS games, sum(wins)::int AS wins
+    FROM stats_choice_matchups
+    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
+      AND opponent_id IN ${q(opponentIds)}
+    GROUP BY opponent_id, opponent_position, kind, choice`;
   return rows.map((r) => ({
     opponentId: r.opponent_id,
     opponentPosition: r.opponent_position,
@@ -258,7 +266,7 @@ export async function loadChoiceMatchups(
 
 export async function loadChoiceTraits(
   q: Queryable,
-  patch: PatchId,
+  patches: PatchId[],
   championId: number,
   position: Position,
   traits: CompTrait[],
@@ -267,9 +275,11 @@ export async function loadChoiceTraits(
   const rows = await q<
     { trait: CompTrait; kind: ChoiceKind; choice: string; games: number; wins: number }[]
   >`
-    SELECT trait, kind, choice, games, wins FROM stats_choice_traits
-    WHERE patch = ${patch} AND champion_id = ${championId} AND position = ${position}
-      AND trait IN ${q(traits)}`;
+    SELECT trait, kind, choice, sum(games)::int AS games, sum(wins)::int AS wins
+    FROM stats_choice_traits
+    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
+      AND trait IN ${q(traits)}
+    GROUP BY trait, kind, choice`;
   return rows.map((r) => ({
     trait: r.trait,
     kind: r.kind,
@@ -281,7 +291,7 @@ export async function loadChoiceTraits(
 
 export async function loadVsForChampion(
   q: Queryable,
-  patch: PatchId,
+  patches: PatchId[],
   championId: number,
   position: Position,
   enemyIds: number[],
@@ -290,11 +300,13 @@ export async function loadVsForChampion(
   const rows = await q<
     { enemy_position: Position; enemy_id: number; games: number; wins: number }[]
   >`
-    SELECT enemy_position, enemy_id, games, wins FROM stats_champion_vs
-    WHERE patch = ${patch} AND position = ${position} AND champion_id = ${championId}
-      AND enemy_id IN ${q(enemyIds)}`;
+    SELECT enemy_position, enemy_id, sum(games)::int AS games, sum(wins)::int AS wins
+    FROM stats_champion_vs
+    WHERE patch IN ${q(patches)} AND position = ${position} AND champion_id = ${championId}
+      AND enemy_id IN ${q(enemyIds)}
+    GROUP BY enemy_position, enemy_id`;
   return rows.map((r) => ({
-    patch,
+    patch: patches[0] as PatchId, // summed over `patches`: labelled with the newest
     position,
     championId,
     enemyPosition: r.enemy_position,
