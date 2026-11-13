@@ -114,17 +114,23 @@ These commands read `DATABASE_URL` (and the other settings) from the root `.env`
 | `GET /static/:patch` | champions, items, runes, stat shards, summoner spells (`latest` = newest patch) |
 | `POST /recommendations/picks` | ranked champions for a role, with reasons |
 | `POST /recommendations/build` | items, runes, summoner spells and skill order, with reasons |
+| `GET /stats/status` | `{ refreshing, lastRefreshedAt, lastRefreshDurationMs, matchesIncluded, matchesStored, pendingMatches }` |
+| `POST /stats/refresh` | starts a background stats refresh: `202 { started: true }`, or `200 { started: false, reason }` with `up_to_date`, `already_running` or `cooldown` (+ `retryAfterSeconds`) |
 
 Request/response types are in `packages/shared/src/api-contract.ts`. Every reason carries the
 win-rate delta (after shrinkage) and its sample size; `patchUsed` says when the previous patch was used.
 
 The API owns the stats layer: materialized views (`packages/db/migrations/0002_stats_views.sql`)
 refreshed in the background every `STATS_REFRESH_MINUTES` (default 15) when matches changed.
+`POST /stats/refresh` triggers the same refresh on demand. It is public, so besides the per-IP
+rate limit it refuses to start less than `STATS_MANUAL_REFRESH_COOLDOWN_SECONDS` (60) after the
+previous refresh finished, and the Postgres advisory lock keeps timer and manual runs (on any
+instance) from overlapping.
 Engine weights and thresholds live in `apps/api/src/engine/config.ts`.
 
 Settings (env): `DATABASE_URL`, `PORT`, `LOG_LEVEL`, `CACHE_TTL_SECONDS` (600),
 `RATE_LIMIT_PER_MINUTE` (120 per IP, 0 = off), `RATE_LIMIT_BURST` (30), `TRUST_PROXY` (use
-`X-Forwarded-For`), `STATS_REFRESH_MINUTES` (15).
+`X-Forwarded-For`), `STATS_REFRESH_MINUTES` (15), `STATS_MANUAL_REFRESH_COOLDOWN_SECONDS` (60).
 
 ```sh
 PORT=3001 bun run dev:api

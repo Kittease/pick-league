@@ -34,13 +34,22 @@ const sweep = setInterval(() => limiter?.sweep(), 60_000);
 const refreshDb = createDb(config.databaseUrl, { max: 2 });
 const refresher = new StatsRefresher(refreshDb, {
   intervalMs: config.statsRefreshIntervalMs,
+  manualCooldownMs: config.statsManualCooldownMs,
+  statusDb: db,
   log: (msg, fields) => log.info(msg, fields),
   onRefreshed: () => cache.clear(),
   onError: (err) => log.error('stats refresh failed', { error: (err as Error).message }),
 });
 refresher.start();
 
-const app = createApp({ db, cache, limiter, log, trustProxy: config.trustProxy });
+const app = createApp({
+  db,
+  cache,
+  limiter,
+  log,
+  stats: refresher,
+  trustProxy: config.trustProxy,
+});
 const server = Bun.serve({ port: config.port, fetch: app.fetch });
 log.info('listening', { port: server.port });
 

@@ -4,7 +4,8 @@
  * intermediate ones (only read by the refresh itself) plainly. A Postgres advisory lock keeps
  * several API instances from refreshing at the same time.
  */
-import type { Db } from '@pick-league/db';
+import type { Db, Queryable } from '@pick-league/db';
+import type { StatsRefreshResponse, StatsStatusResponse } from '@pick-league/shared';
 
 /** Refresh order (dependencies first). `concurrent` = read by requests. */
 export const STATS_REFRESH_ORDER: readonly {
@@ -45,11 +46,84 @@ export interface RefreshOptions {
 }
 
 /** Match count + newest fetch time: changes whenever matches are added or deleted. */
-async function matchSignature(db: Db): Promise<{ signature: string; matchCount: number }> {
+function signatureOf(matchCount: number, lastFetchedAt: Date | null): string {
+  return `${matchCount}|${lastFetchedAt?.toISOString() ?? '-'}`;
+}
+
+async function matchSignature(db: Queryable): Promise<{ signature: string; matchCount: number }> {
   const [row] = await db<{ n: number; last: Date | null }[]>`
     SELECT count(*)::int AS n, max(fetched_at) AS last FROM matches`;
   const n = row?.n ?? 0;
-  return { signature: `${n}|${row?.last?.toISOString() ?? '-'}`, matchCount: n };
+  return { signature: signatureOf(n, row?.last ?? null), matchCount: n };
+}
+
+/** `pg_locks` shows a bigint advisory key as classid = high 32 bits, objid = low 32 bits. */
+const LOCK_CLASSID = Math.floor(STATS_REFRESH_LOCK_KEY / 2 ** 32);
+const LOCK_OBJID = STATS_REFRESH_LOCK_KEY % 2 ** 32;
+
+export interface StatsRefreshState {
+  /** Some session (any API instance) holds the refresh advisory lock. */
+  locked: boolean;
+  matchesStored: number;
+  /** Signature of the matches now. */
+  signature: string;
+  /** Last successful refresh. */
+  lastOk: {
+    signature: string;
+    matchCount: number;
+    finishedAt: Date;
+    durationMs: number | null;
+  } | null;
+  /** Milliseconds since the last refresh (successful or not) finished, by the database clock. */
+  msSinceLastFinished: number | null;
+}
+
+/** One cheap round trip: match count (as /health), last refresh log rows, lock holder. */
+export async function readStatsRefreshState(q: Queryable): Promise<StatsRefreshState> {
+  const [row] = await q<
+    {
+      stored: number;
+      last_fetched: Date | null;
+      ok_signature: string | null;
+      ok_match_count: number | null;
+      ok_finished_at: Date | null;
+      ok_duration_ms: number | null;
+      since_finished_ms: number | null;
+      locked: boolean;
+    }[]
+  >`
+    SELECT m.stored, m.last_fetched,
+      ok.signature AS ok_signature, ok.match_count AS ok_match_count,
+      ok.finished_at AS ok_finished_at, ok.duration_ms AS ok_duration_ms,
+      (SELECT (extract(epoch FROM now() - max(finished_at)) * 1000)::float8
+         FROM stats_refresh_log) AS since_finished_ms,
+      EXISTS (
+        SELECT 1 FROM pg_locks
+        WHERE locktype = 'advisory' AND granted AND objsubid = 1
+          AND classid = ${LOCK_CLASSID}::oid AND objid = ${LOCK_OBJID}::oid
+      ) AS locked
+    FROM (SELECT count(*)::int AS stored, max(fetched_at) AS last_fetched FROM matches) m
+    LEFT JOIN LATERAL (
+      SELECT signature, match_count, finished_at, duration_ms FROM stats_refresh_log
+      WHERE finished_at IS NOT NULL AND error IS NULL
+      ORDER BY id DESC LIMIT 1
+    ) ok ON true`;
+  const stored = row?.stored ?? 0;
+  return {
+    locked: row?.locked ?? false,
+    matchesStored: stored,
+    signature: signatureOf(stored, row?.last_fetched ?? null),
+    lastOk:
+      row?.ok_signature != null && row.ok_finished_at
+        ? {
+            signature: row.ok_signature,
+            matchCount: row.ok_match_count ?? 0,
+            finishedAt: row.ok_finished_at,
+            durationMs: row.ok_duration_ms,
+          }
+        : null,
+    msSinceLastFinished: row?.since_finished_ms ?? null,
+  };
 }
 
 export async function refreshStats(db: Db, options: RefreshOptions = {}): Promise<RefreshResult> {
@@ -112,13 +186,25 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
 }
 
 export interface StatsRefresherOptions extends RefreshOptions {
+  /** Timer period; the timer only refreshes when the matches changed. */
   intervalMs: number;
+  /**
+   * Manual refreshes (`requestRefresh`) are refused until this long after the previous refresh
+   * (timer or manual, any instance) finished. 0 disables the cooldown.
+   */
+  manualCooldownMs?: number;
+  /** Pool for the cheap status queries (default: the refresh pool). */
+  statusDb?: Queryable;
   /** Called after a refresh that changed the views (e.g. to clear response caches). */
   onRefreshed?: () => void;
   onError?: (err: unknown) => void;
 }
 
-/** Runs `refreshStats` now and then every `intervalMs`, one run at a time. */
+/**
+ * Runs `refreshStats` now and then every `intervalMs`, one run at a time, and on demand
+ * (`requestRefresh`). Timer and manual runs share `tick`, so they never overlap within an
+ * instance, always clear caches the same way, and the advisory lock serialises instances.
+ */
 export class StatsRefresher {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running: Promise<RefreshResult | null> | null = null;
@@ -149,6 +235,46 @@ export class StatsRefresher {
         this.running = null;
       });
     return this.running;
+  }
+
+  /** Resolves when the refresh in progress in this instance (if any) is over. */
+  async idle(): Promise<void> {
+    await this.running;
+  }
+
+  async status(): Promise<StatsStatusResponse> {
+    const s = await readStatsRefreshState(this.options.statusDb ?? this.db);
+    const included = s.lastOk?.matchCount ?? 0;
+    return {
+      refreshing: this.running !== null || s.locked,
+      lastRefreshedAt: s.lastOk?.finishedAt.toISOString() ?? null,
+      lastRefreshDurationMs: s.lastOk?.durationMs ?? null,
+      matchesIncluded: included,
+      matchesStored: s.matchesStored,
+      pendingMatches: Math.max(0, s.matchesStored - included),
+    };
+  }
+
+  /**
+   * Manual trigger: starts a background refresh when none is running anywhere, the matches
+   * changed since the last successful refresh and the cooldown is over. Never waits for it.
+   */
+  async requestRefresh(): Promise<StatsRefreshResponse> {
+    if (this.running) return { started: false, reason: 'already_running' };
+    const s = await readStatsRefreshState(this.options.statusDb ?? this.db);
+    // Re-checked after the await: a concurrent request may have started one meanwhile.
+    if (this.running || s.locked) return { started: false, reason: 'already_running' };
+    if (s.lastOk?.signature === s.signature) return { started: false, reason: 'up_to_date' };
+    const cooldownMs = this.options.manualCooldownMs ?? 0;
+    if (cooldownMs > 0 && s.msSinceLastFinished !== null && s.msSinceLastFinished < cooldownMs) {
+      return {
+        started: false,
+        reason: 'cooldown',
+        retryAfterSeconds: Math.max(1, Math.ceil((cooldownMs - s.msSinceLastFinished) / 1000)),
+      };
+    }
+    void this.tick();
+    return { started: true };
   }
 
   async stop(): Promise<void> {

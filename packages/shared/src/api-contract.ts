@@ -33,6 +33,8 @@ export const API_ROUTES = {
   static: (patch: PatchId | 'latest') => `/static/${patch}`,
   picks: '/recommendations/picks',
   build: '/recommendations/build',
+  statsStatus: '/stats/status',
+  statsRefresh: '/stats/refresh',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -131,6 +133,43 @@ export interface HealthResponse {
   /** Matches stored across kept patches. */
   matchCount: number;
 }
+
+// ---------------------------------------------------------------------------
+// GET /stats/status and POST /stats/refresh
+// ---------------------------------------------------------------------------
+
+/** Freshness of the stats views the recommendations are computed from. */
+export interface StatsStatusResponse {
+  /** A refresh is running (on any API instance sharing the database). */
+  refreshing: boolean;
+  /** End of the last successful refresh; null before the first one. */
+  lastRefreshedAt: string | null;
+  lastRefreshDurationMs: number | null;
+  /** Matches stored when the last successful refresh started (what the stats include). */
+  matchesIncluded: number;
+  /** Matches stored now. */
+  matchesStored: number;
+  /** `max(0, matchesStored - matchesIncluded)`: games a refresh would add. */
+  pendingMatches: number;
+}
+
+export const STATS_REFRESH_SKIP_REASONS = [
+  /** The stats already include every stored match. */
+  'up_to_date',
+  /** A refresh is running (timer or another request); poll `GET /stats/status`. */
+  'already_running',
+  /** The previous refresh finished too recently; see `retryAfterSeconds`. */
+  'cooldown',
+] as const;
+export type StatsRefreshSkipReason = (typeof STATS_REFRESH_SKIP_REASONS)[number];
+
+/**
+ * `POST /stats/refresh` (no body). 202 `{ started: true }` when a background refresh was started,
+ * else 200 with the reason. The refresh itself takes seconds to minutes: poll `GET /stats/status`.
+ */
+export type StatsRefreshResponse =
+  | { started: true }
+  | { started: false; reason: StatsRefreshSkipReason; retryAfterSeconds?: number };
 
 // ---------------------------------------------------------------------------
 // GET /patches

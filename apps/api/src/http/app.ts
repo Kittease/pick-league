@@ -7,14 +7,20 @@ import { ApiError } from '../errors.ts';
 import type { Logger } from '../logger.ts';
 import * as meta from '../services/meta.ts';
 import * as reco from '../services/recommendations.ts';
+import type { StatsRefresher } from '../stats/refresh.ts';
 import { buildCacheKey, picksCacheKey, type TtlCache } from './cache.ts';
 import type { TokenBucketLimiter } from './rate-limit.ts';
+
+/** What the HTTP layer needs from the stats refresher. */
+export type StatsControl = Pick<StatsRefresher, 'status' | 'requestRefresh'>;
 
 export interface AppDeps {
   db: Db;
   cache: TtlCache<unknown>;
   limiter: TokenBucketLimiter | null;
   log: Logger;
+  /** Serves GET /stats/status and POST /stats/refresh (404 when absent). */
+  stats?: StatsControl;
   /** Use the first X-Forwarded-For address as client IP (behind a reverse proxy). */
   trustProxy?: boolean;
 }
@@ -107,6 +113,21 @@ export function createApp(deps: AppDeps): Hono<Env> {
     const req = await parseBody(c, buildRequestSchema);
     return cached(c, buildCacheKey(req), () => reco.build(db, req));
   });
+
+  if (deps.stats) {
+    const stats = deps.stats;
+    // Never cached: the desktop polls it while a refresh runs.
+    app.get(API_ROUTES.statsStatus, async (c) => c.json(await stats.status()));
+    // Public and unauthenticated: guarded by the per-IP rate limit, a global cooldown and the
+    // advisory lock (see StatsRefresher.requestRefresh).
+    app.post(API_ROUTES.statsRefresh, async (c) => {
+      const res = await stats.requestRefresh();
+      if (!res.started && res.reason === 'cooldown' && res.retryAfterSeconds) {
+        c.header('Retry-After', String(res.retryAfterSeconds));
+      }
+      return c.json(res, res.started ? 202 : 200);
+    });
+  }
 
   app.notFound(() => {
     throw new ApiError('NOT_FOUND', 'Unknown route');
