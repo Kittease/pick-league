@@ -9,7 +9,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
     "test": "bun test",
-    "migrate": "bun run src/cli.ts"
+    "migrate": "bun --env-file=../../.env run src/cli.ts"
   },
   "dependencies": {
     "@pick-league/shared": "workspace:*",
