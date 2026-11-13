@@ -3,6 +3,8 @@
 # Usage: bun run db:test:up   (then export the printed DATABASE_URL_TEST and run bun test)
 # Stop it with: bun run db:test:down
 set -euo pipefail
+# Git Bash on Windows would rewrite /var/... container paths into C:/Program Files/Git/var/...
+export MSYS_NO_PATHCONV=1
 
 NAME=pick-league-test-db
 PORT=${PICKLEAGUE_TEST_DB_PORT:-55432}
