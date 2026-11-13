@@ -107,6 +107,7 @@ async function main(): Promise<void> {
     controller.previewBuild(typeof championId === 'number' ? championId : null),
   );
   ipcMain.handle(IPC.refresh, () => controller.refresh());
+  ipcMain.handle(IPC.refreshStats, () => controller.refreshStats());
 
   controller.start();
   createWindow(controller);

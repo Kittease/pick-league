@@ -51,3 +51,14 @@ export function confidenceLabel(confidence: number): string {
 }
 
 export const SKILL_KEY: Record<number, string> = { 1: 'Q', 2: 'W', 3: 'E', 4: 'R' };
+
+/** ISO time → "just now", "12 min ago", "3 h ago", "2 d ago" (relative to `now`). */
+export function timeAgo(iso: string, now: number = Date.now()): string {
+  const s = Math.max(0, Math.round((now - Date.parse(iso)) / 1000));
+  if (s < 45) return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h} h ago`;
+  return `${Math.round(h / 24)} d ago`;
+}

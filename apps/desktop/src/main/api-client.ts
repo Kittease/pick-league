@@ -9,6 +9,8 @@ import {
   type PicksRequestInput,
   type PicksResponse,
   type StaticDataResponse,
+  type StatsRefreshResponse,
+  type StatsStatusResponse,
 } from '@pick-league/shared';
 
 const TIMEOUT_MS = 10_000;
@@ -31,6 +33,9 @@ export interface ApiClient {
   staticData(patch?: string): Promise<StaticDataResponse>;
   picks(request: PicksRequestInput): Promise<PicksResponse>;
   build(request: BuildRequestInput): Promise<BuildResponse>;
+  statsStatus(): Promise<StatsStatusResponse>;
+  /** Asks the API to refresh its stats views now (answers immediately). */
+  statsRefresh(): Promise<StatsRefreshResponse>;
 }
 
 export function normaliseApiUrl(url: string): string {
@@ -43,11 +48,11 @@ export function createApiClient(
 ): ApiClient {
   const base = normaliseApiUrl(baseUrl);
 
-  async function call<T>(path: string, body?: unknown): Promise<T> {
+  async function call<T>(path: string, body?: unknown, method?: 'POST'): Promise<T> {
     let res: Response;
     try {
       res = await doFetch(`${base}${path}`, {
-        method: body === undefined ? 'GET' : 'POST',
+        method: method ?? (body === undefined ? 'GET' : 'POST'),
         headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -85,5 +90,7 @@ export function createApiClient(
     staticData: (patch = 'latest') => call(API_ROUTES.static(patch)),
     picks: (request) => call(API_ROUTES.picks, request),
     build: (request) => call(API_ROUTES.build, request),
+    statsStatus: () => call(API_ROUTES.statsStatus),
+    statsRefresh: () => call(API_ROUTES.statsRefresh, undefined, 'POST'),
   };
 }

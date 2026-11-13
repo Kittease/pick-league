@@ -8,6 +8,8 @@ import type {
   PicksResponse,
   Position,
   StaticDataResponse,
+  StatsRefreshSkipReason,
+  StatsStatusResponse,
 } from '@pick-league/shared';
 import type { ChampSelectView } from './champ-select.ts';
 
@@ -40,6 +42,27 @@ export interface ApiStatus {
   message: string | null;
 }
 
+/** Freshness of the API's stats views (GET /stats/status), polled by the main process. */
+export interface StatsState {
+  /** null until the first answer (or when the API does not serve /stats/status). */
+  status: StatsStatusResponse | null;
+  /** A refresh is running (reported by the API, or just requested from here). */
+  refreshing: boolean;
+  /** Outcome of the last refresh requested from this app, once it is over (toasted once per `at`). */
+  lastManual: {
+    at: string;
+    result: 'done' | 'failed';
+    /** Games the refresh added to the stats. */
+    added: number;
+  } | null;
+}
+
+/** Immediate answer to the Refresh button. */
+export type StatsRefreshOutcome =
+  | { kind: 'started' }
+  | { kind: 'skipped'; reason: StatsRefreshSkipReason; retryAfterSeconds?: number }
+  | { kind: 'error'; message: string };
+
 export type Loadable<T> =
   | { status: 'idle' }
   | { status: 'loading'; data: T | null }
@@ -66,6 +89,7 @@ export interface AppState {
   forced: { mockLcu: boolean };
   lcu: LcuStatus;
   api: ApiStatus;
+  stats: StatsState;
   champSelect: ChampSelectView | null;
   /** championId → the user's mastery. */
   mastery: Record<number, MasteryEntry>;
@@ -88,6 +112,7 @@ export const IPC = {
   applyNow: 'pickleague:apply-now',
   previewBuild: 'pickleague:preview-build',
   refresh: 'pickleague:refresh',
+  refreshStats: 'pickleague:refresh-stats',
 } as const;
 
 /** `window.pickleague` in the renderer. */
@@ -100,5 +125,7 @@ export interface PickLeagueBridge {
   previewBuild(championId: number | null): Promise<void>;
   /** Re-run API calls (after fixing the API URL, for instance). */
   refresh(): Promise<void>;
+  /** Asks the API to include every stored game in its stats now; progress arrives in `stats`. */
+  refreshStats(): Promise<StatsRefreshOutcome>;
   onState(listener: (state: AppState) => void): () => void;
 }

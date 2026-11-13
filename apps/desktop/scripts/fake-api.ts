@@ -6,6 +6,7 @@
  *   bun run scripts/fake-api.ts            # http://localhost:3000
  *   PORT=3100 bun run scripts/fake-api.ts
  *   FAKE_API_NO_DATA=1 …                   # every recommendation answers 503 NO_DATA
+ *   FAKE_API_REFRESH_MS=8000 …             # duration of a simulated stats refresh (default 6 s)
  *
  * Static data comes from the live Data Dragon CDN (needs network). Numbers are NOT real stats.
  */
@@ -24,12 +25,65 @@ import {
   type Reason,
   type RecommendedItem,
   type StaticDataResponse,
+  type StatsRefreshResponse,
+  type StatsStatusResponse,
 } from '@pick-league/shared';
 import { staticResponseFromDdragon } from '../src/core/static-from-ddragon.ts';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const NO_DATA = process.env.FAKE_API_NO_DATA === '1';
 const LATENCY_MS = Number(process.env.FAKE_API_LATENCY_MS ?? 250);
+
+const REFRESH_MS = Number(process.env.FAKE_API_REFRESH_MS ?? 6_000);
+const REFRESH_COOLDOWN_MS = 20_000;
+
+/**
+ * Simulated stats freshness: the "worker" stores ~1 game every 2 s, the stats include what was
+ * stored when the last refresh started (40 min ago at startup).
+ */
+const stats = {
+  stored: 48_213,
+  included: 47_871,
+  lastRefreshedAt: new Date(Date.now() - 40 * 60_000),
+  lastDurationMs: 41_250,
+  refreshingUntil: 0,
+};
+setInterval(() => {
+  stats.stored += 1;
+}, 2_000);
+
+function statsStatus(): StatsStatusResponse {
+  const now = Date.now();
+  if (stats.refreshingUntil && now >= stats.refreshingUntil) {
+    stats.refreshingUntil = 0;
+    stats.lastRefreshedAt = new Date(now);
+    stats.lastDurationMs = REFRESH_MS;
+  }
+  return {
+    refreshing: stats.refreshingUntil > 0,
+    lastRefreshedAt: stats.lastRefreshedAt.toISOString(),
+    lastRefreshDurationMs: stats.lastDurationMs,
+    matchesIncluded: stats.included,
+    matchesStored: stats.stored,
+    pendingMatches: Math.max(0, stats.stored - stats.included),
+  };
+}
+
+function statsRefresh(): { status: number; body: StatsRefreshResponse } {
+  const s = statsStatus();
+  if (s.refreshing) return { status: 200, body: { started: false, reason: 'already_running' } };
+  if (s.pendingMatches === 0)
+    return { status: 200, body: { started: false, reason: 'up_to_date' } };
+  const since = Date.now() - stats.lastRefreshedAt.getTime();
+  if (since < REFRESH_COOLDOWN_MS) {
+    const retryAfterSeconds = Math.ceil((REFRESH_COOLDOWN_MS - since) / 1000);
+    return { status: 200, body: { started: false, reason: 'cooldown', retryAfterSeconds } };
+  }
+  stats.included = stats.stored;
+  stats.refreshingUntil = Date.now() + REFRESH_MS;
+  console.log(`[fake-api] stats refresh started (${REFRESH_MS} ms)`);
+  return { status: 202, body: { started: true } };
+}
 
 const ddragon = createDdragonClient();
 let staticCache: Promise<StaticDataResponse> | null = null;
@@ -463,9 +517,14 @@ Bun.serve({
           ok: true,
           db: true,
           latestPatch: s?.patch ?? null,
-          matchCount: NO_DATA ? 0 : 48_213,
+          matchCount: NO_DATA ? 0 : stats.stored,
         };
         return json(health);
+      }
+      if (route === `GET ${API_ROUTES.statsStatus}`) return json(statsStatus());
+      if (route === `POST ${API_ROUTES.statsRefresh}`) {
+        const { status, body } = statsRefresh();
+        return json(body, status);
       }
       if (request.method === 'GET' && url.pathname.startsWith('/static/')) {
         return json(await getStatic());

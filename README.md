@@ -47,6 +47,10 @@ bun run dev:desktop      # opens the app; start League whenever you like
   "Apply runes and spells on lock-in", on by default; an "Apply runes + spells" button does it
   by hand). Runes go to a page named `PickLeague`; if every page slot holds one of your pages,
   the app warns you instead of deleting anything. Flash stays on the key you already use.
+- The header shows how fresh the API's stats are ("Stats updated 12 min ago", plus "+N new"
+  when the worker stored games the stats don't include yet). The refresh button next to it asks
+  the API to recompute them now — handy right before champion select; picks and build reload
+  when it is done. The API refreshes on its own every 15 minutes anyway.
 - It never picks, bans, locks in or accepts for you, and never shows other players' names.
 
 **API address.** By default the app talks to `http://localhost:3000` (the Docker stack on the

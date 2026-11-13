@@ -10,7 +10,13 @@ import type {
   PicksResponse,
   StaticDataResponse,
 } from '@pick-league/shared';
-import type { AppState, Loadable, Settings } from '../core/app-state.ts';
+import type {
+  AppState,
+  Loadable,
+  Settings,
+  StatsRefreshOutcome,
+  StatsState,
+} from '../core/app-state.ts';
 import {
   availableChampionIds,
   buildBuildRequest,
@@ -27,6 +33,9 @@ import { sanitizeSettings } from './settings.ts';
 
 const DEBOUNCE_MS = 250;
 const HEALTH_INTERVAL_MS = 20_000;
+/** Stats freshness poll: slow in the background, fast while a refresh runs. */
+const STATS_IDLE_POLL_MS = 60_000;
+const STATS_ACTIVE_POLL_MS = 2_000;
 
 export interface ControllerDeps {
   settings: Settings;
@@ -73,6 +82,9 @@ export class Controller {
   private picksTimer: ReturnType<typeof setTimeout> | null = null;
   private buildTimer: ReturnType<typeof setTimeout> | null = null;
   private healthTimer: ReturnType<typeof setInterval> | null = null;
+  private statsTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A refresh requested from this app is in progress (→ `stats.lastManual` when it ends). */
+  private manualRefresh: { includedBefore: number } | null = null;
 
   constructor(private readonly deps: ControllerDeps) {
     this.api = deps.createApi(deps.settings.apiUrl);
@@ -87,6 +99,7 @@ export class Controller {
         matchCount: null,
         message: null,
       },
+      stats: { status: null, refreshing: false, lastManual: null },
       champSelect: null,
       mastery: {},
       availableCount: null,
@@ -107,11 +120,13 @@ export class Controller {
     void this.checkHealth();
     this.healthTimer = setInterval(() => void this.checkHealth(), HEALTH_INTERVAL_MS);
     void this.ensureStatic();
+    void this.pollStats();
   }
 
   stop(): void {
     this.source?.stop();
     if (this.healthTimer) clearInterval(this.healthTimer);
+    if (this.statsTimer) clearTimeout(this.statsTimer);
     if (this.picksTimer) clearTimeout(this.picksTimer);
     if (this.buildTimer) clearTimeout(this.buildTimer);
   }
@@ -145,6 +160,9 @@ export class Controller {
       });
       void this.checkHealth();
       void this.ensureStatic();
+      this.manualRefresh = null;
+      this.patch({ stats: { status: null, refreshing: false, lastManual: null } });
+      void this.pollStats();
       this.refetch();
     }
     if (next.mockLcu !== prev.mockLcu && !this.state.forced.mockLcu) this.startSource();
@@ -169,6 +187,30 @@ export class Controller {
     void this.checkHealth();
     if (!this.staticData) void this.ensureStatic();
     this.refetch();
+  }
+
+  /** Asks the API to include every stored game in its stats, then follows the refresh. */
+  async refreshStats(): Promise<StatsRefreshOutcome> {
+    const api = this.api;
+    const before = this.state.stats.status;
+    try {
+      const res = await api.statsRefresh();
+      if (api !== this.api) return { kind: 'error', message: 'API address changed' };
+      if (res.started || res.reason === 'already_running') {
+        this.manualRefresh ??= { includedBefore: before?.matchesIncluded ?? 0 };
+        this.patchStats({ refreshing: true });
+        this.scheduleStatsPoll(STATS_ACTIVE_POLL_MS);
+        return res.started ? { kind: 'started' } : { kind: 'skipped', reason: 'already_running' };
+      }
+      void this.pollStats();
+      return {
+        kind: 'skipped',
+        reason: res.reason,
+        ...(res.retryAfterSeconds ? { retryAfterSeconds: res.retryAfterSeconds } : {}),
+      };
+    } catch (e) {
+      return { kind: 'error', message: errorInfo(e).message };
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -312,6 +354,54 @@ export class Controller {
         },
       });
     }
+  }
+
+  private scheduleStatsPoll(delayMs: number): void {
+    if (this.statsTimer) clearTimeout(this.statsTimer);
+    this.statsTimer = setTimeout(() => void this.pollStats(), delayMs);
+  }
+
+  /** Reads /stats/status; re-fetches picks/build when the API finished a refresh. */
+  private async pollStats(): Promise<void> {
+    const api = this.api;
+    const prev = this.state.stats;
+    try {
+      const status = await api.statsStatus();
+      if (api !== this.api) return;
+      const refreshed =
+        prev.status !== null && status.lastRefreshedAt !== prev.status.lastRefreshedAt;
+      let lastManual = prev.lastManual;
+      if (this.manualRefresh && !status.refreshing) {
+        lastManual = {
+          at: new Date().toISOString(),
+          result: refreshed ? 'done' : 'failed',
+          added: Math.max(0, status.matchesIncluded - this.manualRefresh.includedBefore),
+        };
+        this.manualRefresh = null;
+      }
+      this.patch({ stats: { status, refreshing: status.refreshing, lastManual } });
+      // New stats on the API (manual or timer refresh, its response cache was cleared).
+      if (refreshed) {
+        this.deps.log(`stats refreshed on the API (${status.matchesIncluded} games)`);
+        this.refetch();
+      }
+      this.scheduleStatsPoll(status.refreshing ? STATS_ACTIVE_POLL_MS : STATS_IDLE_POLL_MS);
+    } catch {
+      if (api !== this.api) return;
+      // API down or too old to serve /stats/status: keep the last known value, retry later.
+      if (this.manualRefresh) {
+        this.manualRefresh = null;
+        this.patchStats({
+          refreshing: false,
+          lastManual: { at: new Date().toISOString(), result: 'failed', added: 0 },
+        });
+      } else if (prev.refreshing) this.patchStats({ refreshing: false });
+      this.scheduleStatsPoll(STATS_IDLE_POLL_MS);
+    }
+  }
+
+  private patchStats(partial: Partial<StatsState>): void {
+    this.patch({ stats: { ...this.state.stats, ...partial } });
   }
 
   private ensureStatic(): Promise<void> {
