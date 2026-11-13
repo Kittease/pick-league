@@ -52,6 +52,11 @@ bun run dev:desktop      # opens the app; start League whenever you like
   the API to recompute them now — handy right before champion select; picks and build reload
   when it is done. The API refreshes on its own every 15 minutes anyway.
 - It never picks, bans, locks in or accepts for you, and never shows other players' names.
+- **Tier list** (left rail, shown whenever you are not in champion select): best picks per lane
+  with tier (S–D), win/pick/ban rates, confidence and your mastery; filter by name or owned
+  champions; click a champion for its best/worst matchups, best duos and a generic build. The
+  app switches to champion select by itself when one starts (unless you are reading a
+  champion's details).
 
 **API address.** By default the app talks to `http://localhost:3000` (the Docker stack on the
 same computer). If the stack runs on a server, open Settings (gear icon) and set
@@ -125,6 +130,7 @@ These commands read `DATABASE_URL` (and the other settings) from the root `.env`
 | `POST /recommendations/build` | items, runes, summoner spells and skill order, with reasons |
 | `GET /stats/status` | `{ refreshing, lastRefreshedAt, lastRefreshDurationMs, matchesIncluded, matchesStored, pendingMatches }` |
 | `POST /stats/refresh` | starts a background stats refresh: `202 { started: true }`, or `200 { started: false, reason }` with `up_to_date`, `already_running` or `cooldown` (+ `retryAfterSeconds`) |
+| `GET /tierlist?role=UTILITY&patch=latest` | tier list of a role: tiers, rates, best/worst matchups, best duos |
 
 Request/response types are in `packages/shared/src/api-contract.ts`. Every reason carries the
 win-rate delta (after shrinkage) and its sample size; `patchUsed` says when the previous patch was used.
