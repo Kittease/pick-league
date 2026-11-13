@@ -165,9 +165,10 @@ undone AS (
   ) y
   WHERE type = 'PURCHASED' AND min_after < balance
 ),
+-- match_id in the "C" collation: the per-participant sorts below compare bytes, not locale rules.
 purchases AS (
   SELECT
-    e.match_id, e.participant_id, e.seq, e.at_ms, e.item_id,
+    e.match_id COLLATE "C" AS match_id, e.participant_id, e.seq, e.at_ms, e.item_id,
     i.is_completed, i.is_boots, i.is_consumable, ('Trinket' = ANY (i.tags)) AS is_trinket
   FROM item_events e
   JOIN matches m ON m.id = e.match_id
@@ -254,8 +255,8 @@ SELECT
           th.tankiness_per_min, th.ranged, th.melee]
   ), '{}') AS ally_traits
 FROM base b
-LEFT JOIN builds bu ON bu.match_id = b.match_id AND bu.participant_id = b.participant_id
-LEFT JOIN starters st ON st.match_id = b.match_id AND st.participant_id = b.participant_id
+LEFT JOIN builds bu ON bu.match_id = b.match_id COLLATE "C" AND bu.participant_id = b.participant_id
+LEFT JOIN starters st ON st.match_id = b.match_id COLLATE "C" AND st.participant_id = b.participant_id
 LEFT JOIN skills sk ON sk.match_id = b.match_id AND sk.participant_id = b.participant_id
 LEFT JOIN stats_team_comp own ON own.match_id = b.match_id AND own.team_id = b.team_id
 LEFT JOIN stats_team_comp opp ON opp.match_id = b.match_id AND opp.team_id <> b.team_id
