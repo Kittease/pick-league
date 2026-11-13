@@ -4,6 +4,7 @@
  */
 import type { Queryable } from '@pick-league/db';
 import type { CompTrait, PatchId, Position } from '@pick-league/shared';
+import type { BanRow, PatchMatchesRow } from '../engine/tierlist.ts';
 import type {
   ChampionTraitRow,
   ChoiceKind,
@@ -357,4 +358,85 @@ export async function championExists(
   const [row] =
     await q`SELECT 1 FROM champions WHERE patch IN ${q(patches)} AND id = ${championId} LIMIT 1`;
   return row !== undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Tier list
+// ---------------------------------------------------------------------------
+
+/** Every champion in `position` vs enemies in `enemyPositions` (lane opponents). */
+export async function loadVsForRole(
+  q: Queryable,
+  patches: PatchId[],
+  position: Position,
+  enemyPositions: readonly Position[],
+): Promise<VsRow[]> {
+  const rows = await q<
+    {
+      patch: string;
+      champion_id: number;
+      enemy_position: Position;
+      enemy_id: number;
+      games: number;
+      wins: number;
+    }[]
+  >`
+    SELECT patch, champion_id, enemy_position, enemy_id, games, wins FROM stats_champion_vs
+    WHERE patch IN ${q(patches)} AND position = ${position}
+      AND enemy_position IN ${q([...enemyPositions])}`;
+  return rows.map((r) => ({
+    patch: r.patch,
+    position,
+    championId: r.champion_id,
+    enemyPosition: r.enemy_position,
+    enemyId: r.enemy_id,
+    games: r.games,
+    wins: r.wins,
+  }));
+}
+
+/** Every champion in `position` with allies in `allyPositions` (duo partners). */
+export async function loadWithForRole(
+  q: Queryable,
+  patches: PatchId[],
+  position: Position,
+  allyPositions: readonly Position[],
+): Promise<WithRow[]> {
+  const rows = await q<
+    {
+      patch: string;
+      champion_id: number;
+      ally_position: Position;
+      ally_id: number;
+      games: number;
+      wins: number;
+    }[]
+  >`
+    SELECT patch, champion_id, ally_position, ally_id, games, wins FROM stats_champion_with
+    WHERE patch IN ${q(patches)} AND position = ${position}
+      AND ally_position IN ${q([...allyPositions])}`;
+  return rows.map((r) => ({
+    patch: r.patch,
+    position,
+    championId: r.champion_id,
+    allyPosition: r.ally_position,
+    allyId: r.ally_id,
+    games: r.games,
+    wins: r.wins,
+  }));
+}
+
+export async function loadBans(q: Queryable, patches: PatchId[]): Promise<BanRow[]> {
+  const rows = await q<{ patch: string; champion_id: number; bans: number }[]>`
+    SELECT patch, champion_id, bans FROM stats_champion_bans WHERE patch IN ${q(patches)}`;
+  return rows.map((r) => ({ patch: r.patch, championId: r.champion_id, bans: r.bans }));
+}
+
+export async function loadPatchMatches(
+  q: Queryable,
+  patches: PatchId[],
+): Promise<PatchMatchesRow[]> {
+  const rows = await q<{ patch: string; matches: number }[]>`
+    SELECT patch, matches FROM stats_patch_matches WHERE patch IN ${q(patches)}`;
+  return rows.map((r) => ({ patch: r.patch, matches: r.matches }));
 }

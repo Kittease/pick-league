@@ -67,6 +67,7 @@ Endpoints (v1):
 - `GET /static/:patch` → champions (id, slug, name, tags, spells), items, runes, summoner spells — what the desktop needs to render icons/names. Image URLs are Data Dragon CDN URLs.
 - `POST /recommendations/picks` — body: `{ role, allies: [{championId|null, role}], enemies: [championId|null], bans: number[], availableChampionIds?: number[] }` → ranked candidates `{ championId, score, confidence, patchUsed, reasons: Reason[] }`.
 - `POST /recommendations/build` — body: `{ championId, role, allies: [{championId, role}], enemies: [{championId, role|null}] }` → `{ patchUsed, items: { starting, early, core, situational }, runes, summonerSpells, skillOrder }`, every piece with `reasons: Reason[]`.
+- `GET /tierlist?role=UTILITY&patch=latest` → `{ role, patch, roleGames, entries }`: every champion of the role with ≥ `minCandidateGames`, scored by its win-rate delta vs the role average (shrunk like the picks engine), tiered S–D by score percentile (non-positive scores capped at B), with win/pick/ban rates, confidence, `patchUsed` (per-champion fallback) and its top 3 best/worst lane matchups and best duos (shrunk deltas + games). Ban rates come from the `stats_champion_bans` / `stats_patch_matches` views.
 
 `Reason = { kind: 'matchup'|'duo'|'vs_comp'|'with_comp'|'base'|'item_swap'|..., label: string (human readable), delta: number (win-rate delta, e.g. +0.028), games: number }`.
 

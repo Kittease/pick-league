@@ -11,6 +11,7 @@ import type {
   PatchesResponse,
   PicksResponse,
   StaticDataResponse,
+  TierListResponse,
 } from '@pick-league/shared';
 import { silentLogger } from '../logger.ts';
 import { refreshStats } from '../stats/refresh.ts';
@@ -246,6 +247,61 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(res.headers.get('retry-after')).toBeTruthy();
     expect(((await res.json()) as ApiErrorResponse).error.code).toBe('RATE_LIMITED');
     expect((await limited.request('/health')).status).toBe(200);
+  });
+
+  test('GET /tierlist: support tier list with matchups, duos, rates and fallback', async () => {
+    const res = await get('/tierlist?role=UTILITY');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as TierListResponse;
+    expect(body.role).toBe('UTILITY');
+    expect(body.patch).toBe(CUR);
+    expect(body.roleGames).toBeGreaterThan(5000);
+    const ids = body.entries.map((e) => e.championId);
+    expect(new Set(ids)).toEqual(new Set([412, 89, 111, 117, 40, 16, 267, 201]));
+    const scores = body.entries.map((e) => e.score);
+    expect(scores).toEqual([...scores].sort((a, b) => b - a));
+    expect(body.entries[0]?.tier).toBe('S');
+    expect(new Set(body.entries.map((e) => e.tier)).size).toBeGreaterThanOrEqual(3);
+
+    const naut = body.entries.find((e) => e.championId === PLANTED.matchup.championId);
+    // Synthetic matchup noise can put another support first: the planted one is in the top 3.
+    const planted = naut?.bestMatchups.find((m) => m.championId === PLANTED.matchup.opponentId);
+    expect(planted?.delta).toBeGreaterThan(0.03);
+    expect(planted?.games).toBeGreaterThanOrEqual(15);
+    const janna = body.entries.find((e) => e.championId === PLANTED.matchup.opponentId);
+    expect(janna?.worstMatchups[0]?.championId).toBe(PLANTED.matchup.championId);
+    const lulu = body.entries.find((e) => e.championId === PLANTED.duo.championId);
+    expect(lulu?.bestDuos[0]?.championId).toBe(PLANTED.duo.allyId);
+    expect(lulu?.bestDuos[0]?.role).toBe('BOTTOM');
+
+    const braum = body.entries.find((e) => e.championId === PLANTED.rareOnCurrent);
+    expect(braum?.patchUsed).toBe(PREV);
+    const current = body.entries.filter((e) => e.patchUsed === CUR);
+    for (const e of body.entries) {
+      expect(e.banRate).toBeGreaterThan(0);
+      expect(e.banRate).toBeLessThan(1);
+      expect(e.confidence).toBeGreaterThan(0);
+    }
+    expect(current.reduce((s, e) => s + e.pickRate, 0)).toBeCloseTo(
+      current.reduce((s, e) => s + e.games, 0) / body.roleGames,
+      2,
+    );
+
+    const again = await app.request('/tierlist?role=UTILITY&patch=latest');
+    expect(await again.json()).toEqual(body);
+  });
+
+  test('GET /tierlist: forced patch, bad role, unknown patch', async () => {
+    const prev = (await (
+      await get(`/tierlist?role=BOTTOM&patch=${PREV}`)
+    ).json()) as TierListResponse;
+    expect(prev.patch).toBe(PREV);
+    expect(prev.entries.every((e) => e.patchUsed === PREV)).toBe(true);
+    const bad = await get('/tierlist?role=SUPPORT');
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as ApiErrorResponse).error.code).toBe('BAD_REQUEST');
+    expect((await get('/tierlist')).status).toBe(400);
+    expect((await get('/tierlist?role=TOP&patch=9.9')).status).toBe(404);
   });
 
   test('stats refresh is skipped when matches did not change', async () => {

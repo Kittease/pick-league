@@ -1,5 +1,11 @@
 import type { Db } from '@pick-league/db';
-import { API_ROUTES, buildRequestSchema, picksRequestSchema } from '@pick-league/shared';
+import {
+  API_ROUTES,
+  buildRequestSchema,
+  picksRequestSchema,
+  TIER_LIST_ROUTE,
+  tierListQuerySchema,
+} from '@pick-league/shared';
 import { type Context, Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { z } from 'zod';
@@ -7,6 +13,7 @@ import { ApiError } from '../errors.ts';
 import type { Logger } from '../logger.ts';
 import * as meta from '../services/meta.ts';
 import * as reco from '../services/recommendations.ts';
+import * as tiers from '../services/tierlist.ts';
 import type { StatsRefresher } from '../stats/refresh.ts';
 import { buildCacheKey, picksCacheKey, type TtlCache } from './cache.ts';
 import type { TokenBucketLimiter } from './rate-limit.ts';
@@ -112,6 +119,13 @@ export function createApp(deps: AppDeps): Hono<Env> {
   app.post(API_ROUTES.build, async (c) => {
     const req = await parseBody(c, buildRequestSchema);
     return cached(c, buildCacheKey(req), () => reco.build(db, req));
+  });
+  app.get(TIER_LIST_ROUTE, (c) => {
+    const parsed = tierListQuerySchema.safeParse(c.req.query());
+    if (!parsed.success)
+      throw new ApiError('BAD_REQUEST', 'Invalid query string', parsed.error.issues);
+    const query = parsed.data;
+    return cached(c, `tierlist|${query.role}|${query.patch}`, () => tiers.tierList(db, query));
   });
 
   if (deps.stats) {
