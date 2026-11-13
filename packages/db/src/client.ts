@@ -35,3 +35,11 @@ export async function inTransaction<T>(
   if ('savepoint' in q) return (await q.savepoint(fn)) as T;
   return (await q.begin(fn)) as T;
 }
+
+/**
+ * Sort order for rows upserted by puuid: concurrent transactions that lock the same players
+ * must take the locks in one order, or Postgres aborts one of them with a deadlock.
+ */
+export function byPuuid(a: { puuid: string }, b: { puuid: string }): number {
+  return a.puuid < b.puuid ? -1 : a.puuid > b.puuid ? 1 : 0;
+}

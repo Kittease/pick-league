@@ -211,6 +211,36 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       expect(row?.last_seen_in_match_at).toEqual(new Date('2026-11-05T00:00:00Z'));
     });
 
+    test('concurrent inserts and ladder upserts sharing players do not deadlock', async () => {
+      await upsertPatchStaticData(db, staticPatch('15.22'));
+      const pool = Array.from({ length: 12 }, (_, i) => fakePuuid(i + 1));
+      // Every match lists an overlapping set of players in a different order (as the platform
+      // loops do when they ingest at the same time).
+      const matches = Array.from({ length: 24 }, (_, i) => {
+        const rotated = [...pool.slice(i % 12), ...pool.slice(0, i % 12)].slice(0, 10);
+        return parsedMatch(`EUW1_${500 + i}`, '15.22', i % 2 ? rotated.reverse() : rotated);
+      });
+      const ladder = (reverse: boolean) =>
+        upsertLadder(
+          db,
+          'EUW1',
+          (reverse ? [...pool].reverse() : pool).map((puuid) => ({
+            puuid,
+            tier: 'CHALLENGER' as const,
+            leaguePoints: 1,
+            wins: 1,
+            losses: 1,
+          })),
+        );
+      await ladder(false);
+      await Promise.all([
+        ...matches.map((m) => insertParsedMatch(db, m)),
+        ladder(true),
+        ladder(false),
+      ]);
+      expect((await db`SELECT 1 FROM matches`).length).toBe(24);
+    });
+
     test('rolls back everything when a child insert fails', async () => {
       await upsertPatchStaticData(db, staticPatch('15.22'));
       const bad = parsedMatch('EUW1_3', '15.22', TEN);

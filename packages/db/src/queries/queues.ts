@@ -134,6 +134,7 @@ export async function enqueueEnrichment(
       AND NOT EXISTS (SELECT 1 FROM ladder_entries le WHERE le.puuid = p.puuid)
       AND (p.masteries_refreshed_at IS NULL OR p.masteries_refreshed_at < ${cutoff}
            OR p.rank_refreshed_at IS NULL OR p.rank_refreshed_at < ${cutoff})
+    ORDER BY p.puuid
     ON CONFLICT (puuid) DO NOTHING`;
   return res.count;
 }

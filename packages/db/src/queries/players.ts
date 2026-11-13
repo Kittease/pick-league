@@ -1,5 +1,5 @@
 import type { Platform } from '@pick-league/shared';
-import { inTransaction, type Queryable } from '../client.ts';
+import { byPuuid, inTransaction, type Queryable } from '../client.ts';
 import type {
   DailyRefreshCandidate,
   LadderEntryInput,
@@ -22,8 +22,9 @@ export async function upsertLadder(
   entries: readonly LadderEntryInput[],
   now: Date = new Date(),
 ): Promise<LadderUpsertResult> {
-  // Riot may list a player twice during tier transitions: keep the last occurrence.
-  const unique = [...new Map(entries.map((e) => [e.puuid, e])).values()];
+  // Riot may list a player twice during tier transitions: keep the last occurrence. Sorted so
+  // that concurrent upserts of the same players lock them in one order (no deadlock).
+  const unique = [...new Map(entries.map((e) => [e.puuid, e])).values()].sort(byPuuid);
   return inTransaction(q, async (tx) => {
     const previous = await tx<{ puuid: string; games: number }[]>`
       SELECT puuid, wins + losses AS games FROM ladder_entries WHERE platform = ${platform}`;

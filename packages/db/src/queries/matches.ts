@@ -1,4 +1,4 @@
-import { inTransaction, type Queryable } from '../client.ts';
+import { byPuuid, inTransaction, type Queryable } from '../client.ts';
 import type { ParsedMatch } from '../types.ts';
 import { enqueueEnrichment } from './queues.ts';
 
@@ -60,7 +60,10 @@ export async function insertParsedMatch(
       return { inserted: false, enrichmentEnqueued: 0 };
     }
 
-    const players = [...new Map(parsed.participants.map((p) => [p.puuid, p])).values()];
+    // Sorted: concurrent upserts of the same players must lock them in one order (no deadlock).
+    const players = [...new Map(parsed.participants.map((p) => [p.puuid, p])).values()].sort(
+      byPuuid,
+    );
     if (players.length > 0) {
       await tx`
         INSERT INTO players ${tx(
