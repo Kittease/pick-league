@@ -1,0 +1,17 @@
+{
+  "name": "@pick-league/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./api-contract": "./src/api-contract.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  }
+}
