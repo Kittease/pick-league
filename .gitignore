@@ -13,3 +13,6 @@ docker-compose.override.yml
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Local agent worktrees
+.claude/worktrees/
