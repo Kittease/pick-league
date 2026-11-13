@@ -27,6 +27,20 @@ progress and `docker compose down` to stop everything (your data is kept).
 
 If port 3000 is already taken, set `API_PORT=3001` in `.env`.
 
+**Windows: Docker using too much memory (`VmmemWSL`).** The stack itself needs about 1.5 GB,
+but Docker's WSL2 virtual machine may grow to half your RAM and keeps memory it used as file
+cache. Create `%USERPROFILE%\.wslconfig` with:
+
+```ini
+[wsl2]
+memory=3GB
+
+[experimental]
+autoMemoryReclaim=dropCache
+```
+
+then run `wsl --shutdown` and restart Docker Desktop (your data is kept).
+
 ### Desktop app
 
 The helper runs on the computer where you play (Windows, macOS or Linux), next to the League
