@@ -91,7 +91,8 @@ PICKLEAGUE_API_URL=http://localhost:3100 bun run dev:mock   # if you changed the
 
 **Window.** On Windows and Linux the app has no native title bar or menu: drag the window by
 its header (double-click it to maximize) and use the minimize / maximize / close buttons at its
-right end. macOS keeps its native title bar. In dev, `PICKLEAGUE_FORCE_FRAMELESS=1` applies the
+right end. **Zoom** (80–200%, handy on a large second screen) is in Settings; Ctrl + / Ctrl − /
+Ctrl 0 and Ctrl + mouse wheel change it too, and it is remembered. macOS keeps its native title bar. In dev, `PICKLEAGUE_FORCE_FRAMELESS=1` applies the
 Windows window setup on any OS; Ctrl/Cmd+R reloads and F12 opens the devtools.
 
 **Installers.** `bun run --filter @pick-league/desktop package` builds an installer for the
