@@ -8,9 +8,12 @@ import type {
   BuildResponse,
   PicksRequestInput,
   PicksResponse,
+  Position,
   StaticDataResponse,
+  TierListResponse,
 } from '@pick-league/shared';
 import type {
+  ApiResult,
   AppState,
   Loadable,
   Settings,
@@ -59,6 +62,14 @@ function errorInfo(e: unknown): { message: string; code: string | null } {
   return { message: e instanceof Error ? e.message : String(e), code: null };
 }
 
+async function toResult<T>(call: Promise<T>): Promise<ApiResult<T>> {
+  try {
+    return { ok: true, data: await call };
+  } catch (e) {
+    return { ok: false, ...errorInfo(e) };
+  }
+}
+
 function dataOf<T>(l: Loadable<T>): T | null {
   return l.status === 'idle' ? null : l.data;
 }
@@ -103,6 +114,7 @@ export class Controller {
       champSelect: null,
       mastery: {},
       availableCount: null,
+      ownedChampionIds: null,
       picks: { status: 'idle' },
       build: { status: 'idle' },
       buildTarget: null,
@@ -214,6 +226,18 @@ export class Controller {
   }
 
   // ---------------------------------------------------------------------------
+  // Tier list (one-off calls, not part of AppState)
+  // ---------------------------------------------------------------------------
+
+  tierList(role: Position): Promise<ApiResult<TierListResponse>> {
+    return toResult(this.api.tierList(role));
+  }
+
+  genericBuild(championId: number, role: Position): Promise<ApiResult<BuildResponse>> {
+    return toResult(this.api.build({ championId, role, allies: [], enemies: [] }));
+  }
+
+  // ---------------------------------------------------------------------------
   // League client
   // ---------------------------------------------------------------------------
 
@@ -265,7 +289,7 @@ export class Controller {
     }
     if (owned.status === 'fulfilled') {
       this.available = availableChampionIds(owned.value);
-      this.patch({ availableCount: this.available.length });
+      this.patch({ availableCount: this.available.length, ownedChampionIds: this.available });
     }
     if (mastery.status === 'fulfilled') {
       const map: AppState['mastery'] = {};

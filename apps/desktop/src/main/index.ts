@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createDdragonClient } from '@pick-league/shared';
+import { createDdragonClient, isPosition } from '@pick-league/shared';
 import { app, BrowserWindow, ipcMain, powerSaveBlocker, shell } from 'electron';
 import { IPC, type Settings, type WindowState } from '../core/app-state.ts';
 import { staticResponseFromDdragon } from '../core/static-from-ddragon.ts';
@@ -11,7 +11,6 @@ import { createRealLcuSource } from './lcu/real.ts';
 import { loadSettings, sanitizeSettings, saveSettings } from './settings.ts';
 
 app.setName('PickLeague');
-
 const forcedMock = process.env.PICKLEAGUE_MOCK_LCU === '1';
 const log = (message: string) => console.log(`[pickleague] ${message}`);
 
@@ -174,6 +173,15 @@ async function main(): Promise<void> {
     else win.maximize();
   });
   ipcMain.on(IPC.windowClose, (e) => senderWindow(e)?.close());
+  ipcMain.handle(IPC.tierList, (_e, role: unknown) =>
+    controller.tierList(isPosition(role) ? role : settings.fallbackRole),
+  );
+  ipcMain.handle(IPC.genericBuild, (_e, championId: unknown, role: unknown) =>
+    controller.genericBuild(
+      typeof championId === 'number' ? championId : 0,
+      isPosition(role) ? role : settings.fallbackRole,
+    ),
+  );
 
   controller.start();
   createWindow(controller);

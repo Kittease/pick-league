@@ -10,6 +10,7 @@ import type {
   StaticDataResponse,
   StatsRefreshSkipReason,
   StatsStatusResponse,
+  TierListResponse,
 } from '@pick-league/shared';
 import type { ChampSelectView } from './champ-select.ts';
 
@@ -95,6 +96,8 @@ export interface AppState {
   mastery: Record<number, MasteryEntry>;
   /** Number of champions the account can play; null when unknown. */
   availableCount: number | null;
+  /** Champions the account can play (owned, rented, free rotation); null when unknown. */
+  ownedChampionIds: number[] | null;
   picks: Loadable<PicksResponse>;
   build: Loadable<BuildResponse>;
   /** Champion whose build is shown; `preview` = chosen in the list, not locked in. */
@@ -118,6 +121,8 @@ export const IPC = {
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggle-maximize',
   windowClose: 'window:close',
+  tierList: 'pickleague:tier-list',
+  genericBuild: 'pickleague:generic-build',
 } as const;
 
 /** Window chrome drawn by the app itself (frameless window on Windows and Linux). */
@@ -126,6 +131,11 @@ export interface WindowState {
   customControls: boolean;
   maximized: boolean;
 }
+
+/** Result of a one-off API call made for the renderer (errors are plain data over IPC). */
+export type ApiResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; code: string | null; message: string };
 
 /** `window.pickleague` in the renderer. */
 export interface PickLeagueBridge {
@@ -147,5 +157,9 @@ export interface PickLeagueBridge {
     close(): void;
     onState(listener: (state: WindowState) => void): () => void;
   };
+  /** Tier list of a role (latest patch). */
+  getTierList(role: Position): Promise<ApiResult<TierListResponse>>;
+  /** Build of a champion in a role with no allies/enemies (tier list "View build"). */
+  getGenericBuild(championId: number, role: Position): Promise<ApiResult<BuildResponse>>;
   onState(listener: (state: AppState) => void): () => void;
 }
