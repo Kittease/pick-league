@@ -233,7 +233,7 @@ CREATE TABLE participants (
   puuid           text     NOT NULL REFERENCES players,  -- players row created at match ingest
   team_id         smallint NOT NULL,
   champion_id     smallint NOT NULL,
-  position        position,                  -- teamPosition; NULL if Riot couldn't infer it
+  position        "position",                -- teamPosition; NULL if Riot couldn't infer it. Type name quoted: POSITION is a keyword that cannot be used unquoted as a type
   win             boolean  NOT NULL,
 
   -- loadout
