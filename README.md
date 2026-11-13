@@ -103,6 +103,37 @@ bun run dev:worker   # or bun run dev:api
 
 These commands read `DATABASE_URL` (and the other settings) from the root `.env`.
 
+### API
+
+`apps/api` (Bun + Hono) serves, on `PORT` (default 3000):
+
+| Route | What |
+|---|---|
+| `GET /health` | `{ ok, db, latestPatch, matchCount }` |
+| `GET /patches` | kept patches with match counts per platform |
+| `GET /static/:patch` | champions, items, runes, stat shards, summoner spells (`latest` = newest patch) |
+| `POST /recommendations/picks` | ranked champions for a role, with reasons |
+| `POST /recommendations/build` | items, runes, summoner spells and skill order, with reasons |
+
+Request/response types are in `packages/shared/src/api-contract.ts`. Every reason carries the
+win-rate delta (after shrinkage) and its sample size; `patchUsed` says when the previous patch was used.
+
+The API owns the stats layer: materialized views (`packages/db/migrations/0002_stats_views.sql`)
+refreshed in the background every `STATS_REFRESH_MINUTES` (default 15) when matches changed.
+Engine weights and thresholds live in `apps/api/src/engine/config.ts`.
+
+Settings (env): `DATABASE_URL`, `PORT`, `LOG_LEVEL`, `CACHE_TTL_SECONDS` (600),
+`RATE_LIMIT_PER_MINUTE` (120 per IP, 0 = off), `RATE_LIMIT_BURST` (30), `TRUST_PROXY` (use
+`X-Forwarded-For`), `STATS_REFRESH_MINUTES` (15).
+
+```sh
+PORT=3001 bun run dev:api
+# API tests use their own database (pickleague_api_test) on the DATABASE_URL_TEST server
+DATABASE_URL_TEST=postgres://postgres:postgres@localhost:55432/pickleague_test bun test apps/api
+# perf check: seeds synthetic matches into pickleague_api_perf, times refresh + requests
+DATABASE_URL_TEST=... PERF_MATCHES=20000 bun run --filter @pick-league/api perf
+```
+
 ### Layout
 
 | Path | Package | Role |
