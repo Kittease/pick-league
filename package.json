@@ -15,7 +15,10 @@
     "db:test:up": "bash scripts/db-test-up.sh",
     "db:test:down": "docker rm -f pick-league-test-db",
     "dev:worker": "bun run --filter @pick-league/worker dev",
-    "dev:api": "bun run --filter @pick-league/api dev"
+    "dev:api": "bun run --filter @pick-league/api dev",
+    "dev:desktop": "bun run --filter @pick-league/desktop dev",
+    "dev:desktop:mock": "bun run --filter @pick-league/desktop dev:mock",
+    "build:desktop": "bun run --filter @pick-league/desktop build"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.7",
