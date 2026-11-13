@@ -167,23 +167,27 @@ describe('recommendBuild', () => {
   });
 
   test('tag rule fallback when the trait has no data', () => {
-    const b = recommendBuild(
-      req({
-        ...LEONA,
-        enemies: [
-          { championId: 16, role: 'UTILITY' },
-          { championId: 19, role: 'JUNGLE' },
-        ],
-      }),
-      data({
-        championTraits: [
-          traitsOf(CUR, 16, { healingPerMin: 120 }),
-          traitsOf(CUR, 19, { healingPerMin: 60 }),
-        ],
-      }),
-    );
+    const healers = {
+      ...LEONA,
+      enemies: [
+        { championId: 16, role: 'UTILITY' },
+        { championId: 19, role: 'JUNGLE' },
+      ],
+    };
+    const championTraits = [
+      traitsOf(CUR, 16, { healingPerMin: 120 }),
+      traitsOf(CUR, 19, { healingPerMin: 60 }),
+    ];
+    // Thornmail (anti-heal) is in the core: it gets the reason, nothing is added.
+    const withThornmail = recommendBuild(req(healers), data({ championTraits }));
+    const thornmail = withThornmail?.items.core.find((i) => i.itemId === 3075);
+    expect(thornmail?.reasons[0]).toMatchObject({ kind: 'tag_rule', trait: 'HIGH_HEALING' });
+    expect(withThornmail?.items.situational).toEqual([]);
+
+    // Without it, the anti-heal item this champion builds is suggested.
+    const choices = data().choices.filter((ch) => ch.choice !== '3075');
+    const b = recommendBuild(req(healers), data({ championTraits, choices }));
     const rule = b?.items.situational.find((s) => s.reasons[0]?.kind === 'tag_rule');
-    // Thornmail is already in the core: the other anti-heal item this champion builds.
     expect(rule?.itemId).toBe(3011);
     expect(rule?.reasons[0]).toMatchObject({
       kind: 'tag_rule',

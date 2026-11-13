@@ -17,7 +17,14 @@ import type {
   SkillOrderRecommendation,
   SummonerSpellsRecommendation,
 } from '@pick-league/shared';
-import { ENGINE_CONFIG, LANE_ROLES, ROLE_LABELS, TAG_RULES, TRAIT_LABELS } from './config.ts';
+import {
+  ENGINE_CONFIG,
+  LANE_ROLES,
+  ROLE_LABELS,
+  TAG_RULES,
+  type TagRule,
+  TRAIT_LABELS,
+} from './config.ts';
 import {
   formatDelta,
   formatGames,
@@ -511,6 +518,15 @@ interface ItemsInput {
   fallback: Reason[];
 }
 
+/** Whether a (non-boots) item satisfies a tag rule (by explicit id or Data Dragon tag). */
+function itemMatchesRule(id: number, info: ItemInfo | undefined, rule: TagRule): boolean {
+  if (!info || info.isBoots) return false;
+  return (
+    (rule.itemIds?.includes(id) ?? false) ||
+    (rule.tags?.some((t) => info.tags.includes(t)) ?? false)
+  );
+}
+
 function recommendItems(input: ItemsInput): ItemsRecommendation {
   const { byKind, baseline, baseWr, primaryMatchup, traitContexts, data, damage, fallback } = input;
   const names = data.names;
@@ -625,9 +641,17 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
   const situational: RecommendedItem[] = [];
   const coreNonBoots = coreIds.filter((id) => !isBoots(id));
   /** Core item (not the first) doing worst in the context: the one a situational item replaces. */
+  // Core items that already answer an active enemy trait (e.g. anti-heal vs healing) are kept.
+  const answersActiveTrait = (id: number) =>
+    TAG_RULES.some(
+      (rule) =>
+        input.enemyTraits.includes(rule.trait) &&
+        (!rule.damage || rule.damage === damage) &&
+        itemMatchesRule(id, data.items.get(id), rule),
+    );
   const weakestCore = (ctx: Context | null): number | null => {
-    const pool = coreNonBoots.slice(1);
-    if (pool.length === 0) return coreNonBoots[0] ?? null;
+    const pool = coreNonBoots.slice(1).filter((id) => !answersActiveTrait(id));
+    if (pool.length === 0) return null;
     if (!ctx) return pool[pool.length - 1] ?? null;
     return pool.reduce((worst, id) =>
       contextDelta(ctx, 'item', String(id)).delta < contextDelta(ctx, 'item', String(worst)).delta
@@ -691,17 +715,22 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
     // Fallback: Data Dragon tag rules, restricted to items this champion+role actually builds.
     for (const rule of TAG_RULES) {
       if (rule.trait !== trait || (rule.damage && rule.damage !== damage)) continue;
+      const inCore = core.find((c) => itemMatchesRule(c.itemId, data.items.get(c.itemId), rule));
+      if (inCore) {
+        inCore.reasons.unshift({
+          kind: 'tag_rule',
+          label: `Enemy team is ${TRAIT_LABELS[trait]}: ${names.item(inCore.itemId)} already ${rule.why}`,
+          delta: 0,
+          games: 0,
+          itemId: inCore.itemId,
+          trait,
+        });
+        break;
+      }
       const candidate = itemRows
         .map((r) => Number(r.choice))
         .filter((id) => !taken.has(id) && (itemRow.get(id)?.games ?? 0) >= B.tagRuleMinItemGames)
-        .filter((id) => {
-          const info = data.items.get(id);
-          if (!info || info.isBoots) return false;
-          return (
-            (rule.itemIds?.includes(id) ?? false) ||
-            (rule.tags?.some((t) => info.tags.includes(t)) ?? false)
-          );
-        })
+        .filter((id) => itemMatchesRule(id, data.items.get(id), rule))
         .sort((a, b) => (itemRow.get(b)?.games ?? 0) - (itemRow.get(a)?.games ?? 0))[0];
       if (candidate === undefined) continue;
       const replaces = weakestCore(null);
