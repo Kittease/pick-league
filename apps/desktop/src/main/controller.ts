@@ -406,7 +406,7 @@ export class Controller {
       this.patch({ stats: { status, refreshing: status.refreshing, lastManual } });
       // New stats on the API (manual or timer refresh, its response cache was cleared).
       if (refreshed) {
-        this.deps.log(`stats refreshed on the API (${status.matchesIncluded} games)`);
+        this.deps.log(`stats refreshed on the API (${status.matchesIncluded} matches)`);
         this.refetch();
       }
       this.scheduleStatsPoll(status.refreshing ? STATS_ACTIVE_POLL_MS : STATS_IDLE_POLL_MS);

@@ -632,7 +632,8 @@ export function TierListPage({
           </span>
           {data && (
             <span className="num">
-              patch {data.patch} · {compact(data.roleGames)} games · {data.entries.length} champions
+              patch {data.patch} · {compact(data.roleGames)} matchups · {data.entries.length}{' '}
+              champions
             </span>
           )}
           <span className="ml-auto hidden lg:inline">

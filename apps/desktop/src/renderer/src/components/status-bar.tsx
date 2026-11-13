@@ -63,7 +63,7 @@ export function StatusBar({ state }: { state: AppState }) {
         <span className="text-muted-foreground">API</span>
         <span className="truncate">
           {api.state === 'ok'
-            ? `patch ${api.latestPatch} · ${compact(api.matchCount ?? 0)} games`
+            ? `patch ${api.latestPatch} · ${compact(api.matchCount ?? 0)} matches`
             : api.state === 'checking'
               ? 'checking…'
               : (api.message ?? 'unreachable')}
