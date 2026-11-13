@@ -8,6 +8,6 @@
       "@/*": ["./src/renderer/src/*"]
     }
   },
-  "include": ["src/renderer/src", "src/shared", "src/preload/*.d.ts"],
+  "include": ["src/renderer/src", "src/core", "src/preload/*.d.ts"],
   "exclude": ["**/*.test.ts"]
 }
