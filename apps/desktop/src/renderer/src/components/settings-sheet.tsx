@@ -60,7 +60,8 @@ export function SettingsSheet({ state }: { state: AppState }) {
           <SheetTitle>Settings</SheetTitle>
           <SheetDescription>Saved on this computer.</SheetDescription>
         </SheetHeader>
-        <div className="flex flex-col px-4">
+        {/* Scrolls under the fixed header when zoomed in or on a short window. */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4">
           <div className="flex flex-col gap-2 border-b border-border py-4">
             <Label htmlFor="api-url">API address</Label>
             <p className="text-xs text-muted-foreground">
