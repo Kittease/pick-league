@@ -57,7 +57,7 @@ export interface StatsState {
   lastManual: {
     at: string;
     result: 'done' | 'failed';
-    /** Games the refresh added to the stats. */
+    /** Matches the refresh added to the stats. */
     added: number;
   } | null;
 }
@@ -155,7 +155,7 @@ export interface PickLeagueBridge {
   previewBuild(championId: number | null): Promise<void>;
   /** Re-run API calls (after fixing the API URL, for instance). */
   refresh(): Promise<void>;
-  /** Asks the API to include every stored game in its stats now; progress arrives in `stats`. */
+  /** Asks the API to include every stored match in its stats now; progress arrives in `stats`. */
   refreshStats(): Promise<StatsRefreshOutcome>;
   /** Frameless window controls. */
   window: {

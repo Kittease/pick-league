@@ -227,7 +227,7 @@ export class Controller {
     this.refetch();
   }
 
-  /** Asks the API to include every stored game in its stats, then follows the refresh. */
+  /** Asks the API to include every stored match in its stats, then follows the refresh. */
   async refreshStats(): Promise<StatsRefreshOutcome> {
     const api = this.api;
     const before = this.state.stats.status;

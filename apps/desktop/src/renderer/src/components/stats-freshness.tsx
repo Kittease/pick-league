@@ -22,7 +22,7 @@ async function requestRefresh() {
   const out = await window.pickleague.refreshStats();
   if (out.kind === 'error') toast.error('Refresh failed', { description: out.message });
   else if (out.kind === 'skipped' && out.reason === 'up_to_date')
-    toast('Already up to date', { description: 'The stats include every stored game.' });
+    toast('Already up to date', { description: 'The stats include every stored match.' });
   else if (out.kind === 'skipped' && out.reason === 'cooldown')
     toast.warning('Refreshed moments ago', {
       description: `Try again in ${out.retryAfterSeconds ?? 60} s.`,
@@ -104,7 +104,7 @@ export function StatsFreshness({ state }: { state: AppState }) {
       toast.success('Stats refreshed', {
         description:
           lastManual.added > 0
-            ? `${lastManual.added.toLocaleString()} new games included — recommendations updated.`
+            ? `${lastManual.added.toLocaleString()} new matches included — recommendations updated.`
             : 'Recommendations updated.',
       });
     else toast.error('Refresh did not complete', { description: 'Check the API logs.' });
@@ -120,8 +120,8 @@ export function StatsFreshness({ state }: { state: AppState }) {
   const tip = refreshing
     ? 'The API is recomputing its stats; recommendations reload when it is done.'
     : pending > 0
-      ? `Include ${pending.toLocaleString()} new games in the stats`
-      : 'Stats include every stored game — check again';
+      ? `Include ${pending.toLocaleString()} new matches in the stats`
+      : 'Stats include every stored match — check again';
 
   return (
     <span className="flex shrink-0 items-center gap-2">
