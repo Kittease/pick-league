@@ -1,24 +1,25 @@
 import { ListOrderedIcon, SwordsIcon } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
+import { autoView, type View } from '@/lib/views';
 
-export type View = 'select' | 'tierlist';
+export type { View };
 
 /**
- * Current view: the tier list out of champion select, champion select as soon as it starts —
- * unless the user is looking at a champion in the tier list (`setBusy(true)`): then the nav
- * only shows a live dot and the user switches when ready. Back to the tier list when it ends
- * (after the game it led to).
+ * Current view, moved by the app only when a champion select starts or ends (see `autoView`):
+ * champion select as soon as one starts — unless the user is looking at a champion in the tier
+ * list (`setBusy(true)`): then the nav only shows a live dot and the user switches when ready —
+ * and back to the tier list when it ends (after the game it led to). Leaving it in between (nav,
+ * Escape) is not undone.
  */
 export function useAutoView(inSelect: boolean) {
   const [view, setView] = useState<View>(inSelect ? 'select' : 'tierlist');
   const busy = useRef(false);
   const prev = useRef(inSelect);
   useEffect(() => {
-    if (inSelect === prev.current) return;
+    const change = { wasInSelect: prev.current, inSelect, busy: busy.current };
     prev.current = inSelect;
-    if (inSelect) setView((v) => (v === 'tierlist' && busy.current ? v : 'select'));
-    else setView('tierlist');
+    setView((v) => autoView(v, change));
   }, [inSelect]);
   const setBusy = useCallback((b: boolean) => {
     busy.current = b;
