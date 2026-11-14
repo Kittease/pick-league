@@ -105,7 +105,7 @@ export interface SchedulerOptions {
   /** A match deferred this many times by transient errors becomes FAILED (default 10). */
   maxTransientErrors: number;
   concurrency: { listing: number; match: number; daily: number; enrichment: number };
-  /** Master players tracked besides Challenger + Grandmaster: the top N by LP (default 1000). */
+  /** Master players tracked besides Challenger + Grandmaster: the top N by LP (default 5000). */
   masterPlayers: number;
 }
 

@@ -10,7 +10,7 @@ export interface WorkerConfig {
   masterPlayers: number;
 }
 
-export const DEFAULT_MASTER_PLAYERS = 1000;
+export const DEFAULT_MASTER_PLAYERS = 5000;
 
 export class ConfigError extends Error {
   override name = 'ConfigError';
