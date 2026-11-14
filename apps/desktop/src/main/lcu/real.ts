@@ -6,13 +6,20 @@
 import { Agent, request as httpsRequest } from 'node:https';
 import WebSocket from 'ws';
 import type { LcuChampSelectSession } from '../../core/lcu-types.ts';
-import { CHAMP_SELECT_SESSION_PATH, createLcuApi, LcuHttpError, type LcuTransport } from './api.ts';
+import {
+  CHAMP_SELECT_SESSION_PATH,
+  createLcuApi,
+  GAMEFLOW_PHASE_PATH,
+  LcuHttpError,
+  type LcuTransport,
+} from './api.ts';
 import { discoverLcu, type LcuCredentials } from './discovery.ts';
 import type { LcuListener, LcuSource } from './source.ts';
 
 /** The LCU only ever listens on loopback; the self-signed cert is accepted for this host only. */
 const LCU_HOST = '127.0.0.1';
 const SESSION_EVENT = 'OnJsonApiEvent_lol-champ-select_v1_session';
+const PHASE_EVENT = 'OnJsonApiEvent_lol-gameflow_v1_gameflow-phase';
 const WAMP_SUBSCRIBE = 5;
 const WAMP_EVENT = 8;
 const RETRY_MS = 3_000;
@@ -110,7 +117,12 @@ export function createRealLcuSource(): LcuSource {
       socket = ws;
       ws.on('open', () => {
         ws.send(JSON.stringify([WAMP_SUBSCRIBE, SESSION_EVENT]));
+        ws.send(JSON.stringify([WAMP_SUBSCRIBE, PHASE_EVENT]));
         listener.onStatus({ state: 'connected', api });
+        api
+          .getGameflowPhase()
+          .then((p) => listener.onPhase(p))
+          .catch(() => listener.onPhase(null));
         api
           .getChampSelectSession()
           .then((s) => listener.onSession(s))
@@ -119,14 +131,17 @@ export function createRealLcuSource(): LcuSource {
       ws.on('message', (raw) => {
         try {
           const msg = JSON.parse(raw.toString()) as unknown[];
-          if (msg[0] !== WAMP_EVENT || msg[1] !== SESSION_EVENT) return;
-          const event = msg[2] as {
-            eventType?: string;
-            data?: LcuChampSelectSession;
-            uri?: string;
-          };
+          if (msg[0] !== WAMP_EVENT) return;
+          const event = msg[2] as { eventType?: string; data?: unknown; uri?: string };
+          const deleted = event.eventType === 'Delete';
+          if (msg[1] === PHASE_EVENT) {
+            if (event.uri && event.uri !== GAMEFLOW_PHASE_PATH) return;
+            listener.onPhase(!deleted && typeof event.data === 'string' ? event.data : null);
+            return;
+          }
+          if (msg[1] !== SESSION_EVENT) return;
           if (event.uri && event.uri !== CHAMP_SELECT_SESSION_PATH) return;
-          listener.onSession(event.eventType === 'Delete' ? null : (event.data ?? null));
+          listener.onSession(deleted ? null : ((event.data as LcuChampSelectSession) ?? null));
         } catch {
           // ignore malformed frames
         }
@@ -135,6 +150,7 @@ export function createRealLcuSource(): LcuSource {
       ws.on('close', () => {
         socket = null;
         listener.onSession(null);
+        listener.onPhase(null);
         listener.onStatus({ state: 'searching', message: 'League client disconnected' });
         resolve();
       });

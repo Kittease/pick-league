@@ -1,7 +1,8 @@
 /**
  * Minimal shapes of the League client (LCU) endpoints we use. Only the fields we read are
- * typed; the client sends many more. Identity fields (names, puuids) are deliberately absent:
- * the helper never reads nor shows who the other players are.
+ * typed; the client sends many more. Identity fields (names, puuids) are deliberately absent,
+ * except the puuids of a game in progress, only compared with the user's own to find their
+ * team: the helper never stores nor shows who the other players are.
  */
 
 /** `assignedPosition` in champion select; '' in blind/custom games. */
@@ -76,6 +77,7 @@ export interface LcuChampionMastery {
 /** `GET /lol-summoner/v1/current-summoner` (the user's own account only). */
 export interface LcuCurrentSummoner {
   summonerId: number;
+  puuid?: string;
   gameName?: string;
   tagLine?: string;
   displayName?: string;
@@ -112,4 +114,37 @@ export interface LcuPerkPageInput {
 export interface LcuMySelectionPatch {
   spell1Id: number;
   spell2Id: number;
+}
+
+/**
+ * `GET /lol-gameflow/v1/gameflow-phase`: 'None', 'Lobby', 'Matchmaking', 'ReadyCheck',
+ * 'ChampSelect', 'GameStart', 'InProgress', 'Reconnect', 'WaitingForStats', 'PreEndOfGame',
+ * 'EndOfGame'…
+ */
+export type LcuGameflowPhase = string;
+
+/** Player of a game in progress (`gameData.teamOne` / `teamTwo`). */
+export interface LcuGameflowPlayer {
+  championId: number;
+  /** 'TOP' … 'UTILITY'; 'NONE' or absent outside role queues. */
+  selectedPosition?: string;
+  /** Only compared with the user's own. */
+  puuid?: string;
+  summonerId?: number;
+}
+
+/** `GET /lol-gameflow/v1/session`, read to recover the teams when the app starts in game. */
+export interface LcuGameflowSession {
+  phase: LcuGameflowPhase;
+  gameData: {
+    gameId: number;
+    teamOne: LcuGameflowPlayer[];
+    teamTwo: LcuGameflowPlayer[];
+    playerChampionSelections?: {
+      championId: number;
+      puuid?: string;
+      spell1Id: number;
+      spell2Id: number;
+    }[];
+  };
 }

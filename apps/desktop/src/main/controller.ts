@@ -1,6 +1,7 @@
 /**
  * Main-process orchestrator: League client events → derived champion select → API calls
- * (picks, build) → auto-apply on lock-in. Owns `AppState` and pushes every change to the UI.
+ * (picks, build) → auto-apply on lock-in, then the same champion select kept on screen while
+ * its game is played. Owns `AppState` and pushes every change to the UI.
  */
 
 import type {
@@ -27,7 +28,14 @@ import {
   deriveChampSelect,
   requestKey,
 } from '../core/champ-select.ts';
-import type { LcuChampSelectSession } from '../core/lcu-types.ts';
+import {
+  isInGamePhase,
+  type Lobby,
+  type LobbyEvent,
+  NO_LOBBY,
+  nextLobby,
+  sessionFromGameflow,
+} from '../core/game-flow.ts';
 import { type ApiClient, ApiClientError } from './api-client.ts';
 import { applyBuild } from './apply.ts';
 import type { LcuApi } from './lcu/api.ts';
@@ -39,6 +47,8 @@ const HEALTH_INTERVAL_MS = 20_000;
 /** Stats freshness poll: slow in the background, fast while a refresh runs. */
 const STATS_IDLE_POLL_MS = 60_000;
 const STATS_ACTIVE_POLL_MS = 2_000;
+/** Champion select ended but the client did not say whether a game started: give up after. */
+const LEAVING_TIMEOUT_MS = 3_000;
 
 export interface ControllerDeps {
   settings: Settings;
@@ -80,7 +90,9 @@ export class Controller {
   private source: LcuSource | null = null;
   private lcuApi: LcuApi | null = null;
   private api: ApiClient;
-  private session: LcuChampSelectSession | null = null;
+  private lobby: Lobby = NO_LOBBY;
+  private leavingTimer: ReturnType<typeof setTimeout> | null = null;
+  private recovering = false;
   private available: number[] | null = null;
   private staticData: StaticDataResponse | null = null;
   private staticLoading: Promise<void> | null = null;
@@ -112,6 +124,7 @@ export class Controller {
       },
       stats: { status: null, refreshing: false, lastManual: null },
       champSelect: null,
+      inGame: false,
       mastery: {},
       availableCount: null,
       ownedChampionIds: null,
@@ -141,6 +154,7 @@ export class Controller {
     if (this.statsTimer) clearTimeout(this.statsTimer);
     if (this.picksTimer) clearTimeout(this.picksTimer);
     if (this.buildTimer) clearTimeout(this.buildTimer);
+    if (this.leavingTimer) clearTimeout(this.leavingTimer);
   }
 
   getState(): AppState {
@@ -179,7 +193,7 @@ export class Controller {
     }
     if (next.mockLcu !== prev.mockLcu && !this.state.forced.mockLcu) this.startSource();
     if (next.fallbackRole !== prev.fallbackRole || next.ownedOnly !== prev.ownedOnly) {
-      this.onSession(this.session);
+      if (this.lobby.stage === 'select') this.showSelect(false);
     }
     this.emit();
     return this.state;
@@ -191,6 +205,7 @@ export class Controller {
   }
 
   previewBuild(championId: number | null): void {
+    if (this.state.inGame) return;
     this.previewChampionId = championId;
     this.scheduleBuild(true);
   }
@@ -244,7 +259,7 @@ export class Controller {
   private startSource(): void {
     this.source?.stop();
     this.lcuApi = null;
-    this.onSession(null);
+    this.dispatch({ type: 'reset' });
     const kind = this.state.forced.mockLcu || this.state.settings.mockLcu ? 'mock' : 'real';
     this.patch({
       lcu: { state: 'searching', mock: kind === 'mock', account: null, message: null },
@@ -256,7 +271,10 @@ export class Controller {
         if (this.source === source) this.onLcuStatus(status, kind === 'mock');
       },
       onSession: (session) => {
-        if (this.source === source) this.onSession(session);
+        if (this.source === source) this.dispatch({ type: 'session', session });
+      },
+      onPhase: (phase) => {
+        if (this.source === source) this.dispatch({ type: 'phase', phase });
       },
     });
   }
@@ -298,27 +316,47 @@ export class Controller {
       }
       this.patch({ mastery: map });
     }
-    if (this.session) this.schedulePicks();
+    if (this.lobby.stage === 'select') this.schedulePicks();
   }
 
-  private onSession(session: LcuChampSelectSession | null): void {
-    const wasInSelect = this.session !== null;
-    this.session = session;
-    if (!session) {
-      if (wasInSelect || this.state.champSelect) {
-        this.picksKey = '';
-        this.buildKey = '';
-        this.previewChampionId = null;
-        this.patch({
-          champSelect: null,
-          picks: { status: 'idle' },
-          build: { status: 'idle' },
-          buildTarget: null,
-        });
-      }
-      return;
+  /** Applies a League client event to the lobby, then shows what it says. */
+  private dispatch(event: LobbyEvent): void {
+    const prev = this.lobby;
+    const next = nextLobby(prev, event);
+    this.lobby = next;
+    if (next.stage !== 'leaving' && this.leavingTimer) {
+      clearTimeout(this.leavingTimer);
+      this.leavingTimer = null;
+    } else if (next.stage === 'leaving' && !this.leavingTimer) {
+      this.leavingTimer = setTimeout(() => {
+        this.leavingTimer = null;
+        this.dispatch({ type: 'timeout' });
+      }, LEAVING_TIMEOUT_MS);
     }
-    if (!wasInSelect) {
+    // A game is running but we did not see its champion select (app started in game).
+    if (event.type === 'phase' && next.stage === 'none' && isInGamePhase(next.phase)) {
+      void this.recoverGame();
+    }
+
+    if (next.stage === 'none') {
+      if (prev.stage !== 'none') this.clearSelect();
+    } else if (next.stage === 'select') {
+      // `leaving` → `select`: the same champion select carries on.
+      if (next.session !== prev.session) {
+        this.showSelect(prev.stage === 'none' || prev.stage === 'game');
+      }
+    } else if (next.stage === 'game') {
+      if (prev.stage !== 'game' || next.session !== prev.session) {
+        this.showGame(prev.stage !== 'game');
+      }
+    }
+    // `leaving`: the last champion select stays as it is until the next phase tells.
+  }
+
+  private showSelect(isNew: boolean): void {
+    const session = this.lobby.session;
+    if (!session) return;
+    if (isNew) {
       this.selectSeq++;
       this.previewChampionId = null;
       this.patch({
@@ -328,9 +366,59 @@ export class Controller {
       void this.loadAccount();
     }
     const view = deriveChampSelect(session, this.state.settings.fallbackRole);
-    this.patch({ champSelect: view });
+    this.patch({ champSelect: view, inGame: false });
     this.schedulePicks();
     this.scheduleBuild();
+  }
+
+  /** Game started: keep its champion select and the locked champion's build, stop the picks. */
+  private showGame(entering: boolean): void {
+    const session = this.lobby.session;
+    if (!session) return;
+    if (entering) {
+      if (this.picksTimer) clearTimeout(this.picksTimer);
+      this.picksKey = '';
+      this.previewChampionId = null;
+    }
+    const view = deriveChampSelect(session, this.state.settings.fallbackRole);
+    this.patch({ champSelect: view, inGame: true, picks: { status: 'idle' } });
+    // Same request as the last build of champion select → nothing is fetched again.
+    this.scheduleBuild();
+  }
+
+  private clearSelect(): void {
+    this.picksKey = '';
+    this.buildKey = '';
+    this.previewChampionId = null;
+    this.patch({
+      champSelect: null,
+      inGame: false,
+      picks: { status: 'idle' },
+      build: { status: 'idle' },
+      buildTarget: null,
+    });
+  }
+
+  /** Teams of the game in progress, read from the client when its champion select was missed. */
+  private async recoverGame(): Promise<void> {
+    const api = this.lcuApi;
+    if (!api || this.recovering) return;
+    this.recovering = true;
+    try {
+      const [gameflow, me] = await Promise.all([
+        api.getGameflowSession(),
+        api.getCurrentSummoner(),
+      ]);
+      const session = gameflow && me ? sessionFromGameflow(gameflow, me) : null;
+      if (session && api === this.lcuApi) {
+        this.deps.log('game in progress: teams read from the League client');
+        this.dispatch({ type: 'recovered', session });
+      }
+    } catch (e) {
+      this.deps.log(`game in progress not read: ${errorInfo(e).message}`);
+    } finally {
+      this.recovering = false;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -338,6 +426,13 @@ export class Controller {
   // ---------------------------------------------------------------------------
 
   private refetch(): void {
+    if (this.state.inGame) {
+      // The build stays as it was at the end of champion select; only a failed one is retried.
+      if (this.state.build.status !== 'error') return;
+      this.buildKey = '';
+      this.scheduleBuild();
+      return;
+    }
     this.picksKey = '';
     this.buildKey = '';
     this.schedulePicks();
@@ -461,7 +556,7 @@ export class Controller {
 
   private async fetchPicks(): Promise<void> {
     const view = this.state.champSelect;
-    if (!view) return;
+    if (!view || this.state.inGame) return;
     const request: PicksRequestInput = buildPicksRequest(
       view,
       this.state.settings.ownedOnly ? this.available : null,
@@ -520,11 +615,11 @@ export class Controller {
   // Apply
   // ---------------------------------------------------------------------------
 
-  /** Once per champion select, as soon as the locked champion's build is known. */
+  /** Once per champion select, as soon as the locked champion's build is known (never in game). */
   private maybeAutoApply(): void {
     const view = this.state.champSelect;
     const build = this.state.build;
-    if (!this.state.settings.autoApply || !view?.lockedIn) return;
+    if (!this.state.settings.autoApply || !view?.lockedIn || this.state.inGame) return;
     if (build.status !== 'ok' || build.data.championId !== view.lockedChampionId) return;
     if (this.autoAppliedSeq === this.selectSeq) return;
     this.autoAppliedSeq = this.selectSeq;
@@ -536,14 +631,14 @@ export class Controller {
     const view = this.state.champSelect;
     const api = this.lcuApi;
     const championId = build?.championId ?? null;
-    if (!api || !view || !build) {
+    if (!api || !view || !build || this.state.inGame) {
       this.patch({
         apply: {
           state: 'error',
           messages: [
             !api
               ? 'League client not connected'
-              : !view
+              : !view || this.state.inGame
                 ? 'Not in champion select'
                 : 'No build loaded yet',
           ],

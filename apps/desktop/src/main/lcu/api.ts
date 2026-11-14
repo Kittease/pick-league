@@ -1,6 +1,6 @@
 /**
- * Typed LCU endpoints. Reads: champion select, owned champions, mastery, current summoner,
- * rune pages. Writes are limited to the PickLeague rune page and the local player's summoner
+ * Typed LCU endpoints. Reads: champion select, gameflow, owned champions, mastery, current
+ * summoner, rune pages. Writes are limited to the PickLeague rune page and the local player's summoner
  * spells — the helper never picks, bans, locks in, accepts or reads other players' identities.
  */
 
@@ -8,6 +8,8 @@ import type {
   LcuChampionMastery,
   LcuChampSelectSession,
   LcuCurrentSummoner,
+  LcuGameflowPhase,
+  LcuGameflowSession,
   LcuMySelectionPatch,
   LcuOwnedChampion,
   LcuPerkInventory,
@@ -33,9 +35,13 @@ export class LcuHttpError extends Error {
 }
 
 export const CHAMP_SELECT_SESSION_PATH = '/lol-champ-select/v1/session';
+export const GAMEFLOW_PHASE_PATH = '/lol-gameflow/v1/gameflow-phase';
+export const GAMEFLOW_SESSION_PATH = '/lol-gameflow/v1/session';
 
 export interface LcuApi {
   getChampSelectSession(): Promise<LcuChampSelectSession | null>;
+  getGameflowPhase(): Promise<LcuGameflowPhase | null>;
+  getGameflowSession(): Promise<LcuGameflowSession | null>;
   getOwnedChampions(): Promise<LcuOwnedChampion[]>;
   getMastery(): Promise<LcuChampionMastery[]>;
   getCurrentSummoner(): Promise<LcuCurrentSummoner | null>;
@@ -59,6 +65,11 @@ async function orNullOn404<T>(p: Promise<unknown>): Promise<T | null> {
 export function createLcuApi(send: LcuTransport): LcuApi {
   return {
     getChampSelectSession: () => orNullOn404(send('GET', CHAMP_SELECT_SESSION_PATH)),
+    async getGameflowPhase() {
+      const phase = await orNullOn404(send('GET', GAMEFLOW_PHASE_PATH));
+      return typeof phase === 'string' ? phase : null;
+    },
+    getGameflowSession: () => orNullOn404(send('GET', GAMEFLOW_SESSION_PATH)),
     async getOwnedChampions() {
       const list = await send('GET', '/lol-champions/v1/owned-champions-minimal');
       return Array.isArray(list) ? (list as LcuOwnedChampion[]) : [];

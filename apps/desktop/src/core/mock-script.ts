@@ -3,6 +3,7 @@
  * Pure: `mockSessionAt(ms)` is the session `ms` after the mock queue popped (null = not in
  * champion select). The local player is the support (cell 4) of the blue side, hovers Nami
  * during planning, sees bans and picks progress, then locks in Nami before the last enemy pick.
+ * The game that follows is played for `MOCK_GAME_MS` (`mockPhaseAt` gives the gameflow phase).
  */
 
 import type {
@@ -11,10 +12,13 @@ import type {
   LcuChampSelectPlayer,
   LcuChampSelectSession,
   LcuCurrentSummoner,
+  LcuGameflowPhase,
+  LcuGameflowSession,
   LcuOwnedChampion,
 } from './lcu-types.ts';
 
 export const MOCK_LOCAL_CELL = 4;
+const MOCK_LOCAL_PUUID = 'mock-puuid-local';
 export const MOCK_LOCKED_CHAMPION = 267; // Nami
 export const MOCK_INITIAL_SPELLS: [number, number] = [14, 4]; // Ignite on D, Flash on F
 
@@ -60,6 +64,23 @@ export const MOCK_TIMINGS = {
 
 /** Gap without champion select between two mock loops. */
 export const MOCK_IDLE_MS = 6_000;
+/** Game after the champion select (GameStart, then InProgress), then the end-of-game screen. */
+export const MOCK_GAME_MS = 40_000;
+const MOCK_GAME_START_MS = 3_000;
+const MOCK_END_OF_GAME_MS = 4_000;
+/** One mock loop: champion select, game, end of game, idle. */
+export const MOCK_LOOP_MS = MOCK_TIMINGS.end + MOCK_GAME_MS + MOCK_END_OF_GAME_MS + MOCK_IDLE_MS;
+
+/** Gameflow phase `elapsedMs` into a mock loop. */
+export function mockPhaseAt(elapsedMs: number): LcuGameflowPhase {
+  const inGame = elapsedMs - MOCK_TIMINGS.end;
+  if (elapsedMs < 0) return 'Lobby';
+  if (inGame < 0) return 'ChampSelect';
+  if (inGame < MOCK_GAME_START_MS) return 'GameStart';
+  if (inGame < MOCK_GAME_MS) return 'InProgress';
+  if (inGame < MOCK_GAME_MS + MOCK_END_OF_GAME_MS) return 'EndOfGame';
+  return 'Lobby';
+}
 
 function player(cellId: number, team: number): LcuChampSelectPlayer {
   const local = cellId === MOCK_LOCAL_CELL;
@@ -149,6 +170,32 @@ export function mockSessionAt(elapsedMs: number): LcuChampSelectSession | null {
   };
 }
 
+/** `/lol-gameflow/v1/session` during the mock game; `spells` = the local player's [D, F]. */
+export function mockGameflowSession(spells: [number, number]): LcuGameflowSession {
+  const team = (cells: number[]) =>
+    cells.map((cell) => ({
+      championId: PICKS[cell] ?? 0,
+      selectedPosition: (POSITIONS[cell % 5] ?? '').toUpperCase(),
+      puuid: cell === MOCK_LOCAL_CELL ? MOCK_LOCAL_PUUID : `mock-puuid-${cell}`,
+    }));
+  return {
+    phase: 'InProgress',
+    gameData: {
+      gameId: 0,
+      teamOne: team([0, 1, 2, 3, 4]),
+      teamTwo: team([5, 6, 7, 8, 9]),
+      playerChampionSelections: [
+        {
+          championId: MOCK_LOCKED_CHAMPION,
+          puuid: MOCK_LOCAL_PUUID,
+          spell1Id: spells[0],
+          spell2Id: spells[1],
+        },
+      ],
+    },
+  };
+}
+
 /** Owned champions: most supports, minus a few to show the "owned only" filter. */
 const OWNED = [
   12, 16, 26, 37, 40, 43, 44, 53, 63, 89, 99, 111, 117, 143, 201, 223, 235, 267, 350, 412, 432, 497,
@@ -196,5 +243,5 @@ export function mockMastery(): LcuChampionMastery[] {
 }
 
 export function mockCurrentSummoner(): LcuCurrentSummoner {
-  return { summonerId: 1, gameName: 'MockSupport', tagLine: 'DEV' };
+  return { summonerId: 1, puuid: MOCK_LOCAL_PUUID, gameName: 'MockSupport', tagLine: 'DEV' };
 }

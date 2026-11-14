@@ -36,6 +36,8 @@ function fakeLcu(pages: LcuPerkPage[], ownedPageCount: number) {
   const calls: string[] = [];
   const api: LcuApi = {
     getChampSelectSession: async () => null,
+    getGameflowPhase: async () => null,
+    getGameflowSession: async () => null,
     getOwnedChampions: async () => [],
     getMastery: async () => [],
     getCurrentSummoner: async () => null,

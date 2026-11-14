@@ -97,6 +97,11 @@ export interface AppState {
   api: ApiStatus;
   stats: StatsState;
   champSelect: ChampSelectView | null;
+  /**
+   * The game started: `champSelect` is the champion select it came from, kept with its build
+   * until the game ends. Nothing is fetched (picks) nor applied anymore.
+   */
+  inGame: boolean;
   /** championId → the user's mastery. */
   mastery: Record<number, MasteryEntry>;
   /** Number of champions the account can play; null when unknown. */

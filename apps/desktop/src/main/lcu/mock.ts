@@ -1,25 +1,36 @@
 /**
- * Fake League client for development and demos: replays `mockSessionAt` in a loop and serves
- * fake owned champions, mastery and rune pages through the same `LcuApi` as the real client.
+ * Fake League client for development and demos: replays `mockSessionAt` / `mockPhaseAt` (champion
+ * select, then the game) in a loop and serves fake owned champions, mastery and rune pages
+ * through the same `LcuApi` as the real client.
  */
 
+import { isInGamePhase } from '../../core/game-flow.ts';
 import type {
   LcuChampSelectSession,
+  LcuGameflowPhase,
   LcuMySelectionPatch,
   LcuPerkPage,
   LcuPerkPageInput,
 } from '../../core/lcu-types.ts';
 import {
-  MOCK_IDLE_MS,
   MOCK_INITIAL_SPELLS,
   MOCK_LOCAL_CELL,
-  MOCK_TIMINGS,
+  MOCK_LOOP_MS,
   mockCurrentSummoner,
+  mockGameflowSession,
   mockMastery,
   mockOwnedChampions,
+  mockPhaseAt,
   mockSessionAt,
 } from '../../core/mock-script.ts';
-import { CHAMP_SELECT_SESSION_PATH, createLcuApi, LcuHttpError, type LcuTransport } from './api.ts';
+import {
+  CHAMP_SELECT_SESSION_PATH,
+  createLcuApi,
+  GAMEFLOW_PHASE_PATH,
+  GAMEFLOW_SESSION_PATH,
+  LcuHttpError,
+  type LcuTransport,
+} from './api.ts';
 import type { LcuSource } from './source.ts';
 
 const TICK_MS = 400;
@@ -36,6 +47,7 @@ export function createMockLcuSource(options: MockLcuOptions = {}): LcuSource {
   let loopIndex = 0;
   let spells: [number, number] = [...MOCK_INITIAL_SPELLS];
   let lastJson = '';
+  let lastPhase: LcuGameflowPhase | null = null;
   let nextPageId = 100;
   const pages: LcuPerkPage[] = [
     {
@@ -61,16 +73,19 @@ export function createMockLcuSource(options: MockLcuOptions = {}): LcuSource {
   ];
   const ownedPageCount = 3;
 
-  function currentSession(): LcuChampSelectSession | null {
-    const period = MOCK_TIMINGS.end + MOCK_IDLE_MS;
+  /** Time into the current loop. */
+  function elapsed(): number {
     const sinceStart = Date.now() - loopStart;
-    const loop = Math.floor(sinceStart / period);
+    const loop = Math.floor(sinceStart / MOCK_LOOP_MS);
     if (loop !== loopIndex) {
       loopIndex = loop;
       spells = [...MOCK_INITIAL_SPELLS]; // new champion select, fresh selection
     }
-    const elapsed = sinceStart % period;
-    const session = mockSessionAt(elapsed);
+    return sinceStart % MOCK_LOOP_MS;
+  }
+
+  function currentSession(): LcuChampSelectSession | null {
+    const session = mockSessionAt(elapsed());
     if (!session) return null;
     const me = session.myTeam.find((p) => p.cellId === MOCK_LOCAL_CELL);
     if (me) [me.spell1Id, me.spell2Id] = spells;
@@ -93,6 +108,14 @@ export function createMockLcuSource(options: MockLcuOptions = {}): LcuSource {
         const s = currentSession();
         if (!s) throw new LcuHttpError(method, path, 404, 'No active delegate');
         return s;
+      }
+      case `GET ${GAMEFLOW_PHASE_PATH}`:
+        return mockPhaseAt(elapsed());
+      case `GET ${GAMEFLOW_SESSION_PATH}`: {
+        if (!isInGamePhase(mockPhaseAt(elapsed()))) {
+          throw new LcuHttpError(method, path, 404, 'No game in progress');
+        }
+        return mockGameflowSession(spells);
       }
       case 'GET /lol-champions/v1/owned-champions-minimal':
         return mockOwnedChampions();
@@ -141,8 +164,15 @@ export function createMockLcuSource(options: MockLcuOptions = {}): LcuSource {
       loopStart = Date.now();
       loopIndex = 0;
       lastJson = '';
+      lastPhase = null;
       listener.onStatus({ state: 'connected', api: createLcuApi(transport) });
       const tick = () => {
+        // Phase first: when champion select ends, the game has already started.
+        const phase = mockPhaseAt(elapsed());
+        if (phase !== lastPhase) {
+          lastPhase = phase;
+          listener.onPhase(phase);
+        }
         const session = currentSession();
         const json = JSON.stringify(session);
         if (json === lastJson) return;
