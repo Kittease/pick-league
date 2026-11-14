@@ -33,6 +33,19 @@ const pick = <T>(rng: Rng, list: readonly T[]): T => list[Math.floor(rng() * lis
 const between = (rng: Rng, lo: number, hi: number) => lo + (hi - lo) * rng();
 const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
 
+/**
+ * Fisher-Yates shuffle, in place: always `length - 1` draws. (`sort(() => rng() - 0.5)` is not
+ * deterministic: how many times the engine calls the comparator, hence how many numbers it draws,
+ * changes when the JIT optimises the sort, which shifted every following match between runs.)
+ */
+function shuffle<T>(rng: Rng, xs: T[]): T[] {
+  for (let i = xs.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [xs[i], xs[j]] = [xs[j] as T, xs[i] as T];
+  }
+  return xs;
+}
+
 function weightedPick<T>(rng: Rng, entries: readonly (readonly [T, number])[]): T {
   const total = entries.reduce((s, [, w]) => s + w, 0);
   let r = rng() * total;
@@ -899,7 +912,7 @@ interface Loadout {
 function loadout(rng: Rng, champ: SynthChampion): Loadout {
   const kit = KITS[champ.archetype];
   const core = rng() < 0.5 ? [...kit.core] : [kit.core[1], kit.core[0], ...kit.core.slice(2)];
-  const tail = core.slice(2).sort(() => rng() - 0.5);
+  const tail = shuffle(rng, core.slice(2));
   const fullCore = [core[0], core[1], ...tail] as number[];
   const antiHeal = rng() < 0.3;
   if (antiHeal && !fullCore.includes(kit.antiHeal)) fullCore.splice(2, 0, kit.antiHeal);
