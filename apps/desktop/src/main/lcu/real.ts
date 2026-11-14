@@ -10,6 +10,7 @@ import {
   CHAMP_SELECT_SESSION_PATH,
   createLcuApi,
   GAMEFLOW_PHASE_PATH,
+  type LcuApi,
   LcuHttpError,
   type LcuTransport,
 } from './api.ts';
@@ -24,6 +25,8 @@ const WAMP_SUBSCRIBE = 5;
 const WAMP_EVENT = 8;
 const RETRY_MS = 3_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+/** A WebSocket upgrade the client never answers would otherwise block the reconnect loop. */
+const HANDSHAKE_TIMEOUT_MS = 10_000;
 
 function authHeader(token: string): string {
   return `Basic ${Buffer.from(`riot:${token}`).toString('base64')}`;
@@ -87,48 +90,82 @@ export function createHttpsTransport(creds: LcuCredentials): LcuTransport {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export function createRealLcuSource(): LcuSource {
-  let running = false;
-  let socket: WebSocket | null = null;
+/** WebSocket to the client's event stream; a stuck upgrade fails after `handshakeTimeoutMs`. */
+export function openLcuSocket(
+  creds: LcuCredentials,
+  handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS,
+): WebSocket {
+  return new WebSocket(`wss://${LCU_HOST}:${creds.port}/`, 'wamp', {
+    headers: { Authorization: authHeader(creds.token) },
+    rejectUnauthorized: false,
+    handshakeTimeout: handshakeTimeoutMs,
+  });
+}
 
-  async function connectOnce(listener: LcuListener): Promise<void> {
-    const creds = await discoverLcu();
+/** The part of a `ws` WebSocket the source uses. */
+export type LcuSocket = Pick<WebSocket, 'on' | 'send' | 'terminate'>;
+
+/** What the source talks to; replaced in tests. */
+export interface RealLcuDeps {
+  discover(): Promise<LcuCredentials | null>;
+  createApi(creds: LcuCredentials): LcuApi;
+  openSocket(creds: LcuCredentials): LcuSocket;
+  retryMs: number;
+}
+
+const DEFAULT_DEPS: RealLcuDeps = {
+  discover: discoverLcu,
+  createApi: (creds) => createLcuApi(createHttpsTransport(creds)),
+  openSocket: (creds) => openLcuSocket(creds),
+  retryMs: RETRY_MS,
+};
+
+export function createRealLcuSource(overrides: Partial<RealLcuDeps> = {}): LcuSource {
+  const deps = { ...DEFAULT_DEPS, ...overrides };
+  let running = false;
+  /** Bumped by start() and stop(): whatever an older run was awaiting is dropped. */
+  let run = 0;
+  let socket: LcuSocket | null = null;
+
+  async function connectOnce(listener: LcuListener, current: number): Promise<void> {
+    const live = () => run === current;
+    const creds = await deps.discover();
+    if (!live()) return;
     if (!creds) {
       listener.onStatus({ state: 'searching', message: 'League client not found' });
       return;
     }
-    const transport = createHttpsTransport(creds);
-    const api = createLcuApi(transport);
+    const api = deps.createApi(creds);
     try {
       await api.getCurrentSummoner();
     } catch (e) {
       // 404 = still logging in; anything else = the client isn't ready yet.
-      if (!(e instanceof LcuHttpError)) {
+      if (live() && !(e instanceof LcuHttpError)) {
         listener.onStatus({ state: 'searching', message: 'League client starting…' });
         return;
       }
     }
+    if (!live()) return;
 
     await new Promise<void>((resolve) => {
-      const ws = new WebSocket(`wss://${LCU_HOST}:${creds.port}/`, 'wamp', {
-        headers: { Authorization: authHeader(creds.token) },
-        rejectUnauthorized: false,
-      });
+      const ws = deps.openSocket(creds);
       socket = ws;
       ws.on('open', () => {
+        if (!live()) return;
         ws.send(JSON.stringify([WAMP_SUBSCRIBE, SESSION_EVENT]));
         ws.send(JSON.stringify([WAMP_SUBSCRIBE, PHASE_EVENT]));
         listener.onStatus({ state: 'connected', api });
         api
           .getGameflowPhase()
-          .then((p) => listener.onPhase(p))
-          .catch(() => listener.onPhase(null));
+          .catch(() => null)
+          .then((p) => live() && listener.onPhase(p));
         api
           .getChampSelectSession()
-          .then((s) => listener.onSession(s))
-          .catch(() => listener.onSession(null));
+          .catch(() => null)
+          .then((s) => live() && listener.onSession(s));
       });
       ws.on('message', (raw) => {
+        if (!live()) return;
         try {
           const msg = JSON.parse(raw.toString()) as unknown[];
           if (msg[0] !== WAMP_EVENT) return;
@@ -146,12 +183,15 @@ export function createRealLcuSource(): LcuSource {
           // ignore malformed frames
         }
       });
+      // A failed or timed-out upgrade emits 'error' then 'close'.
       ws.on('error', () => ws.terminate());
       ws.on('close', () => {
-        socket = null;
-        listener.onSession(null);
-        listener.onPhase(null);
-        listener.onStatus({ state: 'searching', message: 'League client disconnected' });
+        if (socket === ws) socket = null;
+        if (live()) {
+          listener.onSession(null);
+          listener.onPhase(null);
+          listener.onStatus({ state: 'searching', message: 'League client disconnected' });
+        }
         resolve();
       });
     });
@@ -161,17 +201,20 @@ export function createRealLcuSource(): LcuSource {
     start(listener) {
       if (running) return;
       running = true;
+      const current = ++run;
       listener.onStatus({ state: 'searching', message: 'Looking for the League client…' });
       void (async () => {
-        while (running) {
-          await connectOnce(listener).catch(() => undefined);
-          if (running) await sleep(RETRY_MS);
+        while (run === current) {
+          await connectOnce(listener, current).catch(() => undefined);
+          if (run === current) await sleep(deps.retryMs);
         }
       })();
     },
     stop() {
       running = false;
-      socket?.close();
+      run++;
+      // Also aborts an upgrade still in progress.
+      socket?.terminate();
       socket = null;
     },
   };
