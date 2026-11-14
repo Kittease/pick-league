@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { escapeAction, isMacPlatform, type KeyInput, shortcutLabel, shortcutOf } from './shortcuts';
+import {
+  draftEscapeAction,
+  escapeAction,
+  isMacPlatform,
+  type KeyInput,
+  shortcutLabel,
+  shortcutOf,
+} from './shortcuts';
 
 function key(k: string, mods: Partial<KeyInput> = {}): KeyInput {
   const code = /^[a-z]$/i.test(k) ? `Key${k.toUpperCase()}` : k;
@@ -96,5 +103,22 @@ describe('escapeAction', () => {
       'close-details',
     );
     expect(escapeAction({ view: 'tierlist', search: 'none', tierList: 'list' })).toBeNull();
+  });
+
+  test('in the draft planner: never touches the hidden tier list', () => {
+    for (const tierList of ['list', 'details', 'build'] as const) {
+      for (const search of ['none', 'empty', 'filled'] as const) {
+        expect(escapeAction({ view: 'draft', search, tierList })).toBeNull();
+      }
+    }
+  });
+});
+
+describe('draftEscapeAction', () => {
+  test('clears the search, leaves the field, then closes the build', () => {
+    expect(draftEscapeAction({ search: 'filled', buildOpen: true })).toBe('clear-search');
+    expect(draftEscapeAction({ search: 'empty', buildOpen: true })).toBe('blur-search');
+    expect(draftEscapeAction({ search: 'none', buildOpen: true })).toBe('close-build');
+    expect(draftEscapeAction({ search: 'none', buildOpen: false })).toBeNull();
   });
 });

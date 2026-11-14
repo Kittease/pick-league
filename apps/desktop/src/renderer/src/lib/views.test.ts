@@ -19,3 +19,18 @@ test('autoView: leaving a running champion select (nav, Escape) is not undone', 
     expect(autoView('tierlist', { wasInSelect: false, inSelect: false, busy })).toBe('tierlist');
   }
 });
+
+test('autoView: a champion select starting leaves the draft planner, whatever busy says', () => {
+  for (const busy of [false, true]) {
+    expect(autoView('draft', { wasInSelect: false, inSelect: true, busy })).toBe('select');
+  }
+});
+
+test('autoView: the draft planner is never left otherwise', () => {
+  for (const busy of [false, true]) {
+    // Opened during the champion select or its game: its end keeps it.
+    expect(autoView('draft', { wasInSelect: true, inSelect: false, busy })).toBe('draft');
+    expect(autoView('draft', { wasInSelect: true, inSelect: true, busy })).toBe('draft');
+    expect(autoView('draft', { wasInSelect: false, inSelect: false, busy })).toBe('draft');
+  }
+});

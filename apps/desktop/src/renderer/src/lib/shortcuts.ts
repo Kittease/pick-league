@@ -71,17 +71,33 @@ export type EscapeAction =
  * What Escape does, one step per press: in the search field it clears the text, then leaves the
  * field; then it closes the generic build page (back to the champion's details), then the
  * details panel. From the champion select view it goes back to the tier list. Null: nothing to
- * do (the key is left alone).
+ * do (the key is left alone), always in the draft planner (see `draftEscapeAction`).
  */
 export function escapeAction(ctx: {
   view: View;
   search: SearchFocus;
   tierList: TierListLayer;
 }): EscapeAction | null {
+  if (ctx.view === 'draft') return null;
   if (ctx.view === 'select') return 'show-tier-list';
   if (ctx.search === 'filled') return 'clear-search';
   if (ctx.search === 'empty') return 'blur-search';
   if (ctx.tierList === 'build') return 'close-build';
   if (ctx.tierList === 'details') return 'close-details';
   return null;
+}
+
+export type DraftEscapeAction = 'clear-search' | 'blur-search' | 'close-build';
+
+/**
+ * Escape in the draft planner: clears its search text, then leaves the field, then closes the
+ * build shown (back to the champion grid). Never undoes a draft action.
+ */
+export function draftEscapeAction(ctx: {
+  search: SearchFocus;
+  buildOpen: boolean;
+}): DraftEscapeAction | null {
+  if (ctx.search === 'filled') return 'clear-search';
+  if (ctx.search === 'empty') return 'blur-search';
+  return ctx.buildOpen ? 'close-build' : null;
 }
