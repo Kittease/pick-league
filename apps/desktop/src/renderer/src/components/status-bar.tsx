@@ -39,10 +39,7 @@ export function StatusBar({ state }: { state: AppState }) {
           chrome?.customControls ? 'app-drag pr-0' : 'pr-4',
         )}
       >
-        <span className="flex shrink-0 items-baseline gap-1.5">
-          <span className="font-semibold tracking-[0.2em] uppercase">PickLeague</span>
-          <span className="hidden text-[10px] text-muted-foreground xl:inline">support desk</span>
-        </span>
+        <span className="shrink-0 font-semibold tracking-[0.2em] uppercase">PickLeague</span>
 
         <span className="h-4 w-px shrink-0 bg-border" />
 
