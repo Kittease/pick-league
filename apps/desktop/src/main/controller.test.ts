@@ -47,6 +47,15 @@ function buildFor(req: BuildRequestInput): BuildResponse {
   };
 }
 
+/** A promise resolved from outside, to hold a League client call in flight. */
+function gate() {
+  let open = () => {};
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { opened, open };
+}
+
 let current: Controller | null = null;
 afterEach(() => {
   current?.stop();
@@ -111,6 +120,7 @@ function setup(options: { lcu?: Partial<LcuApi> } = {}) {
     loadDdragonStatic: async () => Promise.reject(new Error('offline')),
     saveSettings: async () => undefined,
     log: () => undefined,
+    autoApplyRetryMs: 20,
   });
   current = controller;
   controller.start();
@@ -224,5 +234,120 @@ describe('controller: auto-apply', () => {
     lcu.session(champSelectSession({ championId: LOCKED_CHAMPION, locked: true }));
     await settle();
     expect(calls.applies).toBe(1);
+  });
+
+  test('the Apply button during an auto-apply waits for it instead of writing again', async () => {
+    const held = gate();
+    let applies = 0;
+    const { controller, lcu, state } = setup({
+      lcu: {
+        getPerkPages: async () => {
+          applies++;
+          await held.opened;
+          return [];
+        },
+      },
+    });
+    lcu.phase('ChampSelect');
+    lcu.session(champSelectSession());
+    await settle();
+    expect(state().apply).toMatchObject({ state: 'applying', auto: true });
+
+    const manual = controller.applyNow();
+    held.open();
+    expect(await manual).toMatchObject({ state: 'done', auto: true });
+    await settle();
+    expect(applies).toBe(1);
+  });
+
+  test("a previous champion select's apply result does not show in the next one", async () => {
+    const held = gate();
+    const { lcu, state } = setup({
+      lcu: {
+        getPerkPages: async () => {
+          await held.opened;
+          return [];
+        },
+      },
+    });
+    lcu.phase('ChampSelect');
+    lcu.session(champSelectSession());
+    await settle();
+    expect(state().apply.state).toBe('applying');
+
+    // Someone dodges, the next champion select starts before the client answers.
+    lcu.session(null);
+    lcu.phase('Lobby');
+    lcu.phase('ChampSelect');
+    lcu.session(champSelectSession({ championId: 40, locked: false }));
+    held.open();
+    await settle();
+    expect(state()).toMatchObject({
+      champSelect: { lockedIn: false },
+      apply: { state: 'idle', championId: null },
+    });
+  });
+
+  test('a failed auto-apply is tried again until it works', async () => {
+    let applies = 0;
+    const { lcu, state } = setup({
+      lcu: {
+        getPerkPages: async () => {
+          applies++;
+          if (applies < 3) throw new Error('client busy');
+          return [];
+        },
+      },
+    });
+    lcu.phase('ChampSelect');
+    lcu.session(champSelectSession());
+    await settle();
+    expect(state().apply).toMatchObject({ state: 'done', auto: true });
+    expect(applies).toBe(3);
+    lcu.session(champSelectSession());
+    await settle();
+    expect(applies).toBe(3);
+  });
+
+  test('a failing auto-apply gives up after three attempts', async () => {
+    let applies = 0;
+    const { lcu, state } = setup({
+      lcu: {
+        getPerkPages: async () => {
+          applies++;
+          throw new Error('client busy');
+        },
+      },
+    });
+    lcu.phase('ChampSelect');
+    lcu.session(champSelectSession());
+    await settle();
+    expect(state().apply).toMatchObject({ state: 'error', auto: true });
+    expect(applies).toBe(3);
+    lcu.session(champSelectSession());
+    await settle();
+    expect(applies).toBe(3);
+  });
+
+  test('a failed auto-apply is not tried again once the game started', async () => {
+    const held = gate();
+    let applies = 0;
+    const { lcu, state } = setup({
+      lcu: {
+        getPerkPages: async () => {
+          applies++;
+          await held.opened;
+          throw new Error('client busy');
+        },
+      },
+    });
+    lcu.phase('ChampSelect');
+    lcu.session(champSelectSession());
+    await settle();
+    lcu.phase('GameStart');
+    held.open();
+    await settle();
+    expect(state()).toMatchObject({ inGame: true, apply: { state: 'error' } });
+    expect(applies).toBe(1);
   });
 });

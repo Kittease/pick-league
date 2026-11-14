@@ -69,7 +69,7 @@ bun run dev:desktop      # opens the app; start League whenever you like
   champion select is dropped right away. Opened mid-game, the app reads the teams from the client.
 - Runes and summoner spells are **applied automatically when you lock in** (setting
   "Apply runes and spells on lock-in", on by default; an "Apply runes + spells" button does it
-  by hand). Runes go to a page named `PickLeague`; if every page slot holds one of your pages,
+  by hand). If the client refuses, it tries again a few seconds later, up to 3 times. Runes go to a page named `PickLeague`; if every page slot holds one of your pages,
   the app warns you instead of deleting anything. Flash goes on the key chosen in settings
   ("Flash key", F by default); spell pairs without Flash keep the keys you already use.
 - The header shows how fresh the API's stats are ("Stats updated 12 min ago", plus "+N new"

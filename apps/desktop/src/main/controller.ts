@@ -39,7 +39,7 @@ import {
   sessionFromGameflow,
 } from '../core/game-flow.ts';
 import { type ApiClient, ApiClientError } from './api-client.ts';
-import { applyBuild } from './apply.ts';
+import { type ApplyResult, applyBuild } from './apply.ts';
 import type { LcuApi } from './lcu/api.ts';
 import type { LcuConnectionStatus, LcuSource } from './lcu/source.ts';
 import { sanitizeSettings } from './settings.ts';
@@ -51,6 +51,9 @@ const STATS_IDLE_POLL_MS = 60_000;
 const STATS_ACTIVE_POLL_MS = 2_000;
 /** Champion select ended but the client did not say whether a game started: give up after. */
 const LEAVING_TIMEOUT_MS = 3_000;
+/** A failed auto-apply (e.g. the client briefly busy) is tried again, this many times in all. */
+const AUTO_APPLY_ATTEMPTS = 3;
+const AUTO_APPLY_RETRY_MS = 3_000;
 
 export interface ControllerDeps {
   settings: Settings;
@@ -60,6 +63,8 @@ export interface ControllerDeps {
   loadDdragonStatic(): Promise<StaticDataResponse>;
   saveSettings(settings: Settings): Promise<void>;
   log(message: string): void;
+  /** Delay before a failed auto-apply is tried again (tests shorten it). */
+  autoApplyRetryMs?: number;
 }
 
 function errorInfo(e: unknown): { message: string; code: string | null } {
@@ -99,7 +104,13 @@ export class Controller {
   private staticLoading: Promise<void> | null = null;
   /** Increments for every champion select (session appears). */
   private selectSeq = 0;
+  /** `selectSeq` whose locked champion's build was applied (auto or by hand). */
   private autoAppliedSeq = -1;
+  /** Auto-apply runs started in the current champion select. */
+  private autoApplyAttempts = 0;
+  private autoApplyRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The apply in progress; only one at a time. */
+  private applying: Promise<void> | null = null;
   private previewChampionId: number | null = null;
   private picksKey = '';
   private buildKey = '';
@@ -155,6 +166,7 @@ export class Controller {
     if (this.picksTimer) clearTimeout(this.picksTimer);
     if (this.buildTimer) clearTimeout(this.buildTimer);
     if (this.leavingTimer) clearTimeout(this.leavingTimer);
+    this.cancelAutoApplyRetry();
   }
 
   getState(): AppState {
@@ -353,6 +365,8 @@ export class Controller {
     if (!session) return;
     if (isNew) {
       this.selectSeq++;
+      this.autoApplyAttempts = 0;
+      this.cancelAutoApplyRetry();
       this.previewChampionId = null;
       this.patch({
         apply: { state: 'idle', messages: [], auto: false, championId: null, at: null },
@@ -374,6 +388,7 @@ export class Controller {
       if (this.picksTimer) clearTimeout(this.picksTimer);
       this.picksKey = '';
       this.previewChampionId = null;
+      this.cancelAutoApplyRetry();
     }
     const view = deriveChampSelect(session, this.state.settings.fallbackRole);
     this.patch({ champSelect: view, inGame: true, picks: { status: 'idle' } });
@@ -385,6 +400,7 @@ export class Controller {
     this.picksKey = '';
     this.buildKey = '';
     this.previewChampionId = null;
+    this.cancelAutoApplyRetry();
     this.patch({
       champSelect: null,
       inGame: false,
@@ -619,18 +635,51 @@ export class Controller {
   // Apply
   // ---------------------------------------------------------------------------
 
-  /** Once per champion select, as soon as the locked champion's build is known (never in game). */
+  /**
+   * Once per champion select, as soon as the locked champion's build is known (never in game).
+   * A failed run is tried again a few times while the user stays locked in.
+   */
   private maybeAutoApply(): void {
     const view = this.state.champSelect;
     const build = this.state.build;
     if (!this.state.settings.autoApply || !view?.lockedIn || this.state.inGame) return;
     if (build.status !== 'ok' || build.data.championId !== view.lockedChampionId) return;
     if (this.autoAppliedSeq === this.selectSeq) return;
-    this.autoAppliedSeq = this.selectSeq;
+    // One apply at a time; a failed one waits for its retry, and not forever.
+    if (this.applying || this.autoApplyRetryTimer) return;
+    if (this.autoApplyAttempts >= AUTO_APPLY_ATTEMPTS) return;
+    this.autoApplyAttempts++;
     void this.runApply(true);
   }
 
-  private async runApply(auto: boolean): Promise<void> {
+  private scheduleAutoApplyRetry(): void {
+    this.cancelAutoApplyRetry();
+    if (this.autoApplyAttempts >= AUTO_APPLY_ATTEMPTS) return;
+    this.autoApplyRetryTimer = setTimeout(() => {
+      this.autoApplyRetryTimer = null;
+      this.maybeAutoApply();
+    }, this.deps.autoApplyRetryMs ?? AUTO_APPLY_RETRY_MS);
+  }
+
+  private cancelAutoApplyRetry(): void {
+    if (this.autoApplyRetryTimer) clearTimeout(this.autoApplyRetryTimer);
+    this.autoApplyRetryTimer = null;
+  }
+
+  /** Single flight: a request made while an apply runs gets that apply's outcome. */
+  private runApply(auto: boolean): Promise<void> {
+    if (this.applying) return this.applying;
+    const run = this.applyOnce(auto).finally(() => {
+      this.applying = null;
+      // An auto-apply skipped while this one ran (it may have been a preview's build).
+      this.maybeAutoApply();
+    });
+    this.applying = run;
+    return run;
+  }
+
+  private async applyOnce(auto: boolean): Promise<void> {
+    const seq = this.selectSeq;
     const build = dataOf(this.state.build);
     const view = this.state.champSelect;
     const api = this.lcuApi;
@@ -651,12 +700,22 @@ export class Controller {
           at: new Date().toISOString(),
         },
       });
+      if (auto) this.scheduleAutoApplyRetry();
       return;
     }
     this.patch({ apply: { state: 'applying', messages: [], auto, championId, at: null } });
-    const result = await applyBuild(api, build, view.mySpells, this.state.settings.flashKey);
+    const result = await applyBuild(api, build, view.mySpells, this.state.settings.flashKey).catch(
+      (e): ApplyResult => ({ state: 'error', messages: [`Not applied: ${errorInfo(e).message}`] }),
+    );
     this.deps.log(`apply (${auto ? 'auto' : 'manual'}): ${result.messages.join(' | ')}`);
+    if (seq !== this.selectSeq) return; // a newer champion select started meanwhile
     this.patch({ apply: { ...result, auto, championId, at: new Date().toISOString() } });
+    if (result.state !== 'error') {
+      // The locked champion's build is in the client: nothing left to auto-apply.
+      if (view.lockedIn && championId === view.lockedChampionId) this.autoAppliedSeq = seq;
+    } else if (auto) {
+      this.scheduleAutoApplyRetry();
+    }
   }
 
   // ---------------------------------------------------------------------------
