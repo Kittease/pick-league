@@ -410,7 +410,12 @@ export function BuildDetails({
   return (
     <div className="flex flex-col gap-6 p-4">
       <section className="grid grid-cols-[1fr_1fr_1.3fr_1.3fr] gap-4">
-        <ItemGroup title="Starting" items={build.items.starting} lookup={lookup} />
+        <div className="flex min-w-0 flex-col gap-4">
+          <ItemGroup title="Starting" items={build.items.starting} lookup={lookup} />
+          {build.items.questUpgrade && (
+            <ItemGroup title="Quest upgrade" items={[build.items.questUpgrade]} lookup={lookup} />
+          )}
+        </div>
         <ItemGroup title="Early" items={build.items.early} lookup={lookup} ordered />
         <ItemGroup title="Core · buy order" items={build.items.core} lookup={lookup} ordered />
         <div className="min-w-0">

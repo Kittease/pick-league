@@ -61,7 +61,8 @@ bun run dev:desktop      # opens the app; start League whenever you like
   (win-rate delta + number of games) and **your mastery level on the champion icon**. Banned,
   picked and not-owned champions are left out.
 - When you lock in it switches to the build: items in buy order (starting, early, core,
-  situational), runes, summoner spells and skill order, every element with its reasons.
+  situational, and for supports the quest upgrade to pick), runes, summoner spells and skill
+  order, every element with its reasons.
 - **Until the game ends** it keeps that champion select on screen, marked "In game": your
   champion and role, both teams and the build as it was when champion select ended (nothing is
   fetched or applied again). It goes back to the tier list once the game is over; a dodged

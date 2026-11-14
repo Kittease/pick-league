@@ -416,6 +416,28 @@ async function build(body: unknown): Promise<BuildResponse> {
     sequence.push(slot);
   }
 
+  // Support quest upgrade: Celestial Opposition, or Solstice Sleigh vs some lane opponents.
+  const questSwitched = laneEnemy !== undefined && rand(id, laneEnemy, 60) < 0.5;
+  const quest = findItem(s, questSwitched ? 'Solstice Sleigh' : 'Celestial Opposition');
+  const questReasons: Reason[] = [
+    {
+      kind: 'base',
+      label: `Most successful quest upgrade (Celestial Opposition): ${(52 + rand(id, 61) * 3).toFixed(1)}% win rate, picked in ${Math.round(45 + rand(id, 62) * 40)}% of games (${n(63)} games)`,
+      delta: round(0.004 + rand(id, 64) * 0.01),
+      games: n(63),
+    },
+  ];
+  if (questSwitched && laneEnemy !== undefined) {
+    const d = round(0.016 + rand(id, 65) * 0.02);
+    questReasons.unshift({
+      kind: 'matchup',
+      label: `${pct(d)} vs ${name.get(laneEnemy)} with ${itemName.get(quest ?? 0)} (${n(66)} games)`,
+      delta: d,
+      games: n(66),
+      championIds: [laneEnemy],
+    });
+  }
+
   return {
     championId: id,
     role: req.role,
@@ -433,6 +455,9 @@ async function build(body: unknown): Promise<BuildResponse> {
       ],
       core,
       situational,
+      ...(req.role === 'UTILITY' && quest
+        ? { questUpgrade: { itemId: quest, reasons: questReasons } }
+        : {}),
     },
     runes: {
       primaryTreeId: primary,
