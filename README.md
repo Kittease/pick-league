@@ -65,7 +65,8 @@ bun run dev:desktop      # opens the app; start League whenever you like
 - Runes and summoner spells are **applied automatically when you lock in** (setting
   "Apply runes and spells on lock-in", on by default; an "Apply runes + spells" button does it
   by hand). Runes go to a page named `PickLeague`; if every page slot holds one of your pages,
-  the app warns you instead of deleting anything. Flash stays on the key you already use.
+  the app warns you instead of deleting anything. Flash goes on the key chosen in settings
+  ("Flash key", F by default); spell pairs without Flash keep the keys you already use.
 - The header shows how fresh the API's stats are ("Stats updated 12 min ago", plus "+N new"
   when the worker stored matches the stats don't include yet). The refresh button next to it asks
   the API to recompute them now — handy right before champion select; picks and build reload

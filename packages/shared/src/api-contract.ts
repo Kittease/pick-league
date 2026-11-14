@@ -372,7 +372,7 @@ export interface RunesRecommendation {
 }
 
 export interface SummonerSpellsRecommendation {
-  /** Two spell ids, most common D/F order (the desktop keeps Flash on the user's key). */
+  /** Two spell ids, most common D/F order (the desktop puts Flash on the user's chosen key). */
   spellIds: [number, number];
   games: number;
   winRate: number;
