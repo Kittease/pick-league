@@ -14,6 +14,7 @@ export {
   type MigrationFile,
   migrate,
 } from './migrate.ts';
+export * from './queries/live.ts';
 export * from './queries/maintenance.ts';
 export * from './queries/matches.ts';
 export * from './queries/patches.ts';

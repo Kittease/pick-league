@@ -263,3 +263,60 @@ export interface WorkerStatus {
   lastError: string | null;
   lastErrorAt: Date | null;
 }
+
+// ---------------------------------------------------------------------------
+// Live game lookups (live_player_profiles / live_player_masteries, 0013)
+// ---------------------------------------------------------------------------
+
+export type LiveLookupStatus = 'PENDING' | 'READY' | 'FAILED';
+
+/** One recent ranked solo match of a looked-up player (from Riot, or from our stored matches). */
+export interface LiveRecentMatch {
+  matchId: string;
+  championId: number;
+  /** teamPosition; null when Riot couldn't infer it. */
+  position: Position | null;
+  win: boolean;
+  /** Remakes are kept in the list (so they are not fetched again) but not counted. */
+  remake: boolean;
+  /** ISO-8601. */
+  endedAt: string;
+}
+
+/** A player of a live game the API asks the worker to look up. */
+export interface LiveLookupRequest {
+  puuid: string;
+  /** Champion the player has in that game: its mastery is fetched. */
+  championId: number;
+}
+
+/** A PENDING lookup claimed by the worker: only the parts not up to date are fetched. */
+export interface LiveLookupJob {
+  puuid: string;
+  platform: Platform;
+  /** `request_seq` when claimed: the parts fetched now are stored with it. */
+  requestSeq: number;
+  needsRank: boolean;
+  needsRecent: boolean;
+  /** Champions whose mastery was asked for and not fetched yet. */
+  masteryChampionIds: number[];
+  /** Recent matches stored by a previous lookup (reused instead of fetching them again). */
+  previousRecent: LiveRecentMatch[];
+  attempts: number;
+}
+
+/** What the API reads back for one requested player (and the champion they play). */
+export interface LiveProfile {
+  puuid: string;
+  platform: Platform;
+  status: LiveLookupStatus;
+  /** Rank fetched at least once (possibly by an earlier lookup being refreshed). */
+  rankLoaded: boolean;
+  /** Solo queue rank; null when unranked (or not loaded yet). */
+  rank: SoloRankInput | null;
+  /** Null until the recent matches are fetched. */
+  recent: LiveRecentMatch[] | null;
+  /** Mastery of the requested champion; null until fetched. */
+  mastery: { level: number; points: number } | null;
+  lastError: string | null;
+}
