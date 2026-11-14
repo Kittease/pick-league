@@ -67,6 +67,8 @@ bun run dev:desktop      # opens the app; start League whenever you like
   champion and role, both teams and the build as it was when champion select ended (nothing is
   fetched or applied again). It goes back to the tier list once the game is over; a dodged
   champion select is dropped right away. Opened mid-game, the app reads the teams from the client.
+  If League closes its client during the game, the build stays until the client is back and
+  says the game is over.
 - Runes and summoner spells are **applied automatically when you lock in** (setting
   "Apply runes and spells on lock-in", on by default; an "Apply runes + spells" button does it
   by hand). If the client refuses, it tries again a few seconds later, up to 3 times. Runes go to a page named `PickLeague`; if every page slot holds one of your pages,

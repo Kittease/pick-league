@@ -182,6 +182,36 @@ describe('controller: champion select → game', () => {
     expect(state()).toMatchObject({ inGame: false, champSelect: null, build: { status: 'idle' } });
   });
 
+  test('the client closed during the game: the build stays until the client says it is over', async () => {
+    const { calls, lcu, state } = setup();
+    lcu.phase('ChampSelect');
+    lcu.session(champSelectSession());
+    await settle();
+    lcu.phase('GameStart');
+    lcu.session(null);
+    await settle();
+    const before = { ...calls };
+
+    lcu.disconnect();
+    await settle();
+    const kept = {
+      inGame: true,
+      champSelect: { lockedChampionId: LOCKED_CHAMPION },
+      build: { status: 'ok', data: { championId: LOCKED_CHAMPION } },
+      buildTarget: { championId: LOCKED_CHAMPION, preview: false },
+    };
+    expect(state()).toMatchObject({ lcu: { state: 'searching' }, ...kept });
+
+    lcu.reconnect('InProgress');
+    await settle();
+    expect(state()).toMatchObject({ lcu: { state: 'connected' }, ...kept });
+    expect(calls).toEqual(before);
+
+    lcu.disconnect();
+    lcu.reconnect('EndOfGame');
+    expect(state()).toMatchObject({ inGame: false, champSelect: null, build: { status: 'idle' } });
+  });
+
   test('a dodge drops the champion select as soon as the client leaves it', async () => {
     const { lcu, state } = setup();
     lcu.phase('ChampSelect');

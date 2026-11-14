@@ -54,12 +54,37 @@ describe('lobby tracking', () => {
     expect(run([session(), ended])).toMatchObject({ stage: 'none', session: null });
   });
 
-  test('back to the lobby or a lost client ends the kept game', () => {
+  test('back to the lobby ends the kept game', () => {
     const game = run([phase('ChampSelect'), session(), phase('InProgress')]);
     expect(game.stage).toBe('game');
-    for (const p of ['None', 'Lobby', 'Matchmaking', 'ReadyCheck', 'ChampSelect', null]) {
+    for (const p of ['None', 'Lobby', 'Matchmaking', 'ReadyCheck', 'ChampSelect', 'EndOfGame']) {
       expect(run([phase(p)], game).stage).toBe('none');
     }
+  });
+
+  test('the client closing during the game keeps it until the client is back and says', () => {
+    const game = run([phase('ChampSelect'), session(), phase('GameStart')]);
+    // What the source reports when the client goes away.
+    const gone = run([ended, phase(null)], game);
+    expect(gone).toMatchObject({ stage: 'game', session: selectSession, phase: null });
+    // Back while the game still runs.
+    expect(run([phase('InProgress'), ended], gone)).toMatchObject({
+      stage: 'game',
+      session: selectSession,
+    });
+    expect(run([phase('WaitingForStats')], gone).stage).toBe('game');
+    // Back after the game.
+    for (const p of ['None', 'Lobby', 'EndOfGame']) {
+      expect(run([ended, phase(p)], gone)).toMatchObject({ stage: 'none', session: null });
+    }
+    // Back straight into the next champion select.
+    const next = champSelectSession({ championId: 40, locked: false });
+    expect(run([session(next)], gone)).toMatchObject({ stage: 'select', session: next });
+  });
+
+  test('the client closing during champion select drops it', () => {
+    const select = run([phase('ChampSelect'), session()]);
+    expect(run([ended, phase(null)], select).stage).toBe('none');
   });
 
   test('a new champion select replaces the last game', () => {

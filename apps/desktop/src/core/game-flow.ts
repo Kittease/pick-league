@@ -1,7 +1,7 @@
 /**
  * Pure lobby tracking: champion select session + gameflow phase → which champion select the
  * app shows. A champion select that ends into a game stays on screen (marked "in game") until
- * the game is over; a dodged one is dropped as soon as it ends.
+ * the game is over, even while the client is closed; a dodged one is dropped as soon as it ends.
  */
 
 import type {
@@ -88,6 +88,9 @@ export function nextLobby(lobby: Lobby, event: LobbyEvent): Lobby {
       // While the session is live, its end decides (a dodge ends it too).
       if (lobby.stage === 'select') return next;
       if (lobby.stage === 'leaving' && event.phase === 'ChampSelect') return next;
+      // Client gone during the game (League can close it while playing): the game goes on,
+      // the phase the client reports once it is back tells whether it is over.
+      if (lobby.stage === 'game' && event.phase === null) return next;
       // Game over, dodge, back to the lobby, client gone.
       return cleared(next);
     }
