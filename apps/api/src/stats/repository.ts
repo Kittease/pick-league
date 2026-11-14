@@ -2,6 +2,11 @@
  * Reads the stats materialized views and static tables. All lookups are on the views' unique
  * indexes (patch + role/champion prefixes), so they stay fast at ~150k matches per patch.
  * Loaders that return no `patch` column sum their rows over the patches given (see `choosePatches`).
+ *
+ * Champion ids are `smallint` columns, but requests may carry any positive integer (the desktop
+ * forwards ids from the League client). Every loader drops ids outside the column range first
+ * (`storedChampionIds` / `isStoredChampionId`): they match no row, as an unknown champion would,
+ * instead of failing the query with "out of range for type smallint".
  */
 import type { Queryable } from '@pick-league/db';
 import type { CompTrait, PatchId, Platform, Position } from '@pick-league/shared';
@@ -22,6 +27,19 @@ import type {
   WithRow,
 } from '../engine/types.ts';
 
+/** Largest value of the `smallint` champion id columns. */
+export const MAX_STORED_CHAMPION_ID = 32_767;
+
+/** Whether `id` can be a stored champion id (ids outside the column range match no row). */
+export function isStoredChampionId(id: number): boolean {
+  return Number.isInteger(id) && id > 0 && id <= MAX_STORED_CHAMPION_ID;
+}
+
+/** `ids` without the ones that cannot be stored (see `isStoredChampionId`). */
+export function storedChampionIds(ids: readonly number[]): number[] {
+  return ids.filter(isStoredChampionId);
+}
+
 export async function loadRoleStats(q: Queryable, patches: PatchId[]): Promise<RoleStatRow[]> {
   const rows = await q<
     { patch: string; champion_id: number; position: Position; games: number; wins: number }[]
@@ -41,8 +59,9 @@ export async function loadVsByEnemies(
   q: Queryable,
   patches: PatchId[],
   position: Position,
-  enemyIds: number[],
+  enemyIdsIn: number[],
 ): Promise<VsRow[]> {
+  const enemyIds = storedChampionIds(enemyIdsIn);
   if (enemyIds.length === 0) return [];
   const rows = await q<
     {
@@ -73,8 +92,9 @@ export async function loadWithByAllies(
   q: Queryable,
   patches: PatchId[],
   position: Position,
-  allyIds: number[],
+  allyIdsIn: number[],
 ): Promise<WithRow[]> {
+  const allyIds = storedChampionIds(allyIdsIn);
   if (allyIds.length === 0) return [];
   const rows = await q<
     {
@@ -109,6 +129,7 @@ export async function loadCompTraits(
   championId?: number,
   side?: CompSide,
 ): Promise<CompTraitRow[]> {
+  if (championId !== undefined && !isStoredChampionId(championId)) return [];
   const rows = await q<
     {
       patch: string;
@@ -139,8 +160,9 @@ export async function loadCompTraits(
 export async function loadChampionTraits(
   q: Queryable,
   patches: PatchId[],
-  championIds: number[],
+  championIdsIn: number[],
 ): Promise<ChampionTraitRow[]> {
+  const championIds = storedChampionIds(championIdsIn);
   if (championIds.length === 0) return [];
   const rows = await q<
     {
@@ -212,6 +234,7 @@ export async function loadChoices(
   championId: number,
   position: Position,
 ): Promise<ChoiceRow[]> {
+  if (!isStoredChampionId(championId)) return [];
   const rows = await q<
     { kind: ChoiceKind; choice: string; games: number; wins: number; avg_pos: number | null }[]
   >`
@@ -235,9 +258,10 @@ export async function loadChoiceMatchups(
   patches: PatchId[],
   championId: number,
   position: Position,
-  opponentIds: number[],
+  opponentIdsIn: number[],
 ): Promise<ChoiceMatchupRow[]> {
-  if (opponentIds.length === 0) return [];
+  const opponentIds = storedChampionIds(opponentIdsIn);
+  if (!isStoredChampionId(championId) || opponentIds.length === 0) return [];
   const rows = await q<
     {
       opponent_id: number;
@@ -271,7 +295,7 @@ export async function loadChoiceTraits(
   position: Position,
   traits: CompTrait[],
 ): Promise<ChoiceTraitRow[]> {
-  if (traits.length === 0) return [];
+  if (!isStoredChampionId(championId) || traits.length === 0) return [];
   const rows = await q<
     { trait: CompTrait; kind: ChoiceKind; choice: string; games: number; wins: number }[]
   >`
@@ -294,9 +318,10 @@ export async function loadVsForChampion(
   patches: PatchId[],
   championId: number,
   position: Position,
-  enemyIds: number[],
+  enemyIdsIn: number[],
 ): Promise<VsRow[]> {
-  if (enemyIds.length === 0) return [];
+  const enemyIds = storedChampionIds(enemyIdsIn);
+  if (!isStoredChampionId(championId) || enemyIds.length === 0) return [];
   const rows = await q<
     { enemy_position: Position; enemy_id: number; games: number; wins: number }[]
   >`
@@ -367,6 +392,7 @@ export async function championExists(
   patches: PatchId[],
   championId: number,
 ): Promise<boolean> {
+  if (!isStoredChampionId(championId)) return false;
   const [row] =
     await q`SELECT 1 FROM champions WHERE patch IN ${q(patches)} AND id = ${championId} LIMIT 1`;
   return row !== undefined;
@@ -376,10 +402,7 @@ export async function championExists(
 // Tier list
 // ---------------------------------------------------------------------------
 
-/**
- * One champion in `position` vs enemies in `enemyPositions` (lane opponents), per patch.
- * `::int` here and below: an id beyond the smallint column range gives no rows, not an error.
- */
+/** One champion in `position` vs enemies in `enemyPositions` (lane opponents), per patch. */
 export async function loadLaneVsOfChampion(
   q: Queryable,
   patches: PatchId[],
@@ -387,11 +410,12 @@ export async function loadLaneVsOfChampion(
   championId: number,
   enemyPositions: readonly Position[],
 ): Promise<VsRow[]> {
+  if (!isStoredChampionId(championId)) return [];
   const rows = await q<
     { patch: string; enemy_position: Position; enemy_id: number; games: number; wins: number }[]
   >`
     SELECT patch, enemy_position, enemy_id, games, wins FROM stats_champion_vs
-    WHERE patch IN ${q(patches)} AND champion_id = ${championId}::int AND position = ${position}
+    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
       AND enemy_position IN ${q([...enemyPositions])}`;
   return rows.map((r) => ({
     patch: r.patch,
@@ -411,11 +435,12 @@ export async function loadAlliesOfChampion(
   position: Position,
   championId: number,
 ): Promise<WithRow[]> {
+  if (!isStoredChampionId(championId)) return [];
   const rows = await q<
     { patch: string; ally_position: Position; ally_id: number; games: number; wins: number }[]
   >`
     SELECT patch, ally_position, ally_id, games, wins FROM stats_champion_with
-    WHERE patch IN ${q(patches)} AND position = ${position} AND champion_id = ${championId}::int`;
+    WHERE patch IN ${q(patches)} AND position = ${position} AND champion_id = ${championId}`;
   return rows.map((r) => ({
     patch: r.patch,
     position,

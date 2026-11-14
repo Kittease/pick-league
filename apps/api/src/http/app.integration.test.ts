@@ -250,6 +250,46 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(((await noData.json()) as ApiErrorResponse).error.code).toBe('NO_DATA');
   });
 
+  test('champion ids beyond the smallint columns: 404 when requested, ignored in lists', async () => {
+    for (const id of [40_000, 3_000_000_000]) {
+      const build = await post('/recommendations/build', { championId: id, role: 'UTILITY' });
+      expect(build.status).toBe(404);
+      expect(((await build.json()) as ApiErrorResponse).error.code).toBe('NOT_FOUND');
+      for (const filters of ['', '&platform=KR']) {
+        const detail = await get(`/tierlist/champion?role=UTILITY&championId=${id}${filters}`);
+        expect(detail.status).toBe(404);
+        expect(((await detail.json()) as ApiErrorResponse).error.code).toBe('NOT_FOUND');
+      }
+
+      // Inside lists they are unknown champions: no data, no error.
+      const picks = await post('/recommendations/picks', {
+        role: 'UTILITY',
+        allies: [{ championId: id, role: 'BOTTOM' }],
+        enemies: [id, PLANTED.matchup.opponentId],
+        bans: [id],
+        availableChampionIds: [id, 412, 117],
+      });
+      expect(picks.status).toBe(200);
+      const candidates = ((await picks.json()) as PicksResponse).candidates;
+      expect(candidates.length).toBeGreaterThan(0);
+      for (const c of candidates) expect([412, 117]).toContain(c.championId);
+      const enemyOnly = await post('/recommendations/picks', { role: 'BOTTOM', enemies: [id] });
+      expect(enemyOnly.status).toBe(200);
+
+      const withLists = await post('/recommendations/build', {
+        championId: 222,
+        role: 'BOTTOM',
+        allies: [{ championId: id, role: 'UTILITY' }],
+        enemies: [
+          { championId: id, role: 'BOTTOM' },
+          { championId: id, role: null },
+        ],
+      });
+      expect(withLists.status).toBe(200);
+      expect(((await withLists.json()) as BuildResponse).items.core.length).toBeGreaterThan(0);
+    }
+  });
+
   test('cache key ignores list order', async () => {
     const a = { role: 'MIDDLE', enemies: [122, 64], bans: [1, 103] };
     const b = { role: 'MIDDLE', enemies: [64, 122], bans: [103, 1] };
