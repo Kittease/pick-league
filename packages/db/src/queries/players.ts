@@ -1,4 +1,4 @@
-import type { Platform } from '@pick-league/shared';
+import type { LadderTier, Platform } from '@pick-league/shared';
 import { byPuuid, inTransaction, type Queryable } from '../client.ts';
 import type {
   DailyRefreshCandidate,
@@ -9,8 +9,8 @@ import type {
 } from '../types.ts';
 
 /**
- * Upserts the full Challenger + Grandmaster ladder of one platform (pass both tiers in a
- * single call): `players` rows (with solo rank from the ladder) and `ladder_entries`.
+ * Upserts the tracked ladder of one platform (Challenger, Grandmaster and the tracked Master
+ * players, in a single call): `players` rows (with solo rank from the ladder) and `ladder_entries`.
  * Entries of this platform missing from `entries` are removed (players dropped off the ladder;
  * their `players` row is kept). Never call it with a partial ladder.
  *
@@ -97,6 +97,21 @@ export async function upsertLadder(
 
     return { played, added, removed: removed.count };
   });
+}
+
+/**
+ * The tracked ladder of a platform from the top down: Challenger, Grandmaster, then Master, each
+ * by LP (most first).
+ */
+export async function ladderOrder(
+  q: Queryable,
+  platform: Platform,
+): Promise<{ puuid: string; tier: LadderTier }[]> {
+  const rows = await q<{ puuid: string; tier: LadderTier }[]>`
+    SELECT puuid, tier FROM ladder_entries
+    WHERE platform = ${platform}
+    ORDER BY tier, league_points DESC, puuid`;
+  return rows.map((r) => ({ puuid: r.puuid, tier: r.tier }));
 }
 
 /** `players.matches_synced_until` (null = never listed: start from the previous patch / 14 days ago). */

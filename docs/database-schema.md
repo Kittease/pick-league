@@ -9,7 +9,7 @@ PostgreSQL 17, single database, run by Docker Compose next to the worker and the
 - **Two patches only.** `patches` lists the patches we keep. When a new patch is detected, every match of the patch before the previous one is deleted (`ON DELETE CASCADE` cleans every child table). Postgres reuses the freed space for the new patch, so disk usage stays flat at ~2 patches.
 - **Static data is per patch.** Champions, items, runes and summoner spells come from Data Dragon and are stored per patch, so an old match is always read with the item/rune data that existed when it was played.
 - **All 10 players are identified.** Every `puuid` met in a match gets a `players` row. Riot IDs come for free in the match payload. Extra info (mastery, solo queue rank) is fetched with a priority scheme so it never slows match collection:
-  1. ladder refresh (Challenger, Grandmaster and the top `MASTER_PLAYERS` Master players) → 2. match ids of players who played → 3. matches + timelines → 4. daily refresh of tracked ladder players (account + mastery) → 5. **lowest priority:** mastery + rank of non-ladder players, only with leftover budget. Fetched once, refreshed only if the player shows up again and the data is older than 7 days.
+  1. ladder refresh (Challenger, Grandmaster and the top Master players, more of them each time the queues empty) → 2. match ids of players who played → 3. matches + timelines → 4. daily refresh of tracked ladder players (account + mastery) → 5. **lowest priority:** mastery + rank of non-ladder players, only with leftover budget. Fetched once, refreshed only if the player shows up again and the data is older than 7 days.
 - Riot timestamps are converted to `timestamptz`; in-game times are kept as milliseconds since game start (`int`).
 
 ## Overview
@@ -40,7 +40,7 @@ worker_status                         (health of each platform loop)
 CREATE TYPE platform AS ENUM ('KR', 'EUW1', 'NA1', 'VN2');
 -- match-v5 routing cluster is derived in code: KR→asia, EUW1→europe, NA1→americas, VN2→sea
 
-CREATE TYPE ladder_tier AS ENUM ('CHALLENGER', 'GRANDMASTER', 'MASTER');  -- MASTER: top MASTER_PLAYERS by LP
+CREATE TYPE ladder_tier AS ENUM ('CHALLENGER', 'GRANDMASTER', 'MASTER');  -- MASTER: the top N by LP, N growing as the worker catches up
 
 CREATE TYPE position AS ENUM ('TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY');
 
@@ -361,10 +361,13 @@ CREATE TABLE match_fetch_queue (
   attempts      smallint     NOT NULL DEFAULT 0,  -- deterministic errors (404, parse, other 4xx: FAILED at 2) and unknown ones (FAILED at 5)
   transient_errors smallint  NOT NULL DEFAULT 0,  -- Riot 429/5xx, network, DB connection: deferred without an attempt, FAILED at 10 (0009)
   last_error    text,
+  fetch_rank    integer      NOT NULL DEFAULT 1000000,  -- best ladder position among the players who listed it (0 = first Challenger); 1000000 = back of the queue (retried/deferred) (0011)
   discovered_at timestamptz  NOT NULL DEFAULT now(),
   updated_at    timestamptz  NOT NULL DEFAULT now()
 );
-CREATE INDEX ON match_fetch_queue (platform, discovered_at) WHERE status = 'PENDING';
+CREATE INDEX match_fetch_queue_pending_idx
+  ON match_fetch_queue (platform, fetch_rank, discovered_at, match_id) WHERE status = 'PENDING';
+-- Claimed lowest fetch_rank first, so better-placed players' matches are fetched first.
 -- DONE / SKIPPED_OLD_PATCH rows are kept as a "seen" set and purged with their patch.
 -- Once a match turns out to be from an older patch, every PENDING row of that platform with a
 -- lower or equal game id is marked SKIPPED_OLD_PATCH in one statement.

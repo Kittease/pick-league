@@ -194,6 +194,24 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       expect(done?.status).toBe('DONE');
     });
 
+    test('claims follow the ladder rank of the best lister; retried matches go to the back', async () => {
+      expect(await enqueueMatchIds(db, 'EUW1', ['EUW1_1'], 500)).toBe(1);
+      expect(await enqueueMatchIds(db, 'EUW1', ['EUW1_2', 'EUW1_3'], 20)).toBe(2);
+      expect(await enqueueMatchIds(db, 'EUW1', ['EUW1_4'])).toBe(1); // no rank: at the back
+      // A better-placed player lists EUW1_1 too: it moves up (not counted as new).
+      expect(await enqueueMatchIds(db, 'EUW1', ['EUW1_1'], 3)).toBe(0);
+      // A worse-placed one changes nothing.
+      expect(await enqueueMatchIds(db, 'EUW1', ['EUW1_2'], 900)).toBe(0);
+      const order = async () => (await claimPendingMatches(db, 'EUW1', 10)).map((c) => c.matchId);
+      expect(await order()).toEqual(['EUW1_1', 'EUW1_2', 'EUW1_3', 'EUW1_4']);
+
+      await deferMatch(db, 'EUW1_1', 'patch newer than Data Dragon');
+      expect(await order()).toEqual(['EUW1_2', 'EUW1_3', 'EUW1_4', 'EUW1_1']);
+      // A deferred match stays at the back even when a top player lists it again.
+      await enqueueMatchIds(db, 'EUW1', ['EUW1_1'], 0);
+      expect(await order()).toEqual(['EUW1_2', 'EUW1_3', 'EUW1_4', 'EUW1_1']);
+    });
+
     test('transient errors defer without counting attempts, up to a cap', async () => {
       await enqueueMatchIds(db, 'EUW1', ['EUW1_1', 'EUW1_2']);
       for (let i = 0; i < 2; i++) {

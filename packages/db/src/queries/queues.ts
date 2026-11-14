@@ -7,24 +7,41 @@ import type { QueuedEnrichment, QueuedMatch } from '../types.ts';
 // ---------------------------------------------------------------------------
 
 /**
- * Adds match ids to the fetch queue as PENDING. Ids already known (any status) are ignored,
- * so the same match listed by its 10 players is fetched once. Returns how many were new.
+ * `fetch_rank` of retried and deferred matches (and of matches queued without a rank): after
+ * every match listed by a tracked player.
+ */
+export const QUEUE_BACK_RANK = 1_000_000;
+
+/**
+ * Adds match ids to the fetch queue as PENDING, fetched in `fetchRank` order (the lister's ladder
+ * position: lower first). Ids already known are not added again, so the same match listed by its
+ * 10 players is fetched once; a PENDING one that was never retried or deferred moves up to
+ * `fetchRank` if that is better. Returns how many were new.
  */
 export async function enqueueMatchIds(
   q: Queryable,
   platform: Platform,
   matchIds: readonly string[],
+  fetchRank: number = QUEUE_BACK_RANK,
 ): Promise<number> {
   const unique = [...new Set(matchIds)];
   if (unique.length === 0) return 0;
-  const res = await q`
-    INSERT INTO match_fetch_queue ${q(unique.map((match_id) => ({ match_id, platform })))}
-    ON CONFLICT (match_id) DO NOTHING`;
-  return res.count;
+  const rank = Math.min(Math.max(Math.trunc(fetchRank), 0), QUEUE_BACK_RANK);
+  const rows = await q<{ inserted: boolean }[]>`
+    INSERT INTO match_fetch_queue ${q(
+      unique.map((match_id) => ({ match_id, platform, fetch_rank: rank })),
+    )}
+    ON CONFLICT (match_id) DO UPDATE SET fetch_rank = EXCLUDED.fetch_rank
+      WHERE match_fetch_queue.status = 'PENDING'
+        AND match_fetch_queue.last_error IS NULL
+        AND EXCLUDED.fetch_rank < match_fetch_queue.fetch_rank
+    RETURNING (xmax = 0) AS inserted`;
+  return rows.filter((r) => r.inserted).length;
 }
 
 /**
- * Next PENDING matches of a platform, oldest discovery first. Rows are locked with
+ * Next PENDING matches of a platform: lowest `fetch_rank` first (top of the ladder), then oldest
+ * discovery. Rows are locked with
  * `FOR UPDATE SKIP LOCKED` and their `updated_at` bumped, so concurrent claimers don't get the
  * same ids within a transaction; the status stays PENDING until marked done/skipped/failed.
  */
@@ -34,20 +51,27 @@ export async function claimPendingMatches(
   limit: number,
 ): Promise<QueuedMatch[]> {
   const rows = await q<
-    { match_id: string; platform: Platform; attempts: number; discovered_at: Date }[]
+    {
+      match_id: string;
+      platform: Platform;
+      attempts: number;
+      fetch_rank: number;
+      discovered_at: Date;
+    }[]
   >`
     UPDATE match_fetch_queue SET updated_at = now()
     WHERE match_id IN (
       SELECT match_id FROM match_fetch_queue
       WHERE platform = ${platform} AND status = 'PENDING'
-      ORDER BY discovered_at, match_id
+      ORDER BY fetch_rank, discovered_at, match_id
       LIMIT ${limit}
       FOR UPDATE SKIP LOCKED
     )
-    RETURNING match_id, platform, attempts, discovered_at`;
+    RETURNING match_id, platform, attempts, fetch_rank, discovered_at`;
   return [...rows]
     .sort(
       (a, b) =>
+        a.fetch_rank - b.fetch_rank ||
         a.discovered_at.getTime() - b.discovered_at.getTime() ||
         a.match_id.localeCompare(b.match_id),
     )
@@ -147,6 +171,7 @@ export async function markMatchFailed(
       attempts = attempts + 1,
       last_error = ${error.slice(0, 2000)},
       status = CASE WHEN attempts + 1 >= ${maxAttempts} THEN 'FAILED'::fetch_status ELSE 'PENDING'::fetch_status END,
+      fetch_rank = ${QUEUE_BACK_RANK},
       discovered_at = now(),
       updated_at = now()
     WHERE match_id = ${matchId} AND status = 'PENDING'
@@ -160,7 +185,8 @@ export async function markMatchFailed(
  */
 export async function deferMatch(q: Queryable, matchId: string, note: string): Promise<void> {
   await q`
-    UPDATE match_fetch_queue SET discovered_at = now(), updated_at = now(), last_error = ${note}
+    UPDATE match_fetch_queue SET
+      fetch_rank = ${QUEUE_BACK_RANK}, discovered_at = now(), updated_at = now(), last_error = ${note}
     WHERE match_id = ${matchId} AND status = 'PENDING'`;
 }
 
@@ -180,6 +206,7 @@ export async function deferMatchAfterError(
       transient_errors = LEAST(transient_errors + 1, 32767),
       last_error = ${error.slice(0, 2000)},
       status = CASE WHEN transient_errors + 1 >= ${maxTransientErrors} THEN 'FAILED'::fetch_status ELSE 'PENDING'::fetch_status END,
+      fetch_rank = ${QUEUE_BACK_RANK},
       discovered_at = now(),
       updated_at = now()
     WHERE match_id = ${matchId} AND status = 'PENDING'
