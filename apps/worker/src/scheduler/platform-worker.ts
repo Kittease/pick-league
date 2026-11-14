@@ -22,6 +22,7 @@ import {
   deferMatchAfterError,
   enqueueMatchIds,
   failEnrichment,
+  finishListing,
   finishWorkerRun,
   getMatchesSyncedUntil,
   insertParsedMatch,
@@ -31,11 +32,11 @@ import {
   markMatchSkipped,
   pickProbeMatch,
   playersNeedingDailyRefresh,
+  playersWithListingRequested,
   type QueuedEnrichment,
   type QueuedMatch,
   replaceMasteries,
   type SoloRankInput,
-  setMatchesSyncedUntil,
   skipPendingMatchesUpTo,
   startWorkerRun,
   trackedPlayersNeverListed,
@@ -66,6 +67,7 @@ import { WorkSource } from './work-source.ts';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
+const MAX_LISTING_RETRY_MS = 6 * HOUR;
 
 export interface SchedulerOptions {
   /** Ladder refresh period (default 1 h). */
@@ -80,6 +82,8 @@ export interface SchedulerOptions {
    * running during the listing (Riot filters on start time) are listed next time (default 1 h).
    */
   listingOverlapMs: number;
+  /** A failed listing is retried after this, doubling with each failure up to 6 h (default 5 min). */
+  listingRetryMs: number;
   /** Sleep when a kind of work has nothing to do (default 10 s). */
   idleMs: number;
   /** Matches deferred because of a too-new patch are retried after this (default 15 min). */
@@ -103,6 +107,7 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   ladderIntervalMs: HOUR,
   firstListingMaxMs: 14 * DAY,
   listingOverlapMs: HOUR,
+  listingRetryMs: 5 * 60_000,
   idleMs: 10_000,
   deferMs: 15 * 60_000,
   authErrorPauseMs: 5 * 60_000,
@@ -209,9 +214,12 @@ export class PlatformWorker {
   private readonly opts: SchedulerOptions;
   private readonly requestCount: () => number;
 
-  /** Players to list (insertion order = FIFO). */
+  /** Players to list (insertion order = FIFO). Durable copy: `players.listing_requested_at`. */
   private readonly played = new Set<string>();
   private readonly listingInFlight = new Set<string>();
+  /** Failed listings: consecutive failures, and when the player may be listed again. */
+  private readonly listingFailures = new Map<string, number>();
+  private readonly listingCooldown = new Map<string, number>();
   /**
    * Highest game id seen with a patch older than the latest: older ids are skipped unfetched, and
    * listings stop there (the first previous-patch match bounds every history).
@@ -331,10 +339,7 @@ export class PlatformWorker {
     }
     const result = await upsertLadder(this.db, this.platform, entries, new Date(this.clock.now()));
     for (const p of result.played) this.played.add(p);
-    // Players whose first listing never completed (e.g. restart in between).
-    for (const p of await trackedPlayersNeverListed(this.db, this.platform)) {
-      if (!this.listingInFlight.has(p)) this.played.add(p);
-    }
+    await this.loadPendingListings();
     this.log.info('ladder refreshed', {
       entries: entries.length,
       played: result.played.length,
@@ -348,6 +353,48 @@ export class PlatformWorker {
   // -------------------------------------------------------------------------
   // Level 2: match ids
   // -------------------------------------------------------------------------
+
+  /**
+   * Adds the players with a listing requested in the database (they played: the request survives
+   * restarts) and those never listed (e.g. a restart interrupted their first listing).
+   */
+  private async loadPendingListings(): Promise<void> {
+    for (const p of await playersWithListingRequested(this.db, this.platform)) this.played.add(p);
+    for (const p of await trackedPlayersNeverListed(this.db, this.platform)) this.played.add(p);
+  }
+
+  /** Next player to list: FIFO, skipping players being listed or cooling down after a failure. */
+  private nextPlayedPlayer(): string | null {
+    const now = this.clock.now();
+    for (const p of this.played) {
+      // A player being listed stays in the set: they played again, so they are listed again.
+      if (this.listingInFlight.has(p)) continue;
+      const until = this.listingCooldown.get(p);
+      if (until !== undefined && until > now) continue;
+      this.played.delete(p);
+      this.listingInFlight.add(p);
+      return p;
+    }
+    return null;
+  }
+
+  private listingDone(puuid: string, ok: boolean): void {
+    this.listingInFlight.delete(puuid);
+    if (ok) {
+      this.listingFailures.delete(puuid);
+      this.listingCooldown.delete(puuid);
+      return;
+    }
+    // Retried after a cooldown that doubles with each failure (its request stays in the database).
+    const failures = (this.listingFailures.get(puuid) ?? 0) + 1;
+    this.listingFailures.set(puuid, failures);
+    const wait = Math.min(
+      this.opts.listingRetryMs * 2 ** Math.min(failures - 1, 20),
+      MAX_LISTING_RETRY_MS,
+    );
+    this.listingCooldown.set(puuid, this.clock.now() + wait);
+    this.played.add(puuid);
+  }
 
   /** Lists a player's ranked match ids since `matches_synced_until`; returns how many were new. */
   async listPlayerMatches(puuid: string, signal?: AbortSignal): Promise<number> {
@@ -374,7 +421,8 @@ export class PlatformWorker {
       added += await enqueueMatchIds(this.db, this.platform, kept);
       if (oldAt >= 0 || ids.length < 100) break;
     }
-    await setMatchesSyncedUntil(this.db, puuid, new Date(now - this.opts.listingOverlapMs));
+    // Clears the player's listing request, unless they played again since `now`.
+    await finishListing(this.db, puuid, new Date(now - this.opts.listingOverlapMs), new Date(now));
     this.counters.playersPolled++;
     if (this.run) this.run.players++;
     this.log.debug('match ids listed', { puuid, added, firstTime: since === null });
@@ -630,7 +678,7 @@ export class PlatformWorker {
 
   /** Runs every loop until `signal` aborts; resolves once in-flight work has finished. */
   async start(signal: AbortSignal): Promise<void> {
-    for (const p of await trackedPlayersNeverListed(this.db, this.platform)) this.played.add(p);
+    await this.loadPendingListings();
     await this.openRun();
     const c = this.opts.concurrency;
     const loops: Promise<void>[] = [this.ladderLoop(signal)];
@@ -644,10 +692,7 @@ export class PlatformWorker {
             await this.listPlayerMatches(p, signal);
             return 'ok';
           },
-          (p, ok) => {
-            this.listingInFlight.delete(p);
-            if (!ok) this.played.add(p);
-          },
+          (p, ok) => this.listingDone(p, ok),
         ),
       );
     }
@@ -705,21 +750,11 @@ export class PlatformWorker {
   async progress(): Promise<PlatformProgress> {
     return {
       platform: this.platform,
-      playedToList: this.played.size + this.listingInFlight.size,
+      playedToList: new Set([...this.played, ...this.listingInFlight]).size,
       pendingMatches: await countPendingMatches(this.db, this.platform),
       enrichmentQueue: await countEnrichmentQueue(this.db, this.platform),
       ...this.counters,
     };
-  }
-
-  private nextPlayedPlayer(): string | null {
-    for (const p of this.played) {
-      this.played.delete(p);
-      if (this.listingInFlight.has(p)) continue;
-      this.listingInFlight.add(p);
-      return p;
-    }
-    return null;
   }
 
   private async ladderLoop(signal: AbortSignal): Promise<void> {

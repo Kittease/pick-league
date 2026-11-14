@@ -3,6 +3,7 @@ import {
   createDb,
   type Db,
   enqueueMatchIds,
+  getMatchesSyncedUntil,
   migrate,
   upsertPatchStaticData,
 } from '@pick-league/db';
@@ -90,8 +91,13 @@ class FakeRiot implements RiotApi {
     this.maybeThrow(`league:${tier}`);
     return this.leagues[tier];
   }
+  /** When set, match-id listings wait for it (after recording the call). */
+  idsGate: Promise<void> | null = null;
+
   async getMatchIds(_p: Platform, puuid: string, q: MatchIdsQuery) {
     this.calls.push(`ids:${puuid}:${q.start}`);
+    this.maybeThrow(`ids:${puuid}:${q.start}`);
+    if (this.idsGate) await this.idsGate;
     this.idQueries.push(q);
     const all = this.matchIds.get(puuid) ?? [];
     const start = q.start ?? 0;
@@ -299,6 +305,78 @@ d('PlatformWorker (Postgres)', () => {
     riot.idQueries = [];
     expect(await worker.listPlayerMatches(p)).toBe(0);
     expect(riot.idQueries[0]?.startTime).toBe(Math.floor((NOW - 3_600_000) / 1000));
+  });
+
+  const listingRequestedAt = async (puuid: string) => {
+    const [row] = await db<{ t: Date | null }[]>`
+      SELECT listing_requested_at AS t FROM players WHERE puuid = ${puuid}`;
+    return row?.t ?? null;
+  };
+
+  test('pending listings survive a restart', async () => {
+    riot.leagues.CHALLENGER.entries = ladder(2, () => 50);
+    await worker.refreshLadder();
+    await worker.listPlayerMatches(ladderPuuid(0));
+    await worker.listPlayerMatches(ladderPuuid(1));
+    riot.leagues.CHALLENGER.entries = ladder(2, (i) => (i === 0 ? 51 : 50));
+    expect(await worker.refreshLadder()).toBe(1);
+    expect(await listingRequestedAt(ladderPuuid(0))).toEqual(new Date(NOW));
+
+    // Restart before the listing: the ladder has not changed since, yet the player is still due.
+    const restarted = new PlatformWorker({
+      platform: 'EUW1',
+      db,
+      riot,
+      patches,
+      clock: fixedClock,
+    });
+    expect(await restarted.refreshLadder()).toBe(0);
+    expect((await restarted.progress()).playedToList).toBe(1);
+    await restarted.listPlayerMatches(ladderPuuid(0));
+    expect(await listingRequestedAt(ladderPuuid(0))).toBeNull();
+  });
+
+  test('a player who plays again during their listing is listed again; a failed listing waits', async () => {
+    let t = NOW;
+    const clock = { ...fixedClock, now: () => t };
+    const w = new PlatformWorker({
+      platform: 'EUW1',
+      db,
+      riot,
+      patches,
+      clock,
+      options: { idleMs: 10, concurrency: { listing: 2, match: 0, daily: 0, enrichment: 0 } },
+    });
+    const p = ladderPuuid(0);
+    riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
+    let open = () => {};
+    riot.idsGate = new Promise<void>((r) => {
+      open = r;
+    });
+    const idsCalls = () => riot.calls.filter((c) => c.startsWith('ids:')).length;
+    const waitFor = async (cond: () => boolean | Promise<boolean>) => {
+      for (let i = 0; i < 200 && !(await cond()); i++) await Bun.sleep(10);
+    };
+
+    const ac = new AbortController();
+    const running = w.start(ac.signal);
+    await waitFor(() => idsCalls() === 1);
+    // The player plays again while being listed; the next listing will fail.
+    t += 60_000;
+    riot.leagues.CHALLENGER.entries = ladder(1, () => 51);
+    await w.refreshLadder();
+    riot.errors.set(`ids:${p}:0`, [new RiotHttpError(400, 'match-v5.ids-by-puuid', '/x')]);
+    riot.idsGate = null;
+    open();
+    await waitFor(() => idsCalls() === 2);
+    await Bun.sleep(200);
+    ac.abort();
+    await running;
+
+    // Listed again (the second listing failed): no immediate retry, and the newer request is kept.
+    expect(idsCalls()).toBe(2);
+    expect(await listingRequestedAt(p)).toEqual(new Date(NOW + 60_000));
+    expect(await getMatchesSyncedUntil(db, p)).toEqual(new Date(NOW - 3_600_000));
   });
 
   test('match of a kept patch is stored with all child tables and enriches others', async () => {
