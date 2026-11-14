@@ -20,7 +20,9 @@ import {
 } from './refresh.ts';
 
 const BASE = process.env.DATABASE_URL_TEST;
-const URL_ = BASE ? withDatabase(BASE, 'pickleague_api_refresh_test') : undefined;
+const URL_ = BASE
+  ? withDatabase(BASE, process.env.API_REFRESH_TEST_DATABASE ?? 'pickleague_api_refresh_test')
+  : undefined;
 const PATCH = '15.22';
 
 describe.skipIf(!URL_)('manual stats refresh (Postgres)', () => {
