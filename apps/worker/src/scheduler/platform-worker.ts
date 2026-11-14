@@ -29,12 +29,14 @@ import {
   type MasteryInput,
   markMatchFailed,
   markMatchSkipped,
+  pickProbeMatch,
   playersNeedingDailyRefresh,
   type QueuedEnrichment,
   type QueuedMatch,
   replaceMasteries,
   type SoloRankInput,
   setMatchesSyncedUntil,
+  skipPendingMatchesUpTo,
   startWorkerRun,
   trackedPlayersNeverListed,
   updatePlayerRank,
@@ -219,7 +221,19 @@ export class PlatformWorker {
   private oldPatchCutoffMs = 0;
   /** Lowest game id seen with a patch newer than Data Dragon: newer ids wait for the patch. */
   private tooNewMinGameId: number | null = null;
-  private tooNewGeneration = -1;
+  /** Lowest game id seen with the latest patch (or newer): newer ids are not from an old patch. */
+  private keepMinGameId: number | null = null;
+  /** Patch generation the bounds above belong to. */
+  private generation = -1;
+  /**
+   * After a patch change (and at startup), the backlog may hold a lot of matches of the patch that
+   * just became old. Before claiming in FIFO order, single matches are fetched by game id: the
+   * highest pending first, then the median of the ids still between the two bounds. An old one
+   * skips every pending id below it in one statement; a kept one is stored as usual. So finding
+   * where the latest patch starts costs O(log n) match requests instead of one per stale row.
+   */
+  private probe = { active: false, first: true, inFlight: null as string | null };
+  private readonly probed = new Set<string>();
   private readonly deferredUntil = new Map<string, number>();
   private readonly dailyCooldown = new Map<string, number>();
 
@@ -260,6 +274,8 @@ export class PlatformWorker {
         const now = this.clock.now();
         for (const [id, until] of this.deferredUntil)
           if (until <= now) this.deferredUntil.delete(id);
+        const probe = await this.nextProbe(exclude);
+        if (probe !== undefined) return probe ? [probe] : [];
         const rows = await claimPendingMatches(this.db, this.platform, 50 + exclude.size);
         return rows.filter((r) => !exclude.has(r.matchId) && !this.deferredUntil.has(r.matchId));
       },
@@ -392,13 +408,9 @@ export class PlatformWorker {
   private async fetchMatch(queued: QueuedMatch, signal?: AbortSignal): Promise<MatchOutcome> {
     const { matchId } = queued;
     const gameId = gameIdOf(matchId);
-    if (this.tooNewGeneration !== this.patches.generation) {
-      this.tooNewMinGameId = null;
-      this.tooNewGeneration = this.patches.generation;
-    }
+    this.syncGeneration();
     if (this.isKnownOldPatch(gameId)) {
-      await markMatchSkipped(this.db, matchId);
-      this.counters.matchesSkipped++;
+      if (await markMatchSkipped(this.db, matchId)) this.counters.matchesSkipped++;
       return 'skipped';
     }
     if (
@@ -422,15 +434,18 @@ export class PlatformWorker {
 
     const verdict = this.patches.classify(patch);
     if (verdict === 'old') {
-      await markMatchSkipped(this.db, matchId);
-      this.counters.matchesSkipped++;
+      if (await markMatchSkipped(this.db, matchId)) this.counters.matchesSkipped++;
       if (gameId !== null && gameId > this.oldPatchMaxGameId) {
         this.oldPatchMaxGameId = gameId;
         this.oldPatchCutoffMs = Math.max(this.oldPatchCutoffMs, match.info.gameStartTimestamp ?? 0);
-        this.log.debug('old patch boundary moved', { matchId, patch });
+        // Every pending id below is older still: skipped without fetching them one by one.
+        const skipped = await skipPendingMatchesUpTo(this.db, this.platform, gameId);
+        this.counters.matchesSkipped += skipped;
+        this.log.info('old patch boundary moved', { matchId, patch, skipped });
       }
       return 'skipped';
     }
+    if (gameId !== null) this.keepMinGameId = Math.min(this.keepMinGameId ?? gameId, gameId);
     if (verdict === 'too_new') {
       await deferMatch(this.db, matchId, `patch ${patch} is newer than Data Dragon`);
       this.deferredUntil.set(matchId, this.clock.now() + this.opts.deferMs);
@@ -462,6 +477,46 @@ export class PlatformWorker {
       enrichmentEnqueued: result.enrichmentEnqueued,
     });
     return 'added';
+  }
+
+  /** New patch generation: the too-new / kept bounds are reset and a probe starts. */
+  private syncGeneration(): void {
+    if (this.generation === this.patches.generation) return;
+    this.generation = this.patches.generation;
+    this.tooNewMinGameId = null;
+    this.keepMinGameId = null;
+    this.probe = { active: true, first: true, inFlight: this.probe.inFlight };
+    this.probed.clear();
+  }
+
+  /**
+   * The next probe match (see `probe`), null while one is in flight (the other loops wait), or
+   * undefined when not probing (claim in FIFO order).
+   */
+  private async nextProbe(exclude: ReadonlySet<string>): Promise<QueuedMatch | null | undefined> {
+    if (!this.patches.ready) return undefined;
+    this.syncGeneration();
+    if (!this.probe.active) return undefined;
+    if (this.probe.inFlight !== null) return null;
+    const m = await pickProbeMatch(this.db, this.platform, {
+      aboveGameId: this.oldPatchMaxGameId,
+      belowGameId: this.keepMinGameId,
+      exclude: [...exclude, ...this.deferredUntil.keys(), ...this.probed],
+      pick: this.probe.first ? 'highest' : 'median',
+    });
+    if (m === null) {
+      this.probe.active = false;
+      this.log.info('old patch boundary found', {
+        oldPatchMaxGameId: this.oldPatchMaxGameId,
+        keepMinGameId: this.keepMinGameId,
+        probes: this.probed.size,
+      });
+      return undefined;
+    }
+    this.probe.first = false;
+    this.probe.inFlight = m.matchId;
+    this.probed.add(m.matchId);
+    return m;
   }
 
   /** A game id of this platform at or below the old-patch bound (unparseable ids are not). */
@@ -603,7 +658,10 @@ export class PlatformWorker {
           signal,
           () => this.matchSource.next(),
           async (m) => ((await this.processMatch(m, signal)) === 'retry' ? 'retry' : 'ok'),
-          (m) => this.matchSource.release(m),
+          (m) => {
+            this.matchSource.release(m);
+            if (this.probe.inFlight === m.matchId) this.probe.inFlight = null;
+          },
         ),
       );
     }

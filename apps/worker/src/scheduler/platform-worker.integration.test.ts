@@ -379,6 +379,57 @@ d('PlatformWorker (Postgres)', () => {
     ]);
   });
 
+  const pendingCount = async () => {
+    const [row] = await db<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM match_fetch_queue WHERE status = 'PENDING'`;
+    return row?.n ?? -1;
+  };
+  /** Runs the match loops until the queue has no PENDING row left. */
+  const drainQueue = async (w: PlatformWorker) => {
+    const ac = new AbortController();
+    const running = w.start(ac.signal);
+    for (let i = 0; i < 400 && (await pendingCount()) > 0; i++) await Bun.sleep(25);
+    ac.abort();
+    await running;
+  };
+  const oldIds = (n: number) => Array.from({ length: n }, (_, i) => `EUW1_${7000001000 + i}`);
+
+  test('an old match skips every pending id below it in one statement', async () => {
+    const ids = oldIds(30);
+    for (const id of ids) riot.matches.set(id, makeMatch(id, '15.21.700.1'));
+    await enqueueMatchIds(db, 'EUW1', [...ids, 'EUW1_7000005000']);
+    const highest = ids[ids.length - 1] as string;
+    expect(await worker.processMatch(queued(highest))).toBe('skipped');
+    expect(riot.calls).toEqual([`match:${highest}`]);
+    expect(await pendingCount()).toBe(1);
+    expect((await worker.progress()).matchesSkipped).toBe(30);
+  });
+
+  test('rollover: a backlog of old-patch matches is skipped with one match request', async () => {
+    const ids = oldIds(50);
+    for (const id of ids) riot.matches.set(id, makeMatch(id, '15.21.700.1'));
+    await enqueueMatchIds(db, 'EUW1', ids);
+    await drainQueue(worker);
+    expect(riot.calls.filter((c) => c.startsWith('match:'))).toEqual(['match:EUW1_7000001049']);
+    const [row] = await db<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM match_fetch_queue WHERE status = 'SKIPPED_OLD_PATCH'`;
+    expect(row?.n).toBe(50);
+  });
+
+  test('rollover: old and new patch matches mixed, the boundary costs O(log n) requests', async () => {
+    const old = oldIds(64);
+    const kept = Array.from({ length: 4 }, (_, i) => `EUW1_${7000002000 + i}`);
+    for (const id of old) riot.matches.set(id, makeMatch(id, '15.21.700.1'));
+    for (const id of kept) riot.matches.set(id, makeMatch(id, '15.22.1.1'));
+    // Discovered newest first, so FIFO claims alone would fetch every new one before any old one.
+    await enqueueMatchIds(db, 'EUW1', kept);
+    await enqueueMatchIds(db, 'EUW1', old);
+    await drainQueue(worker);
+    const oldFetched = riot.calls.filter((c) => old.some((id) => c === `match:${id}`));
+    expect(oldFetched.length).toBeLessThanOrEqual(7);
+    expect(await count(db, 'matches')).toBe(4);
+  });
+
   test('patch newer than Data Dragon: deferred and a patch refresh is requested', async () => {
     riot.matches.set('EUW1_7000000900', makeMatch('EUW1_7000000900', '15.23.100.1'));
     await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000900', 'EUW1_7000000950']);
