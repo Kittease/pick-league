@@ -560,6 +560,37 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     const chall = await get(`${url}&rank=CHALLENGER`);
     expect(chall.status).toBe(200);
     expect(((await chall.json()) as TierListChampionResponse).synergies).toBeNull();
+
+    // Only the champion's rows are read: the same rows as the whole role's, filtered.
+    const segment = { platform: 'KR' as const, minRankLevel: 1 };
+    const patches = [CUR, PREV];
+    const role = 'UTILITY';
+    const sorted = (rows: object[]) => rows.map((r) => JSON.stringify(r)).sort();
+    const vs = await repo.loadSegmentVsForRole(db, patches, role, LANE_ROLES[role], segment, 111);
+    expect(vs.length).toBeGreaterThan(0);
+    expect(sorted(vs)).toEqual(
+      sorted(
+        (await repo.loadSegmentVsForRole(db, patches, role, LANE_ROLES[role], segment)).filter(
+          (r) => r.championId === 111,
+        ),
+      ),
+    );
+    const duos = await repo.loadSegmentWithForRole(
+      db,
+      patches,
+      role,
+      DUO_ROLES[role],
+      segment,
+      111,
+    );
+    expect(duos.length).toBeGreaterThan(0);
+    expect(sorted(duos)).toEqual(
+      sorted(
+        (await repo.loadSegmentWithForRole(db, patches, role, DUO_ROLES[role], segment)).filter(
+          (r) => r.championId === 111,
+        ),
+      ),
+    );
   });
 
   test('GET /tierlist/champion: bad query, unknown champion or patch', async () => {

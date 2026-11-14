@@ -83,11 +83,12 @@ export async function tierListChampion(
   const filters: TierListFilters = { platform: query.platform, rank: query.rank };
   const segment = tierListSegment(filters);
   // The filtered views only hold lane opponents and duo partners: no synergies under filters.
+  // Role baselines of every champion (the role must have data), relations of this one only.
   const [roleStats, vs, withRows] = segment
     ? await Promise.all([
         repo.loadSegmentRoleStats(q, ctx.patches, role, segment),
-        repo.loadSegmentVsForRole(q, ctx.patches, role, LANE_ROLES[role], segment),
-        repo.loadSegmentWithForRole(q, ctx.patches, role, DUO_ROLES[role], segment),
+        repo.loadSegmentVsForRole(q, ctx.patches, role, LANE_ROLES[role], segment, championId),
+        repo.loadSegmentWithForRole(q, ctx.patches, role, DUO_ROLES[role], segment, championId),
       ])
     : await Promise.all([
         repo.loadRoleStats(q, ctx.patches),

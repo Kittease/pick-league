@@ -503,14 +503,16 @@ export async function loadSegmentRoleStats(
   }));
 }
 
-/** Every champion in `position` vs lane opponents in `enemyPositions`. */
+/** Every champion in `position` (or only `championId`) vs lane opponents in `enemyPositions`. */
 export async function loadSegmentVsForRole(
   q: Queryable,
   patches: PatchId[],
   position: Position,
   enemyPositions: readonly Position[],
   segment: TierListSegment,
+  championId?: number,
 ): Promise<VsRow[]> {
+  if (championId !== undefined && !isStoredChampionId(championId)) return [];
   const rows = await q<
     {
       patch: string;
@@ -526,6 +528,7 @@ export async function loadSegmentVsForRole(
     FROM stats_tierlist_vs
     WHERE patch IN ${q(patches)} AND position = ${position}
       AND enemy_position IN ${q([...enemyPositions])} ${inSegment(q, segment)}
+      ${championId !== undefined ? q`AND champion_id = ${championId}` : q``}
     GROUP BY patch, champion_id, enemy_position, enemy_id`;
   return rows.map((r) => ({
     patch: r.patch,
@@ -538,14 +541,16 @@ export async function loadSegmentVsForRole(
   }));
 }
 
-/** Every champion in `position` with duo partners in `allyPositions`. */
+/** Every champion in `position` (or only `championId`) with duo partners in `allyPositions`. */
 export async function loadSegmentWithForRole(
   q: Queryable,
   patches: PatchId[],
   position: Position,
   allyPositions: readonly Position[],
   segment: TierListSegment,
+  championId?: number,
 ): Promise<WithRow[]> {
+  if (championId !== undefined && !isStoredChampionId(championId)) return [];
   const rows = await q<
     {
       patch: string;
@@ -561,6 +566,7 @@ export async function loadSegmentWithForRole(
     FROM stats_tierlist_with
     WHERE patch IN ${q(patches)} AND position = ${position}
       AND ally_position IN ${q([...allyPositions])} ${inSegment(q, segment)}
+      ${championId !== undefined ? q`AND champion_id = ${championId}` : q``}
     GROUP BY patch, champion_id, ally_position, ally_id`;
   return rows.map((r) => ({
     patch: r.patch,
