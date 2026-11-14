@@ -721,6 +721,8 @@ d('PlatformWorker (Postgres)', () => {
         heartbeatMs: 60_000,
         maxTransientBackoffMs: 3_000,
         concurrency: { listing: 0, match: 1, daily: 0, enrichment: 0 },
+        // Its 1 s poll would read as a backoff here.
+        live: { pollMs: 60_000 },
       },
     });
     const ids = Array.from({ length: 4 }, (_, i) => `EUW1_70000008${String(i).padStart(2, '0')}`);
@@ -905,7 +907,9 @@ d('PlatformWorker (Postgres)', () => {
 
       // Asked again within 30 minutes: nothing is fetched.
       riot.calls = [];
-      await requestLiveLookups(db, 'EUW1', [{ puuid: LIVE, championId: 412 }]);
+      await requestLiveLookups(db, 'EUW1', [{ puuid: LIVE, championId: 412 }], {
+        now: new Date(NOW),
+      });
       expect(await worker.processLiveLookups()).toBe(0);
       expect(riot.calls).toEqual([]);
     });
