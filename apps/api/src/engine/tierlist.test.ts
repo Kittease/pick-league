@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { role, vs, withAlly } from './fixtures.ts';
+import { role } from './fixtures.ts';
 import { assignTiers, buildTierList, type TierListData } from './tierlist.ts';
 
 const CUR = '15.22';
@@ -19,8 +19,6 @@ function data(overrides: Partial<TierListData> = {}): TierListData {
       role(PREV, 111, 'UTILITY', 600, 300),
       role(CUR, 222, 'BOTTOM', 3000, 1500),
     ],
-    vs: [],
-    with: [],
     bans: [
       { patch: CUR, championId: 111, bans: 300 },
       { patch: PREV, championId: 40, bans: 60 },
@@ -64,47 +62,6 @@ describe('buildTierList', () => {
     // Smaller sample than Nautilus with the same raw delta → shrunk harder.
     expect(janna?.score).toBeLessThan(naut?.score ?? 0);
     expect(janna?.confidence).toBeLessThan(naut?.confidence ?? 1);
-  });
-
-  test('best/worst lane matchups and best duos, shrunk and filtered by games', () => {
-    const t = buildTierList(
-      'UTILITY',
-      data({
-        vs: [
-          vs(CUR, 111, 40, 'UTILITY', 400, 280), // 70 % → best
-          vs(CUR, 111, 412, 'UTILITY', 400, 160), // 40 % → worst
-          vs(CUR, 111, 222, 'BOTTOM', 400, 240), // 60 % → bot lane counts too
-          vs(CUR, 111, 117, 'UTILITY', 5, 5), // too few games
-          vs(CUR, 111, 64, 'JUNGLE', 400, 400), // not a lane opponent
-        ],
-        with: [
-          withAlly(CUR, 111, 222, 'BOTTOM', 400, 260),
-          withAlly(CUR, 111, 51, 'BOTTOM', 400, 180),
-          withAlly(CUR, 111, 64, 'JUNGLE', 400, 400), // not a duo role
-        ],
-      }),
-    );
-    const naut = t.entries.find((e) => e.championId === 111);
-    expect(naut?.bestMatchups.map((m) => m.championId)).toEqual([40, 222]);
-    expect(naut?.bestMatchups[1]?.role).toBe('BOTTOM');
-    expect(naut?.worstMatchups.map((m) => m.championId)).toEqual([412]);
-    const best = naut?.bestMatchups[0];
-    // +15 points raw, shrunk with k = 120 → 15 × 400 / 520.
-    expect(best?.delta).toBeCloseTo((0.15 * 400) / 520, 3);
-    expect(best?.winRate).toBe(0.7);
-    expect(best?.games).toBe(400);
-    expect(naut?.bestDuos.map((d) => d.championId)).toEqual([222]);
-  });
-
-  test('matchups of a combined entry are summed over both patches', () => {
-    const t = buildTierList(
-      'UTILITY',
-      data({
-        vs: [vs(CUR, 40, 412, 'UTILITY', 10, 9), vs(PREV, 40, 412, 'UTILITY', 90, 71)],
-      }),
-    );
-    const janna = t.entries.find((e) => e.championId === 40);
-    expect(janna?.bestMatchups[0]).toMatchObject({ championId: 412, games: 100, winRate: 0.8 });
   });
 
   test('empty role', () => {

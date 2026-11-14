@@ -8,7 +8,6 @@ import {
   type TierListFilters,
   type TierListPlatform,
   type TierListRank,
-  type TierListRelation,
   type TierListResponse,
   toTierListFilters,
 } from '@pick-league/shared';
@@ -34,14 +33,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import {
-  compact,
-  confidenceLabel,
-  deltaPoints,
-  patchesText,
-  percent,
-  ROLE_LABEL,
-} from '@/lib/format';
+import { compact, confidenceLabel, patchesText, percent, ROLE_LABEL } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { ApiResult, AppState, Settings } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
@@ -49,7 +41,8 @@ import { BuildDetails } from './build-panel';
 import { ChampionIcon } from './game-icon';
 import { Notice } from './notice';
 import { ConfidencePips } from './picks-panel';
-import { DeltaBar, DeltaText } from './reasons';
+import { DeltaText } from './reasons';
+import { ChampionRelations } from './tier-list-relations';
 
 /** A role's tier list is re-fetched after this long (the API refreshes its stats every ~15 min). */
 const CACHE_MS = 5 * 60_000;
@@ -367,66 +360,6 @@ function EntryRow({
   );
 }
 
-function RelationList({
-  title,
-  hint,
-  relations,
-  lookup,
-  role,
-  verb,
-}: {
-  title: string;
-  hint: string;
-  relations: TierListRelation[];
-  lookup: StaticLookup | null;
-  role: Position;
-  verb: 'vs' | 'with';
-}) {
-  return (
-    <section className="flex flex-col gap-1.5">
-      <h3 className="flex items-baseline gap-2 text-[10px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-        {title}
-        <span className="font-normal tracking-normal normal-case">{hint}</span>
-      </h3>
-      {relations.length === 0 ? (
-        <p className="text-xs text-muted-foreground">Not enough games yet.</p>
-      ) : (
-        <ul className="flex flex-col">
-          {relations.map((r) => {
-            const champ = lookup?.champion(r.championId);
-            const name = champ?.name ?? `#${r.championId}`;
-            return (
-              <li
-                key={`${r.championId}-${r.role}`}
-                className="grid grid-cols-[28px_minmax(0,1fr)_40px_44px_44px] items-center gap-2 py-1 text-xs"
-                title={`${deltaPoints(r.delta)} pts ${verb} ${name} (${percent(r.winRate)} win rate in ${r.games} games, shrunk by sample size)`}
-              >
-                <ChampionIcon src={champ?.iconUrl} name={name} size={26} />
-                <span className="flex min-w-0 items-baseline gap-1.5">
-                  <span className="truncate">
-                    <span className="text-muted-foreground">{verb} </span>
-                    {name}
-                  </span>
-                  {r.role !== role && (
-                    <span className="shrink-0 text-[10px] text-muted-foreground">
-                      {ROLE_LABEL[r.role]}
-                    </span>
-                  )}
-                </span>
-                <DeltaBar delta={r.delta} games={r.games} />
-                <DeltaText delta={r.delta} className="text-right" />
-                <span className="num text-right text-[10px] text-muted-foreground">
-                  n={compact(r.games)}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </section>
-  );
-}
-
 function Stat({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
   return (
     <div className="flex flex-col gap-0.5">
@@ -445,6 +378,8 @@ function DetailPanel({
   currentPatch,
   lookup,
   mastery,
+  filters,
+  apiKey,
   onClose,
   onViewBuild,
 }: {
@@ -453,13 +388,15 @@ function DetailPanel({
   currentPatch: string;
   lookup: StaticLookup | null;
   mastery: AppState['mastery'];
+  filters: TierListFilters;
+  /** Identity of the API data (URL, patch, last stats refresh). */
+  apiKey: string;
   onClose: () => void;
   onViewBuild: () => void;
 }) {
   const champ = lookup?.champion(entry.championId);
   const name = champ?.name ?? `#${entry.championId}`;
   const merged = entry.patchesUsed.length > 1;
-  const isBot = role === 'BOTTOM' || role === 'UTILITY';
   return (
     <aside className="flex w-[340px] shrink-0 flex-col border-l border-border bg-card/40">
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
@@ -500,34 +437,17 @@ function DetailPanel({
               sub={merged ? `too few matchups on ${currentPatch} alone` : undefined}
             />
           </div>
-          <RelationList
-            title="Best matchups"
-            hint={isBot ? 'bot lane, deltas vs its own win rate' : 'deltas vs its own win rate'}
-            relations={entry.bestMatchups}
-            lookup={lookup}
-            role={role}
-            verb="vs"
-          />
-          <RelationList
-            title="Worst matchups"
-            hint="avoid into"
-            relations={entry.worstMatchups}
-            lookup={lookup}
-            role={role}
-            verb="vs"
-          />
-          <RelationList
-            title="Best duos"
-            hint="pick with"
-            relations={entry.bestDuos}
-            lookup={lookup}
-            role={role}
-            verb="with"
-          />
           <Button size="sm" variant="outline" onClick={onViewBuild} className="self-start">
             <HammerIcon data-icon="inline-start" />
             View build
           </Button>
+          <ChampionRelations
+            role={role}
+            championId={entry.championId}
+            filters={filters}
+            apiKey={apiKey}
+            lookup={lookup}
+          />
         </div>
       </div>
     </aside>
@@ -827,6 +747,8 @@ export function TierListPage({
           currentPatch={data.patch}
           lookup={lookup}
           mastery={state.mastery}
+          filters={filters}
+          apiKey={apiKey}
           onClose={() => setSelectedId(null)}
           onViewBuild={() => setBuildOf(selected.championId)}
         />

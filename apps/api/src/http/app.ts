@@ -3,7 +3,9 @@ import {
   API_ROUTES,
   buildRequestSchema,
   picksRequestSchema,
+  TIER_LIST_CHAMPION_ROUTE,
   TIER_LIST_ROUTE,
+  tierListChampionQuerySchema,
   tierListQuerySchema,
 } from '@pick-league/shared';
 import { type Context, Hono } from 'hono';
@@ -126,6 +128,16 @@ export function createApp(deps: AppDeps): Hono<Env> {
       throw new ApiError('BAD_REQUEST', 'Invalid query string', parsed.error.issues);
     const query = parsed.data;
     return cached(c, tierListCacheKey(query), () => tiers.tierList(db, query));
+  });
+  app.get(TIER_LIST_CHAMPION_ROUTE, (c) => {
+    const parsed = tierListChampionQuerySchema.safeParse(c.req.query());
+    if (!parsed.success)
+      throw new ApiError('BAD_REQUEST', 'Invalid query string', parsed.error.issues);
+    const query = parsed.data;
+    // Every parsed field is in the key, so filters added to the query schema are too.
+    return cached(c, `tierlist-champion|${JSON.stringify(query)}`, () =>
+      tiers.tierListChampion(db, query),
+    );
   });
 
   if (deps.stats) {

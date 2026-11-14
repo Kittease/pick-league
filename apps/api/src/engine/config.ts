@@ -99,10 +99,15 @@ export const ENGINE_CONFIG = {
     tierPercentiles: { S: 0.1, A: 0.3, B: 0.65, C: 0.85 },
     /** Best tier allowed for a champion with score <= 0. */
     nonPositiveBestTier: 'B',
-    /** Matchups/duos need at least this many games to be listed. */
-    minRelationGames: 15,
-    /** Matchups (best/worst) and duos listed per champion. */
-    relationsShown: 3,
+    /**
+     * A champion's matchups, duos and synergies (GET /tierlist/champion) are all listed from this
+     * many games, sorted by shrunk delta (`picks.shrinkK.matchup` / `.duo` / `.pair`). The
+     * shrinkage is what keeps small samples from topping the lists: a 5–0 record is worth at most
+     * +2.0 points with k = 120, below a +6-point delta over 100 games (+2.7). The floor only
+     * drops 1–4 game rows (pure noise). With ~50k matches over two patches, the median champion
+     * gets ~15–30 lane matchups at 5 games (1–2 at 15 games).
+     */
+    minRelationGames: 5,
   },
 
   /** Picks confidence: weighted mean of n / (n + k) of each scored component. */

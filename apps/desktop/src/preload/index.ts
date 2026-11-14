@@ -21,6 +21,8 @@ const bridge: PickLeagueBridge = {
     },
   },
   getTierList: (role, filters) => ipcRenderer.invoke(IPC.tierList, role, filters),
+  getTierListChampion: (role, championId, filters) =>
+    ipcRenderer.invoke(IPC.tierListChampion, role, championId, filters),
   getGenericBuild: (championId, role) => ipcRenderer.invoke(IPC.genericBuild, championId, role),
   onState(listener) {
     const handler = (_e: unknown, state: AppState) => listener(state);

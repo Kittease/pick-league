@@ -210,6 +210,13 @@ async function main(): Promise<void> {
       toTierListFilters(filters),
     ),
   );
+  ipcMain.handle(IPC.tierListChampion, (_e, role: unknown, championId: unknown, filters: unknown) =>
+    controller.tierListChampion(
+      isPosition(role) ? role : settings.fallbackRole,
+      typeof championId === 'number' ? championId : 0,
+      toTierListFilters(filters),
+    ),
+  );
   ipcMain.handle(IPC.genericBuild, (_e, championId: unknown, role: unknown) =>
     controller.genericBuild(
       typeof championId === 'number' ? championId : 0,

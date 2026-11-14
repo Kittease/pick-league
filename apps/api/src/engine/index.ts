@@ -11,5 +11,6 @@ export {
   type PatchMatchesRow,
   type TierListData,
 } from './tierlist.ts';
+export { buildTierListChampion, type TierListChampionData } from './tierlist-champion.ts';
 export * from './traits.ts';
 export type * from './types.ts';

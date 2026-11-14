@@ -13,7 +13,9 @@ import {
   type StaticDataResponse,
   type StatsRefreshResponse,
   type StatsStatusResponse,
+  TIER_LIST_CHAMPION_ROUTE,
   TIER_LIST_ROUTE,
+  type TierListChampionResponse,
   type TierListFilters,
   type TierListResponse,
 } from '@pick-league/shared';
@@ -42,6 +44,12 @@ export interface ApiClient {
   /** Asks the API to refresh its stats views now (answers immediately). */
   statsRefresh(): Promise<StatsRefreshResponse>;
   tierList(role: Position, filters?: TierListFilters, patch?: string): Promise<TierListResponse>;
+  tierListChampion(
+    role: Position,
+    championId: number,
+    filters?: TierListFilters,
+    patch?: string,
+  ): Promise<TierListChampionResponse>;
 }
 
 export function normaliseApiUrl(url: string): string {
@@ -100,5 +108,9 @@ export function createApiClient(
     statsRefresh: () => call(API_ROUTES.statsRefresh, undefined, 'POST'),
     tierList: (role, filters = DEFAULT_TIER_LIST_FILTERS, patch = 'latest') =>
       call(`${TIER_LIST_ROUTE}?${new URLSearchParams({ role, patch, ...filters })}`),
+    tierListChampion: (role, championId, filters = DEFAULT_TIER_LIST_FILTERS, patch = 'latest') =>
+      call(
+        `${TIER_LIST_CHAMPION_ROUTE}?${new URLSearchParams({ role, championId: String(championId), patch, ...filters })}`,
+      ),
   };
 }

@@ -20,6 +20,7 @@ import {
   type HealthResponse,
   type PickCandidate,
   type PicksResponse,
+  POSITIONS,
   type Position,
   picksRequestSchema,
   type Reason,
@@ -27,13 +28,18 @@ import {
   type StaticDataResponse,
   type StatsRefreshResponse,
   type StatsStatusResponse,
+  TIER_LIST_CHAMPION_ROUTE,
   TIER_LIST_PLATFORMS,
   TIER_LIST_RANKS,
   TIER_LIST_ROUTE,
   type Tier,
+  type TierListChampionResponse,
   type TierListEntry,
+  type TierListPlatform,
+  type TierListRank,
   type TierListRelation,
   type TierListResponse,
+  tierListChampionQuerySchema,
   tierListQuerySchema,
 } from '@pick-league/shared';
 import { staticResponseFromDdragon } from '../src/core/static-from-ddragon.ts';
@@ -498,39 +504,29 @@ async function build(body: unknown): Promise<BuildResponse> {
   };
 }
 
-async function tierList(params: URLSearchParams): Promise<TierListResponse> {
-  const { role, platform, rank } = tierListQuerySchema.parse(Object.fromEntries(params));
-  const s = await getStatic();
-  // Filters: fewer games (a server ≈ 1/4, Grandmaster+ ≈ 40 %, Challenger ≈ 10 %) and other
-  // numbers. The default filters (seg = 0) give the same list as before.
+const inRole = (s: StaticDataResponse, r: Position) =>
+  s.champions.filter((c) => c.tags.some((t) => ROLE_TAGS[r].includes(t)));
+/** Games of a champion in the tier list role (also the baseline of its detail). */
+const tierGames = (championId: number) => games(championId, 9) * 3;
+
+/**
+ * Filters: fewer games (a server ≈ 1/4, Grandmaster+ ≈ 40 %, Challenger ≈ 10 %) and other
+ * numbers. The default filters (seg = 0) give the same data as without filters.
+ */
+function fakeSegment(platform: TierListPlatform, rank: TierListRank) {
   const share =
     (platform === 'ALL' ? 1 : 0.25) * { MASTER: 1, GRANDMASTER: 0.4, CHALLENGER: 0.1 }[rank];
   const seg = TIER_LIST_PLATFORMS.indexOf(platform) * 10 + TIER_LIST_RANKS.indexOf(rank);
-  const scaled = (n: number) => Math.max(1, Math.round(n * share));
-  const inRole = (r: Position) =>
-    s.champions.filter((c) => c.tags.some((t) => ROLE_TAGS[r].includes(t)));
-  const pool = inRole(role);
-  const duoPool = DUO[role] ? inRole(DUO[role]) : [];
-  const relation = (
-    c: number,
-    others: typeof pool,
-    r: Position,
-    seed: number,
-  ): TierListRelation[] =>
-    others
-      .filter((o) => o.id !== c)
-      .slice(0, 24)
-      .map((o) => {
-        const n = scaled(games(c, o.id, seed));
-        const d = round(delta(c, o.id, seed) * 1.6 * (n / (n + 120)));
-        return { championId: o.id, role: r, delta: d, winRate: round(0.5 + d * 1.3), games: n };
-      })
-      .filter((x) => x.games >= 15);
-  const byDelta = (a: TierListRelation, b: TierListRelation) => b.delta - a.delta;
-  const raw = pool.map((c) => {
-    const n = scaled(games(c.id, 9) * 3);
+  return { share, seg };
+}
+
+async function tierList(params: URLSearchParams): Promise<TierListResponse> {
+  const { role, platform, rank } = tierListQuerySchema.parse(Object.fromEntries(params));
+  const s = await getStatic();
+  const { share, seg } = fakeSegment(platform, rank);
+  const raw = inRole(s, role).map((c) => {
+    const n = Math.max(1, Math.round(tierGames(c.id) * share));
     const winRate = round(0.46 + rand(c.id, 5 + seg * 100) * 0.08);
-    const matchups = relation(c.id, pool, role, 11 + seg * 100).sort(byDelta);
     return {
       championId: c.id,
       score: round(((winRate - 0.5) * n) / (n + 300), 5),
@@ -539,17 +535,6 @@ async function tierList(params: URLSearchParams): Promise<TierListResponse> {
       banRate: round(rand(c.id, 6 + seg * 100) ** 3 * 0.35),
       confidence: round(n / (n + 200), 3),
       patchesUsed: patchesOf(s, n),
-      bestMatchups: matchups.filter((m) => m.delta > 0).slice(0, 3),
-      worstMatchups: matchups
-        .filter((m) => m.delta < 0)
-        .reverse()
-        .slice(0, 3),
-      bestDuos: DUO[role]
-        ? relation(c.id, duoPool, DUO[role], 12 + seg * 100)
-            .filter((d) => d.delta > 0)
-            .sort(byDelta)
-            .slice(0, 3)
-        : [],
     };
   });
   const roleGames = raw.reduce((sum, e) => sum + e.games, 0);
@@ -566,6 +551,57 @@ async function tierList(params: URLSearchParams): Promise<TierListResponse> {
     return { ...e, tier, pickRate: round(e.games / roleGames) };
   });
   return { role, patch: patchOf(s), filters: { platform, rank }, roleGames, entries };
+}
+
+/** Every lane opponent / duo partner / other ally from 5 games, best first (like the API). */
+async function tierListChampion(params: URLSearchParams): Promise<TierListChampionResponse> {
+  const { role, championId, platform, rank } = tierListChampionQuerySchema.parse(
+    Object.fromEntries(params),
+  );
+  const { share, seg } = fakeSegment(platform, rank);
+  const s = await getStatic();
+  if (!inRole(s, role).some((c) => c.id === championId)) {
+    throw new HttpError(404, 'NOT_FOUND', `No games of champion ${championId} in role ${role}`);
+  }
+  const n = Math.max(1, Math.round(tierGames(championId) * share));
+  const baseWinRate = round(0.46 + rand(championId, 5 + seg * 100) * 0.08);
+  const relations = (roles: Position[], seed: number, k: number): TierListRelation[] =>
+    roles
+      .flatMap((r) =>
+        inRole(s, r)
+          .filter((o) => o.id !== championId)
+          .map((o) => {
+            // Mostly small samples, a few big ones (like real data).
+            const g = Math.floor(rand(championId, o.id, seed, 3) ** 3 * (n / 3));
+            const raw = delta(championId, o.id, seed) * 2.5;
+            const d = round((raw * g) / (g + k));
+            return {
+              championId: o.id,
+              role: r,
+              delta: d,
+              winRate: round(baseWinRate + raw),
+              games: g,
+            };
+          }),
+      )
+      .filter((r) => r.games >= 5)
+      .sort((a, b) => b.delta - a.delta || b.games - a.games);
+  const lane: Position[] = role === 'BOTTOM' || role === 'UTILITY' ? ['UTILITY', 'BOTTOM'] : [role];
+  const duo = role === 'JUNGLE' ? (['MIDDLE', 'TOP'] as Position[]) : DUO[role] ? [DUO[role]] : [];
+  const others = POSITIONS.filter((p) => p !== role && !duo.includes(p));
+  return {
+    role,
+    patch: patchOf(s),
+    championId,
+    patchesUsed: patchesOf(s, n),
+    games: n,
+    winRate: baseWinRate,
+    matchups: relations(lane, 11, 120),
+    duos: relations(duo, 12, 120),
+    // Like the real API: the filtered stats have no synergies.
+    synergies: seg === 0 ? relations(others, 13, 150) : null,
+    filters: { platform, rank },
+  };
 }
 
 class HttpError extends Error {
@@ -617,6 +653,10 @@ Bun.serve({
       if (route === `GET ${TIER_LIST_ROUTE}`) {
         if (NO_DATA) throw new HttpError(503, 'NO_DATA', 'No match data ingested yet');
         return json(await tierList(url.searchParams));
+      }
+      if (route === `GET ${TIER_LIST_CHAMPION_ROUTE}`) {
+        if (NO_DATA) throw new HttpError(503, 'NO_DATA', 'No match data ingested yet');
+        return json(await tierListChampion(url.searchParams));
       }
       if (
         request.method === 'POST' &&

@@ -459,15 +459,16 @@ export const tierListQuerySchema = z.object({
 export type TierListQuery = z.infer<typeof tierListQuerySchema>;
 export type TierListQueryInput = z.input<typeof tierListQuerySchema>;
 
-/** A lane opponent or a duo partner of a tier list entry. */
+/** A lane opponent, duo partner or other ally of a tier list champion. */
 export interface TierListRelation {
   championId: number;
-  /** Role of the opponent / partner (bot lane opponents can be BOTTOM or UTILITY). */
+  /** Role of the opponent / ally (bot lane opponents can be BOTTOM or UTILITY). */
   role: Position;
-  /** Win-rate delta vs the entry's own baseline, shrunk by sample size like the picks engine. */
+  /** Win-rate delta vs the champion's own baseline, shrunk by sample size like the picks engine. */
   delta: number;
-  /** Raw win rate of the entry in those games. */
+  /** Raw win rate of the champion in those games. */
   winRate: number;
+  /** Games (matchups) the champion played vs / with this one. */
   games: number;
 }
 
@@ -491,12 +492,6 @@ export interface TierListEntry {
   confidence: number;
   /** Current patch, plus the previous one when the current has too few games (like the picks engine). */
   patchesUsed: PatchId[];
-  /** Up to 3 best lane opponents, best first (positive deltas only). */
-  bestMatchups: TierListRelation[];
-  /** Up to 3 worst lane opponents, worst first (negative deltas only). */
-  worstMatchups: TierListRelation[];
-  /** Up to 3 best duo partners (UTILITY↔BOTTOM, MIDDLE↔JUNGLE, TOP↔JUNGLE), positive deltas only. */
-  bestDuos: TierListRelation[];
 }
 
 export interface TierListResponse {
@@ -509,4 +504,45 @@ export interface TierListResponse {
   roleGames: number;
   /** Sorted by score, descending. */
   entries: TierListEntry[];
+}
+
+// ---------------------------------------------------------------------------
+// GET /tierlist/champion?role=UTILITY&championId=111&patch=latest
+// Matchups, duos and synergies of one tier list champion, fetched when it is selected (the
+// tier list stays light). Same query as /tierlist plus the champion, so a filter added to
+// `tierListQuerySchema` applies here too.
+// ---------------------------------------------------------------------------
+
+export const TIER_LIST_CHAMPION_ROUTE = '/tierlist/champion';
+
+export const tierListChampionQuerySchema = tierListQuerySchema.extend({
+  championId: z.coerce.number().pipe(championIdSchema),
+});
+export type TierListChampionQuery = z.infer<typeof tierListChampionQuerySchema>;
+export type TierListChampionQueryInput = z.input<typeof tierListChampionQuerySchema>;
+
+export interface TierListChampionResponse {
+  role: Position;
+  /** Requested patch ('latest' resolved to the current patch). */
+  patch: PatchId;
+  championId: number;
+  /** Same per-champion patch choice as its tier list entry. */
+  patchesUsed: PatchId[];
+  /** Games and win rate of champion+role on `patchesUsed`: the baseline of every delta below. */
+  games: number;
+  winRate: number;
+  /**
+   * Lane opponents (bot lane: both enemy bot laners) with enough games, sorted by shrunk delta,
+   * best first: the worst ones are at the end.
+   */
+  matchups: TierListRelation[];
+  /** Duo partners (UTILITY↔BOTTOM, MIDDLE↔JUNGLE, TOP↔JUNGLE), best first. */
+  duos: TierListRelation[];
+  /**
+   * Allies in the other (non-duo) roles, best first. Null with server/rank filters: the filtered
+   * stats only keep lane opponents and duo partners.
+   */
+  synergies: TierListRelation[] | null;
+  /** Filters applied (defaults filled in). */
+  filters: TierListFilters;
 }

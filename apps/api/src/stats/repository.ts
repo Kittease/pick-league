@@ -376,30 +376,24 @@ export async function championExists(
 // Tier list
 // ---------------------------------------------------------------------------
 
-/** Every champion in `position` vs enemies in `enemyPositions` (lane opponents). */
-export async function loadVsForRole(
+/** One champion in `position` vs enemies in `enemyPositions` (lane opponents), per patch. */
+export async function loadLaneVsOfChampion(
   q: Queryable,
   patches: PatchId[],
   position: Position,
+  championId: number,
   enemyPositions: readonly Position[],
 ): Promise<VsRow[]> {
   const rows = await q<
-    {
-      patch: string;
-      champion_id: number;
-      enemy_position: Position;
-      enemy_id: number;
-      games: number;
-      wins: number;
-    }[]
+    { patch: string; enemy_position: Position; enemy_id: number; games: number; wins: number }[]
   >`
-    SELECT patch, champion_id, enemy_position, enemy_id, games, wins FROM stats_champion_vs
-    WHERE patch IN ${q(patches)} AND position = ${position}
+    SELECT patch, enemy_position, enemy_id, games, wins FROM stats_champion_vs
+    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
       AND enemy_position IN ${q([...enemyPositions])}`;
   return rows.map((r) => ({
     patch: r.patch,
     position,
-    championId: r.champion_id,
+    championId,
     enemyPosition: r.enemy_position,
     enemyId: r.enemy_id,
     games: r.games,
@@ -407,30 +401,22 @@ export async function loadVsForRole(
   }));
 }
 
-/** Every champion in `position` with allies in `allyPositions` (duo partners). */
-export async function loadWithForRole(
+/** One champion in `position` with every ally (all roles), per patch. */
+export async function loadAlliesOfChampion(
   q: Queryable,
   patches: PatchId[],
   position: Position,
-  allyPositions: readonly Position[],
+  championId: number,
 ): Promise<WithRow[]> {
   const rows = await q<
-    {
-      patch: string;
-      champion_id: number;
-      ally_position: Position;
-      ally_id: number;
-      games: number;
-      wins: number;
-    }[]
+    { patch: string; ally_position: Position; ally_id: number; games: number; wins: number }[]
   >`
-    SELECT patch, champion_id, ally_position, ally_id, games, wins FROM stats_champion_with
-    WHERE patch IN ${q(patches)} AND position = ${position}
-      AND ally_position IN ${q([...allyPositions])}`;
+    SELECT patch, ally_position, ally_id, games, wins FROM stats_champion_with
+    WHERE patch IN ${q(patches)} AND position = ${position} AND champion_id = ${championId}`;
   return rows.map((r) => ({
     patch: r.patch,
     position,
-    championId: r.champion_id,
+    championId,
     allyPosition: r.ally_position,
     allyId: r.ally_id,
     games: r.games,

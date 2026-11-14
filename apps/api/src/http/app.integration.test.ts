@@ -11,6 +11,7 @@ import type {
   PatchesResponse,
   PicksResponse,
   StaticDataResponse,
+  TierListChampionResponse,
   TierListEntry,
   TierListResponse,
 } from '@pick-league/shared';
@@ -258,7 +259,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect((await limited.request('/health')).status).toBe(200);
   });
 
-  test('GET /tierlist: support tier list with matchups, duos, rates and fallback', async () => {
+  test('GET /tierlist: support tier list with rates and fallback', async () => {
     const res = await get('/tierlist?role=UTILITY');
     expect(res.status).toBe(200);
     const body = (await res.json()) as TierListResponse;
@@ -271,17 +272,6 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(scores).toEqual([...scores].sort((a, b) => b - a));
     expect(body.entries[0]?.tier).toBe('S');
     expect(new Set(body.entries.map((e) => e.tier)).size).toBeGreaterThanOrEqual(3);
-
-    const naut = body.entries.find((e) => e.championId === PLANTED.matchup.championId);
-    // Synthetic matchup noise can put another support first: the planted one is in the top 3.
-    const planted = naut?.bestMatchups.find((m) => m.championId === PLANTED.matchup.opponentId);
-    expect(planted?.delta).toBeGreaterThan(0.03);
-    expect(planted?.games).toBeGreaterThanOrEqual(15);
-    const janna = body.entries.find((e) => e.championId === PLANTED.matchup.opponentId);
-    expect(janna?.worstMatchups[0]?.championId).toBe(PLANTED.matchup.championId);
-    const lulu = body.entries.find((e) => e.championId === PLANTED.duo.championId);
-    expect(lulu?.bestDuos[0]?.championId).toBe(PLANTED.duo.allyId);
-    expect(lulu?.bestDuos[0]?.role).toBe('BOTTOM');
 
     const braum = body.entries.find((e) => e.championId === PLANTED.rareOnCurrent);
     expect(braum?.patchesUsed).toEqual([CUR, PREV]);
@@ -322,17 +312,40 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     // Every segment summed (no platform, rank level >= 0) = the unfiltered views.
     const all = { platform: null, minRankLevel: 0 };
     const patches = [CUR, PREV];
-    const sorted = <T>(rows: T[]) => rows.map((r) => JSON.stringify(r)).sort();
+    // Key order differs between loaders: compare rows with sorted keys.
+    const sorted = <T extends object>(rows: T[]) =>
+      rows.map((r) => JSON.stringify(r, Object.keys(r).sort())).sort();
     for (const role of ['BOTTOM', 'JUNGLE'] as const) {
       expect(sorted(await repo.loadSegmentRoleStats(db, patches, role, all))).toEqual(
         sorted((await repo.loadRoleStats(db, patches)).filter((r) => r.position === role)),
       );
+      const champions = [
+        ...new Set(
+          (await repo.loadRoleStats(db, patches))
+            .filter((r) => r.position === role)
+            .map((r) => r.championId),
+        ),
+      ];
+      const perChampion = async <T>(load: (id: number) => Promise<T[]>) =>
+        (await Promise.all(champions.map(load))).flat();
       expect(
         sorted(await repo.loadSegmentVsForRole(db, patches, role, LANE_ROLES[role], all)),
-      ).toEqual(sorted(await repo.loadVsForRole(db, patches, role, LANE_ROLES[role])));
+      ).toEqual(
+        sorted(
+          await perChampion((id) =>
+            repo.loadLaneVsOfChampion(db, patches, role, id, LANE_ROLES[role]),
+          ),
+        ),
+      );
       expect(
         sorted(await repo.loadSegmentWithForRole(db, patches, role, DUO_ROLES[role], all)),
-      ).toEqual(sorted(await repo.loadWithForRole(db, patches, role, DUO_ROLES[role])));
+      ).toEqual(
+        sorted(
+          (await perChampion((id) => repo.loadAlliesOfChampion(db, patches, role, id))).filter(
+            (r) => DUO_ROLES[role].includes(r.allyPosition),
+          ),
+        ),
+      );
     }
     // Every player counted: weighted ban rates = banned matches / matches.
     const bans = new Map(
@@ -422,6 +435,81 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       expect(res.status).toBe(400);
       expect(((await res.json()) as ApiErrorResponse).error.code).toBe('BAD_REQUEST');
     }
+  });
+
+  test('GET /tierlist/champion: every matchup, duo and synergy, best first', async () => {
+    const detail = async (championId: number) => {
+      const res = await get(`/tierlist/champion?role=UTILITY&championId=${championId}`);
+      expect(res.status).toBe(200);
+      return (await res.json()) as TierListChampionResponse;
+    };
+    const naut = await detail(PLANTED.matchup.championId);
+    expect(naut).toMatchObject({ role: 'UTILITY', patch: CUR, championId: 111 });
+    const list = await (await get('/tierlist?role=UTILITY')).json();
+    const entry = (list as TierListResponse).entries.find((e) => e.championId === 111);
+    expect(naut.patchesUsed).toEqual(entry?.patchesUsed ?? []);
+    expect(naut.games).toBe(entry?.games ?? 0);
+    // Far more than the former top 3: every bot lane opponent of the synthetic pool.
+    expect(naut.matchups.length).toBeGreaterThan(6);
+    expect(new Set(naut.matchups.map((m) => m.role))).toEqual(new Set(['UTILITY', 'BOTTOM']));
+    for (const rows of [naut.matchups, naut.duos, naut.synergies ?? []]) {
+      const deltas = rows.map((r) => r.delta);
+      expect(deltas).toEqual([...deltas].sort((a, b) => b - a));
+      expect(rows.every((r) => r.games >= 5)).toBe(true);
+    }
+    // Synthetic matchup noise can put another support first: the planted one is near the top.
+    const planted = naut.matchups.findIndex((m) => m.championId === PLANTED.matchup.opponentId);
+    expect(planted).toBeGreaterThanOrEqual(0);
+    expect(planted).toBeLessThan(3);
+    expect(naut.matchups[planted]?.delta).toBeGreaterThan(0.03);
+    expect(naut.duos.every((d) => d.role === 'BOTTOM')).toBe(true);
+    expect(naut.filters).toEqual({ platform: 'ALL', rank: 'MASTER' });
+    expect(naut.synergies?.length).toBeGreaterThan(0);
+    expect((naut.synergies ?? []).every((s) => ['TOP', 'JUNGLE', 'MIDDLE'].includes(s.role))).toBe(
+      true,
+    );
+
+    const janna = await detail(PLANTED.matchup.opponentId);
+    expect(janna.matchups.at(-1)?.championId).toBe(PLANTED.matchup.championId);
+    const lulu = await detail(PLANTED.duo.championId);
+    expect(lulu.duos[0]).toMatchObject({ championId: PLANTED.duo.allyId, role: 'BOTTOM' });
+    const braum = await detail(PLANTED.rareOnCurrent);
+    expect(braum.patchesUsed).toEqual([CUR, PREV]);
+
+    // Same query in another order: served from the same cache entry.
+    const size = cache.size;
+    const again = await app.request('/tierlist/champion?championId=111&role=UTILITY&patch=latest');
+    expect(await again.json()).toEqual(naut);
+    expect(cache.size).toBe(size);
+  });
+
+  test('GET /tierlist/champion: server and rank filters, without synergies', async () => {
+    const url = '/tierlist/champion?role=UTILITY&championId=111';
+    const all = (await (await get(url)).json()) as TierListChampionResponse;
+    const kr = (await (await get(`${url}&platform=KR`)).json()) as TierListChampionResponse;
+    expect(kr.filters).toEqual({ platform: 'KR', rank: 'MASTER' });
+    expect(kr.synergies).toBeNull();
+    expect(kr.games).toBeLessThan(all.games);
+    expect(kr.matchups.length).toBeGreaterThan(0);
+    const games = (rows: TierListChampionResponse['matchups']) =>
+      rows.reduce((s, r) => s + r.games, 0);
+    expect(games(kr.matchups)).toBeLessThan(games(all.matchups));
+    expect(kr.duos.every((d) => d.role === 'BOTTOM')).toBe(true);
+    const chall = await get(`${url}&rank=CHALLENGER`);
+    expect(chall.status).toBe(200);
+    expect(((await chall.json()) as TierListChampionResponse).synergies).toBeNull();
+  });
+
+  test('GET /tierlist/champion: bad query, unknown champion or patch', async () => {
+    expect((await get('/tierlist/champion?role=UTILITY')).status).toBe(400);
+    expect((await get('/tierlist/champion?role=UTILITY&championId=abc')).status).toBe(400);
+    expect((await get('/tierlist/champion?role=SUPPORT&championId=111')).status).toBe(400);
+    const unknown = await get('/tierlist/champion?role=UTILITY&championId=99999');
+    expect(unknown.status).toBe(404);
+    expect(((await unknown.json()) as ApiErrorResponse).error.code).toBe('NOT_FOUND');
+    expect((await get('/tierlist/champion?role=UTILITY&championId=111&patch=9.9')).status).toBe(
+      404,
+    );
   });
 
   test('stats refresh is skipped when matches did not change', async () => {

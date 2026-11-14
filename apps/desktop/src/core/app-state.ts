@@ -10,6 +10,7 @@ import type {
   StaticDataResponse,
   StatsRefreshSkipReason,
   StatsStatusResponse,
+  TierListChampionResponse,
   TierListFilters,
   TierListResponse,
 } from '@pick-league/shared';
@@ -133,6 +134,7 @@ export const IPC = {
   windowToggleMaximize: 'window:toggle-maximize',
   windowClose: 'window:close',
   tierList: 'pickleague:tier-list',
+  tierListChampion: 'pickleague:tier-list-champion',
   genericBuild: 'pickleague:generic-build',
 } as const;
 
@@ -170,6 +172,12 @@ export interface PickLeagueBridge {
   };
   /** Tier list of a role (latest patch), filtered by server and rank (default: all, Master+). */
   getTierList(role: Position, filters?: TierListFilters): Promise<ApiResult<TierListResponse>>;
+  /** Matchups, duos and synergies of a tier list champion (fetched when it is selected). */
+  getTierListChampion(
+    role: Position,
+    championId: number,
+    filters?: TierListFilters,
+  ): Promise<ApiResult<TierListChampionResponse>>;
   /** Build of a champion in a role with no allies/enemies (tier list "View build"). */
   getGenericBuild(championId: number, role: Position): Promise<ApiResult<BuildResponse>>;
   onState(listener: (state: AppState) => void): () => void;

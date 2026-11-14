@@ -1,14 +1,25 @@
-/** GET /tierlist: loads the role's stats rows, then runs the pure tier list engine. */
+/**
+ * GET /tierlist and GET /tierlist/champion: load the stats rows, then run the pure tier list
+ * engine.
+ */
 import type { Queryable } from '@pick-league/db';
 import type {
   PatchId,
   Position,
+  TierListChampionQuery,
+  TierListChampionResponse,
   TierListFilters,
   TierListQuery,
   TierListRank,
   TierListResponse,
 } from '@pick-league/shared';
-import { buildTierList, DUO_ROLES, LANE_ROLES, type TierListData } from '../engine/index.ts';
+import {
+  buildTierList,
+  buildTierListChampion,
+  DUO_ROLES,
+  LANE_ROLES,
+  type TierListData,
+} from '../engine/index.ts';
 import { ApiError } from '../errors.ts';
 import * as repo from '../stats/repository.ts';
 import { patchContext } from './recommendations.ts';
@@ -33,22 +44,18 @@ async function loadRows(
   role: Position,
   segment: repo.TierListSegment | null,
 ): Promise<TierListRows> {
-  const [roleStats, vs, withRows, bans, patchMatches] = segment
+  const [roleStats, bans, patchMatches] = segment
     ? await Promise.all([
         repo.loadSegmentRoleStats(q, patches, role, segment),
-        repo.loadSegmentVsForRole(q, patches, role, LANE_ROLES[role], segment),
-        repo.loadSegmentWithForRole(q, patches, role, DUO_ROLES[role], segment),
         repo.loadSegmentBans(q, patches, segment),
         repo.loadSegmentTotals(q, patches, segment),
       ])
     : await Promise.all([
         repo.loadRoleStats(q, patches),
-        repo.loadVsForRole(q, patches, role, LANE_ROLES[role]),
-        repo.loadWithForRole(q, patches, role, DUO_ROLES[role]),
         repo.loadBans(q, patches),
         repo.loadPatchMatches(q, patches),
       ]);
-  return { roleStats, vs, with: withRows, bans, patchMatches };
+  return { roleStats, bans, patchMatches };
 }
 
 export async function tierList(q: Queryable, query: TierListQuery): Promise<TierListResponse> {
@@ -65,4 +72,39 @@ export async function tierList(q: Queryable, query: TierListQuery): Promise<Tier
     { currentPatch: ctx.current, previousPatch: ctx.previous, ...rows },
     filters,
   );
+}
+
+export async function tierListChampion(
+  q: Queryable,
+  query: TierListChampionQuery,
+): Promise<TierListChampionResponse> {
+  const { role, championId } = query;
+  const ctx = await patchContext(q, query.patch === 'latest' ? undefined : query.patch);
+  const filters: TierListFilters = { platform: query.platform, rank: query.rank };
+  const segment = tierListSegment(filters);
+  // The filtered views only hold lane opponents and duo partners: no synergies under filters.
+  const [roleStats, vs, withRows] = segment
+    ? await Promise.all([
+        repo.loadSegmentRoleStats(q, ctx.patches, role, segment),
+        repo.loadSegmentVsForRole(q, ctx.patches, role, LANE_ROLES[role], segment),
+        repo.loadSegmentWithForRole(q, ctx.patches, role, DUO_ROLES[role], segment),
+      ])
+    : await Promise.all([
+        repo.loadRoleStats(q, ctx.patches),
+        repo.loadLaneVsOfChampion(q, ctx.patches, role, championId, LANE_ROLES[role]),
+        repo.loadAlliesOfChampion(q, ctx.patches, role, championId),
+      ]);
+  const inRole = roleStats.filter((r) => r.position === role);
+  if (inRole.length === 0) throw new ApiError('NO_DATA', `No stats for role ${role} yet`);
+  if (!inRole.some((r) => r.championId === championId)) {
+    throw new ApiError('NOT_FOUND', `No games of champion ${championId} in role ${role}`);
+  }
+  const detail = buildTierListChampion(role, championId, {
+    currentPatch: ctx.current,
+    previousPatch: ctx.previous,
+    roleStats,
+    vs,
+    with: withRows,
+  });
+  return { ...detail, filters, synergies: segment ? null : detail.synergies };
 }

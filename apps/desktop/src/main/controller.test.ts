@@ -65,6 +65,7 @@ function setup() {
     statsStatus: async () => Promise.reject(new Error('no stats in tests')),
     statsRefresh: async () => Promise.reject(new Error('no stats in tests')),
     tierList: async () => Promise.reject(new Error('no tier list in tests')),
+    tierListChampion: async () => Promise.reject(new Error('no tier list in tests')),
   };
   const lcu: LcuApi = {
     getChampSelectSession: async () => null,
