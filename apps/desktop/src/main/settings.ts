@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { API_DEFAULT_URL, isPosition } from '@pick-league/shared';
 import type { Settings } from '../core/app-state.ts';
@@ -33,15 +33,92 @@ export function sanitizeSettings(raw: unknown): Settings {
   };
 }
 
-export async function loadSettings(path: string): Promise<Settings> {
+function errorText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * Settings saved at `path`; defaults when there are none yet. A file that cannot be read as
+ * settings is logged and kept next to it as `<path>.corrupt` before falling back to defaults.
+ */
+export async function loadSettings(
+  path: string,
+  log: (message: string) => void = () => undefined,
+): Promise<Settings> {
+  let text: string;
   try {
-    return sanitizeSettings(JSON.parse(await readFile(path, 'utf8')));
-  } catch {
+    text = await readFile(path, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      log(`settings not read (${errorText(e)}), using the defaults`);
+    }
+    return { ...DEFAULT_SETTINGS };
+  }
+  try {
+    return sanitizeSettings(JSON.parse(text));
+  } catch (e) {
+    const backup = `${path}.corrupt`;
+    const kept = await copyFile(path, backup).then(
+      () => `kept as ${backup}`,
+      (e2) => `no copy kept: ${errorText(e2)}`,
+    );
+    log(`settings file is corrupt (${errorText(e)}; ${kept}), using the defaults`);
     return { ...DEFAULT_SETTINGS };
   }
 }
 
-export async function saveSettings(path: string, settings: Settings): Promise<void> {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Replaces `path` in one step: never a half-written file, even if the app dies mid-write. */
+async function writeFileAtomic(path: string, text: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+  const tmp = `${path}.${process.pid}.tmp`;
+  await writeFile(tmp, text, 'utf8');
+  // Windows: an antivirus or indexer briefly holding the file makes the rename fail.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await rename(tmp, path);
+      return;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (attempt >= 5 || (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY')) {
+        await rm(tmp, { force: true }).catch(() => undefined);
+        throw e;
+      }
+      await sleep(20 * attempt);
+    }
+  }
+}
+
+/**
+ * Saves settings to `path`, one write at a time: a burst of saves (Ctrl + wheel zoom) ends with
+ * the last settings on disk, the ones in between are skipped. Each returned promise settles once
+ * its settings (or newer ones) are written; it rejects if that last write failed.
+ */
+export function createSettingsSaver(path: string): (settings: Settings) => Promise<void> {
+  let pending: Settings | null = null;
+  let flushing: Promise<void> | null = null;
+
+  async function flush(): Promise<void> {
+    let error: unknown = null;
+    while (pending) {
+      const next = pending;
+      pending = null;
+      try {
+        await writeFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`);
+        error = null;
+      } catch (e) {
+        error = e;
+      }
+    }
+    // Same synchronous step as the last `pending` check: a later save starts a new flush.
+    flushing = null;
+    if (error) throw error;
+  }
+
+  return (settings) => {
+    pending = settings;
+    flushing ??= flush();
+    return flushing;
+  };
 }

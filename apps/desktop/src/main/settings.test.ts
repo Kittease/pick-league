@@ -1,5 +1,65 @@
-import { describe, expect, test } from 'bun:test';
-import { DEFAULT_SETTINGS, sanitizeSettings } from './settings.ts';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  createSettingsSaver,
+  DEFAULT_SETTINGS,
+  loadSettings,
+  sanitizeSettings,
+} from './settings.ts';
+
+describe('settings file', () => {
+  let dir = '';
+  let path = '';
+  const logs: string[] = [];
+  const log = (message: string) => logs.push(message);
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'pickleague-settings-'));
+    path = join(dir, 'settings.json');
+    logs.length = 0;
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test('no file yet: the defaults, silently', async () => {
+    expect(await loadSettings(path, log)).toEqual(DEFAULT_SETTINGS);
+    expect(logs).toEqual([]);
+  });
+
+  test('a corrupt file is logged and kept aside before falling back to the defaults', async () => {
+    const broken = '{"autoApply": false, "zoom": 1.2';
+    await writeFile(path, broken);
+    expect(await loadSettings(path, log)).toEqual(DEFAULT_SETTINGS);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('corrupt');
+    expect(await readFile(`${path}.corrupt`, 'utf8')).toBe(broken);
+  });
+
+  test('saved settings load back', async () => {
+    const save = createSettingsSaver(path);
+    const settings = { ...DEFAULT_SETTINGS, autoApply: false, zoom: 1.5 };
+    await save(settings);
+    expect(await loadSettings(path, log)).toEqual(settings);
+    expect(logs).toEqual([]);
+  });
+
+  test('a burst of saves leaves the last settings on disk, as valid JSON', async () => {
+    const save = createSettingsSaver(join(dir, 'nested', 'settings.json'));
+    const zooms = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 1.75, 1.5];
+    await Promise.all(zooms.map((zoom) => save({ ...DEFAULT_SETTINGS, zoom })));
+    const text = await readFile(join(dir, 'nested', 'settings.json'), 'utf8');
+    expect(JSON.parse(text)).toEqual({ ...DEFAULT_SETTINGS, zoom: 1.5 });
+    // No temporary file left behind.
+    expect(await readdir(join(dir, 'nested'))).toEqual(['settings.json']);
+
+    // A save after the burst is written too.
+    await save({ ...DEFAULT_SETTINGS, zoom: 2 });
+    expect(await loadSettings(join(dir, 'nested', 'settings.json'))).toMatchObject({ zoom: 2 });
+  });
+});
 
 describe('sanitizeSettings', () => {
   test('Flash on F by default', () => {

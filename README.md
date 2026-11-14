@@ -91,7 +91,8 @@ bun run dev:desktop      # opens the app; start League whenever you like
 **API address.** By default the app talks to `http://localhost:3000` (the Docker stack on the
 same computer). If the stack runs on a server, open Settings (gear icon) and set
 `http://<vps-ip>:3000` — the port must be reachable from your computer. Settings are saved in
-the app's user data folder. `PICKLEAGUE_API_URL=http://<vps-ip>:3000` also overrides it for one
+the app's user data folder (`settings.json`; if it ever gets corrupted, the app starts with the
+defaults and keeps the broken file as `settings.json.corrupt`). `PICKLEAGUE_API_URL=http://<vps-ip>:3000` also overrides it for one
 run.
 
 **Window.** On Windows and Linux the app has no native title bar or menu: drag the window by

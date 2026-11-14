@@ -8,7 +8,7 @@ import { DEFAULT_ZOOM, stepZoom, zoomShortcut } from '../core/zoom.ts';
 import { createApiClient } from './api-client.ts';
 import { Controller } from './controller.ts';
 import { createRealLcuSource } from './lcu/real.ts';
-import { loadSettings, sanitizeSettings, saveSettings } from './settings.ts';
+import { createSettingsSaver, loadSettings, sanitizeSettings } from './settings.ts';
 
 app.setName('PickLeague');
 const log = (message: string) => console.log(`[pickleague] ${message}`);
@@ -155,7 +155,7 @@ function startDevCaptures(win: BrowserWindow): void {
 async function main(): Promise<void> {
   await app.whenReady();
   const settingsPath = join(app.getPath('userData'), 'settings.json');
-  const saved = await loadSettings(settingsPath);
+  const saved = await loadSettings(settingsPath, log);
   // PICKLEAGUE_API_URL overrides the saved address for this run (dev).
   const envApiUrl = process.env.PICKLEAGUE_API_URL;
   const settings = envApiUrl ? sanitizeSettings({ ...saved, apiUrl: envApiUrl }) : saved;
@@ -170,7 +170,7 @@ async function main(): Promise<void> {
       if (!latest) throw new Error('Data Dragon has no versions');
       return staticResponseFromDdragon(await ddragon.getStaticPatchData(latest.ddragonVersion));
     },
-    saveSettings: (s) => saveSettings(settingsPath, s),
+    saveSettings: createSettingsSaver(settingsPath),
     log,
   });
 
