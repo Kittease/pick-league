@@ -109,7 +109,8 @@ const sizes = await db<{ view: string; rows: number; size: string }[]>`
   SELECT c.relname AS view, c.reltuples::bigint::int AS rows,
          pg_size_pretty(pg_total_relation_size(c.oid)) AS size
   FROM pg_class c WHERE c.relkind = 'm'
-    AND c.relname IN ('stats_champion_vs', 'stats_champion_with', 'stats_tierlist_participants',
+    AND c.relname IN ('stats_champion_vs', 'stats_champion_with', 'stats_champion_lane_phase',
+      'stats_tierlist_participants',
       'stats_tierlist_vs', 'stats_tierlist_with', 'stats_tierlist_roles')
   ORDER BY c.relname`;
 console.table(sizes);
