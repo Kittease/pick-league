@@ -13,6 +13,7 @@
 import {
   claimEnrichment,
   claimPendingMatches,
+  clearWorkerAuthRejected,
   completeEnrichment,
   countEnrichmentQueue,
   countPendingMatches,
@@ -30,15 +31,18 @@ import {
   type MasteryInput,
   markMatchFailed,
   markMatchSkipped,
+  markWorkerAuthRejected,
   pickProbeMatch,
   playersNeedingDailyRefresh,
   playersWithListingRequested,
   type QueuedEnrichment,
   type QueuedMatch,
+  recordWorkerError,
   replaceMasteries,
   type SoloRankInput,
   skipPendingMatchesUpTo,
   startWorkerRun,
+  touchWorkerStatus,
   trackedPlayersNeverListed,
   updatePlayerRank,
   updatePlayerRiotId,
@@ -90,6 +94,8 @@ export interface SchedulerOptions {
   deferMs: number;
   /** Pause after an auth error (expired key) (default 5 min). */
   authErrorPauseMs: number;
+  /** `worker_status.heartbeat_at` is written this often while `start` runs (default 30 s). */
+  heartbeatMs: number;
   /**
    * A loop whose item hit a transient error (Riot 429/5xx, network, database) sleeps this long,
    * doubling with each consecutive one up to `maxTransientBackoffMs` (default 5 s → 5 min).
@@ -111,6 +117,7 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   idleMs: 10_000,
   deferMs: 15 * 60_000,
   authErrorPauseMs: 5 * 60_000,
+  heartbeatMs: 30_000,
   transientBackoffMs: 5_000,
   maxTransientBackoffMs: 5 * 60_000,
   maxTransientErrors: 10,
@@ -262,11 +269,14 @@ export class PlatformWorker {
     null;
   private lastError: string | null = null;
   private authPausedUntil = 0;
+  /** Whether Riot accepts the key, as last seen ('unknown' until the first response). */
+  private authState: 'unknown' | 'ok' | 'rejected' = 'unknown';
+  private statusWrites: Promise<void> = Promise.resolve();
 
   constructor(deps: PlatformWorkerDeps) {
     this.platform = deps.platform;
     this.db = deps.db;
-    this.riot = deps.riot;
+    this.riot = this.observeRiot(deps.riot);
     this.patches = deps.patches;
     this.log = (deps.log ?? silentLogger).child({ platform: deps.platform });
     this.clock = deps.clock ?? systemClock;
@@ -576,6 +586,7 @@ export class PlatformWorker {
   private async fail(matchId: string, error: string, maxAttempts: number): Promise<MatchOutcome> {
     const status = await markMatchFailed(this.db, matchId, error, maxAttempts);
     this.counters.matchesFailed++;
+    this.noteError('match', `${matchId} ${error}`);
     this.log.warn('match fetch failed', { matchId, error, status });
     return 'failed';
   }
@@ -588,6 +599,7 @@ export class PlatformWorker {
     const error = errorMessage(err);
     this.deferredUntil.set(matchId, this.clock.now() + this.opts.deferMs);
     this.counters.matchesRetried++;
+    this.noteError('match', `${matchId} ${error}`);
     let status: 'PENDING' | 'FAILED' = 'PENDING';
     try {
       status = await deferMatchAfterError(this.db, matchId, error, this.opts.maxTransientErrors);
@@ -681,7 +693,7 @@ export class PlatformWorker {
     await this.loadPendingListings();
     await this.openRun();
     const c = this.opts.concurrency;
-    const loops: Promise<void>[] = [this.ladderLoop(signal)];
+    const loops: Promise<void>[] = [this.heartbeatLoop(signal), this.ladderLoop(signal)];
     for (let i = 0; i < c.listing; i++) {
       loops.push(
         this.workLoop(
@@ -745,6 +757,7 @@ export class PlatformWorker {
     }
     await Promise.all(loops);
     await this.closeRun();
+    await this.statusWrites;
   }
 
   async progress(): Promise<PlatformProgress> {
@@ -827,7 +840,13 @@ export class PlatformWorker {
 
   private recordError(kind: string, err: unknown): void {
     this.lastError = `${kind}: ${errorMessage(err)}`;
+    this.noteError(kind, errorMessage(err));
     if (err instanceof RiotAuthError) {
+      if (this.authState !== 'rejected') {
+        this.authState = 'rejected';
+        const since = new Date(this.clock.now());
+        this.writeStatus(() => markWorkerAuthRejected(this.db, this.platform, since));
+      }
       if (this.clock.now() >= this.authPausedUntil) {
         this.log.error('Riot rejected the API key, pausing', {
           kind,
@@ -839,6 +858,56 @@ export class PlatformWorker {
       return;
     }
     this.log.error(`${kind} failed`, { error: errorMessage(err) });
+  }
+
+  // -------------------------------------------------------------------------
+  // worker_status
+  // -------------------------------------------------------------------------
+
+  /** Last error of this platform, for `worker_status` ('kind: message'). */
+  private noteError(kind: string, message: string): void {
+    const at = new Date(this.clock.now());
+    this.writeStatus(() => recordWorkerError(this.db, this.platform, `${kind}: ${message}`, at));
+  }
+
+  /** Any Riot response other than 401/403: the key works (clears a rejection, once). */
+  private riotAccepted(): void {
+    if (this.authState === 'ok') return;
+    this.authState = 'ok';
+    this.writeStatus(() => clearWorkerAuthRejected(this.db, this.platform));
+  }
+
+  /** Status writes run one after the other (in order) and never fail the caller. */
+  private writeStatus(write: () => Promise<void>): void {
+    this.statusWrites = this.statusWrites
+      .then(write)
+      .catch((err) => this.log.warn('worker status update failed', { error: errorMessage(err) }));
+  }
+
+  private async heartbeatLoop(signal: AbortSignal): Promise<void> {
+    while (!signal.aborted) {
+      const now = new Date(this.clock.now());
+      this.writeStatus(() => touchWorkerStatus(this.db, this.platform, now));
+      if (!(await this.sleep(this.opts.heartbeatMs, signal))) break;
+    }
+  }
+
+  /** The Riot client, reporting each successful response to `riotAccepted`. */
+  private observeRiot(riot: RiotApi): RiotApi {
+    const ok = <T>(p: Promise<T>): Promise<T> =>
+      p.then((v) => {
+        this.riotAccepted();
+        return v;
+      });
+    return {
+      getLeague: (...a) => ok(riot.getLeague(...a)),
+      getMatchIds: (...a) => ok(riot.getMatchIds(...a)),
+      getMatch: (...a) => ok(riot.getMatch(...a)),
+      getTimeline: (...a) => ok(riot.getTimeline(...a)),
+      getAccount: (...a) => ok(riot.getAccount(...a)),
+      getMasteries: (...a) => ok(riot.getMasteries(...a)),
+      getLeagueEntries: (...a) => ok(riot.getLeagueEntries(...a)),
+    };
   }
 
   private async waitForAuth(signal: AbortSignal): Promise<void> {

@@ -4,6 +4,7 @@ import {
   type Db,
   enqueueMatchIds,
   getMatchesSyncedUntil,
+  listWorkerStatus,
   migrate,
   upsertPatchStaticData,
 } from '@pick-league/db';
@@ -25,6 +26,7 @@ import {
   type MatchIdsQuery,
   type Priority,
   type RiotApi,
+  RiotAuthError,
   RiotHttpError,
   RiotNetworkError,
 } from '../riot/client.ts';
@@ -661,6 +663,42 @@ d('PlatformWorker (Postgres)', () => {
       await db`SELECT solo_tier, solo_division, solo_lp FROM players WHERE puuid = ${e?.puuid as string}`;
     expect(r).toEqual({ solo_tier: 'DIAMOND', solo_division: 2, solo_lp: 42 });
     expect(riot.calls).toContain(`entries:${e?.puuid}:1`);
+  });
+
+  test('worker_status: heartbeat, a rejected key is flagged until Riot answers again', async () => {
+    const w = new PlatformWorker({
+      platform: 'EUW1',
+      db,
+      riot,
+      patches,
+      clock: fixedClock,
+      options: { idleMs: 10, authErrorPauseMs: 50, masterPlayers: 0 },
+    });
+    const auth = () => new RiotAuthError(401, 'league-v4', '/x');
+    riot.errors.set('league:CHALLENGER', [auth()]);
+    riot.errors.set('league:GRANDMASTER', [auth()]);
+    const status = async () => (await listWorkerStatus(db))[0];
+    const waitFor = async (cond: () => Promise<boolean>) => {
+      for (let i = 0; i < 200 && !(await cond()); i++) await Bun.sleep(20);
+    };
+
+    const ac = new AbortController();
+    const running = w.start(ac.signal);
+    await waitFor(async () => (await status())?.authRejectedSince != null);
+    const rejected = await status();
+    expect(rejected?.authRejectedSince).toEqual(new Date(NOW));
+    expect(rejected?.heartbeatAt).toEqual(new Date(NOW));
+    expect(rejected?.lastError).toStartWith('ladder: Riot API rejected the key');
+
+    // The next successful Riot response clears it.
+    riot.matches.set('EUW1_7000000500', makeMatch('EUW1_7000000500', '15.22.715.1234'));
+    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000500']);
+    await waitFor(async () => (await status())?.authRejectedSince === null);
+    ac.abort();
+    await running;
+    expect(riot.calls).toContain('match:EUW1_7000000500');
+    expect((await status())?.authRejectedSince).toBeNull();
+    expect((await status())?.lastError).toStartWith('ladder:');
   });
 
   test('start(): ladder → listing → matches → enrichment, then a clean stop with a worker_runs row', async () => {
