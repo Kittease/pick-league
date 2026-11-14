@@ -77,7 +77,10 @@ bun run dev:desktop      # opens the app; start League whenever you like
 - The header shows how fresh the API's stats are ("Stats updated 12 min ago", plus "+N new"
   when the worker stored matches the stats don't include yet). The refresh button next to it asks
   the API to recompute them now — handy right before champion select; picks and build reload
-  when it is done. The API refreshes on its own every 15 minutes anyway.
+  when it is done. The API refreshes on its own every 15 minutes anyway. When data collection
+  stopped, the header says so in red with the time since, and a line under it says how to fix
+  it: "Riot key rejected" (put a new key in `.env`, then run `docker compose up -d`) or
+  "Collection stopped" (the worker is not running; `docker compose up -d` starts it).
 - It never picks, bans, locks in or accepts for you, and never shows other players' names.
 - **Tier list** (left rail, shown whenever you are not in champion select): best picks per lane
   with tier (S–D), win/pick/ban rates, confidence and your mastery; filter by server (all, KR,
@@ -114,7 +117,10 @@ current OS into `apps/desktop/dist/` (unsigned).
 
 **Troubleshooting.** "League client not found": start League (the app retries every few
 seconds). "Cannot reach the API": check the address in Settings and that `docker compose ps`
-shows the api running. "No data yet": the worker needs time to collect matches.
+shows the api running. "No data yet": the worker needs time to collect matches. "Riot key
+rejected": Riot development keys expire every 24 h; paste a new one into `.env`, then run
+`docker compose up -d` (it recreates the worker with the new key; a plain restart keeps the old
+one).
 
 ## Development
 
@@ -157,7 +163,7 @@ These commands read `DATABASE_URL` (and the other settings) from the root `.env`
 | `GET /static/:patch` | champions, items, runes, stat shards, summoner spells (`latest` = newest patch) |
 | `POST /recommendations/picks` | ranked champions for a role, with reasons |
 | `POST /recommendations/build` | items, runes, summoner spells and skill order, with reasons |
-| `GET /stats/status` | `{ refreshing, lastRefreshedAt, lastRefreshDurationMs, matchesIncluded, matchesStored, pendingMatches }` |
+| `GET /stats/status` | `{ refreshing, lastRefreshedAt, lastRefreshDurationMs, matchesIncluded, matchesStored, pendingMatches, collection }`; `collection` = `{ state, platforms }`, `state` one of `collecting`, `key_rejected` (Riot rejects the key), `stalled` (no worker heartbeat for 3 min), `unknown` (no worker status yet); `platforms` = `[{ platform, heartbeatAt, authRejectedSince, lastError, lastErrorAt, lastMatchStoredAt }]` |
 | `POST /stats/refresh` | starts a background stats refresh: `202 { started: true }`, or `200 { started: false, reason }` with `up_to_date`, `already_running` or `cooldown` (+ `retryAfterSeconds`) |
 | `GET /tierlist?role=UTILITY&patch=latest&platform=ALL&rank=MASTER` | tier list of a role: tiers, win/pick/ban rates, confidence. Optional filters (echoed as `filters`): `platform` = `ALL` (default), `KR`, `EUW1`, `NA1`, `VN2`; `rank` = `MASTER` (Master+, default: every player), `GRANDMASTER` (Grandmaster+), `CHALLENGER` (Challenger only), on each counted player's current solo rank |
 | `GET /tierlist/champion?role=UTILITY&championId=111&patch=latest` | one champion of the tier list: every lane matchup, duo partner and other ally (synergy) with 5+ matchups, best first, with shrunk win-rate delta, win rate and sample size. Same `platform`/`rank` filters; `synergies` is `null` when filtered |
