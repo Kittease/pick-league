@@ -19,6 +19,7 @@ import {
   type DailyRefreshCandidate,
   type Db,
   deferMatch,
+  deferMatchAfterError,
   enqueueMatchIds,
   failEnrichment,
   finishWorkerRun,
@@ -58,6 +59,7 @@ import { errorMessage, type Logger, silentLogger } from '../log.ts';
 import { MatchParseError, parseMatch } from '../parser/parse-match.ts';
 import type { PatchVerdict } from '../patches.ts';
 import { PRIORITY, type RiotApi, RiotAuthError } from '../riot/client.ts';
+import { classifyError, DeterministicError } from './errors.ts';
 import { WorkSource } from './work-source.ts';
 
 const HOUR = 3_600_000;
@@ -82,6 +84,14 @@ export interface SchedulerOptions {
   deferMs: number;
   /** Pause after an auth error (expired key) (default 5 min). */
   authErrorPauseMs: number;
+  /**
+   * A loop whose item hit a transient error (Riot 429/5xx, network, database) sleeps this long,
+   * doubling with each consecutive one up to `maxTransientBackoffMs` (default 5 s → 5 min).
+   */
+  transientBackoffMs: number;
+  maxTransientBackoffMs: number;
+  /** A match deferred this many times by transient errors becomes FAILED (default 10). */
+  maxTransientErrors: number;
   concurrency: { listing: number; match: number; daily: number; enrichment: number };
   /** Master players tracked besides Challenger + Grandmaster: the top N by LP (default 1000). */
   masterPlayers: number;
@@ -94,6 +104,9 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   idleMs: 10_000,
   deferMs: 15 * 60_000,
   authErrorPauseMs: 5 * 60_000,
+  transientBackoffMs: 5_000,
+  maxTransientBackoffMs: 5 * 60_000,
+  maxTransientErrors: 10,
   concurrency: { listing: 2, match: 3, daily: 1, enrichment: 2 },
   masterPlayers: DEFAULT_MASTER_PLAYERS,
 };
@@ -118,7 +131,13 @@ export interface PlatformWorkerDeps {
   options?: Partial<SchedulerOptions>;
 }
 
-export type MatchOutcome = 'added' | 'exists' | 'skipped' | 'deferred' | 'failed';
+/** 'retry': transient error, the match was deferred without counting an attempt. */
+export type MatchOutcome = 'added' | 'exists' | 'skipped' | 'deferred' | 'retry' | 'failed';
+
+/** Deterministic errors (404, parse, other 4xx) fail a match on its second attempt. */
+const DETERMINISTIC_MAX_ATTEMPTS = 2;
+/** Unclassified errors fail a match on its fifth attempt. */
+const UNKNOWN_MAX_ATTEMPTS = 5;
 
 export interface PlatformProgress {
   platform: Platform;
@@ -129,6 +148,7 @@ export interface PlatformProgress {
   playersPolled: number;
   matchesSkipped: number;
   matchesFailed: number;
+  matchesRetried: number;
   enriched: number;
   dailyRefreshed: number;
 }
@@ -212,6 +232,7 @@ export class PlatformWorker {
     playersPolled: 0,
     matchesSkipped: 0,
     matchesFailed: 0,
+    matchesRetried: 0,
     enriched: 0,
     dailyRefreshed: 0,
   };
@@ -348,7 +369,27 @@ export class PlatformWorker {
   // Level 3: match + timeline
   // -------------------------------------------------------------------------
 
+  /**
+   * Fetches, parses and stores one queued match. Errors are classified (`classifyError`):
+   * transient ones defer the match without counting an attempt ('retry'), deterministic ones fail
+   * it for good on the second attempt, unknown ones on the fifth. Abort and auth errors are thrown.
+   */
   async processMatch(queued: QueuedMatch, signal?: AbortSignal): Promise<MatchOutcome> {
+    try {
+      return await this.fetchMatch(queued, signal);
+    } catch (err) {
+      const kind = classifyError(err);
+      if (kind === 'abort' || kind === 'auth') throw err;
+      if (kind === 'transient') return this.retryLater(queued.matchId, err);
+      return this.fail(
+        queued.matchId,
+        errorMessage(err),
+        kind === 'deterministic' ? DETERMINISTIC_MAX_ATTEMPTS : UNKNOWN_MAX_ATTEMPTS,
+      );
+    }
+  }
+
+  private async fetchMatch(queued: QueuedMatch, signal?: AbortSignal): Promise<MatchOutcome> {
     const { matchId } = queued;
     const gameId = gameIdOf(matchId);
     if (this.tooNewGeneration !== this.patches.generation) {
@@ -371,12 +412,12 @@ export class PlatformWorker {
     }
 
     const match = await this.riot.getMatch(this.platform, matchId, signal);
-    if (match === null) return this.fail(matchId, 'match not found (404)');
+    if (match === null) throw new DeterministicError('match not found (404)');
     let patch: string;
     try {
       patch = patchFromGameVersion(match.info?.gameVersion ?? '');
     } catch (err) {
-      return this.fail(matchId, errorMessage(err));
+      throw new DeterministicError(errorMessage(err));
     }
 
     const verdict = this.patches.classify(patch);
@@ -402,12 +443,12 @@ export class PlatformWorker {
     }
 
     const timeline = await this.riot.getTimeline(this.platform, matchId, signal);
-    if (timeline === null) return this.fail(matchId, 'timeline not found (404)');
+    if (timeline === null) throw new DeterministicError('timeline not found (404)');
     let parsed: ReturnType<typeof parseMatch>;
     try {
       parsed = parseMatch(match, timeline);
     } catch (err) {
-      if (err instanceof MatchParseError) return this.fail(matchId, `parse: ${err.message}`);
+      if (err instanceof MatchParseError) throw new DeterministicError(`parse: ${err.message}`);
       throw err;
     }
     const result = await insertParsedMatch(this.db, parsed);
@@ -428,11 +469,36 @@ export class PlatformWorker {
     return gameId !== null && gameId <= this.oldPatchMaxGameId;
   }
 
-  private async fail(matchId: string, error: string): Promise<MatchOutcome> {
-    const status = await markMatchFailed(this.db, matchId, error);
+  /** Counts an attempt; FAILED once `maxAttempts` is reached. */
+  private async fail(matchId: string, error: string, maxAttempts: number): Promise<MatchOutcome> {
+    const status = await markMatchFailed(this.db, matchId, error, maxAttempts);
     this.counters.matchesFailed++;
     this.log.warn('match fetch failed', { matchId, error, status });
     return 'failed';
+  }
+
+  /**
+   * Transient error: the match goes to the back of the queue without counting an attempt (and is
+   * not claimed again for `deferMs`), up to `maxTransientErrors` times.
+   */
+  private async retryLater(matchId: string, err: unknown): Promise<MatchOutcome> {
+    const error = errorMessage(err);
+    this.deferredUntil.set(matchId, this.clock.now() + this.opts.deferMs);
+    this.counters.matchesRetried++;
+    let status: 'PENDING' | 'FAILED' = 'PENDING';
+    try {
+      status = await deferMatchAfterError(this.db, matchId, error, this.opts.maxTransientErrors);
+    } catch (dbErr) {
+      // The database itself is down: the row stays PENDING as it is.
+      if (classifyError(dbErr) !== 'transient') throw dbErr;
+    }
+    if (status === 'FAILED') {
+      this.counters.matchesFailed++;
+      this.log.warn('match fetch failed: too many transient errors', { matchId, error });
+      return 'failed';
+    }
+    this.log.warn('match deferred after a transient error', { matchId, error });
+    return 'retry';
   }
 
   // -------------------------------------------------------------------------
@@ -519,7 +585,10 @@ export class PlatformWorker {
           'listing',
           signal,
           async () => this.nextPlayedPlayer(),
-          (p) => this.listPlayerMatches(p, signal),
+          async (p) => {
+            await this.listPlayerMatches(p, signal);
+            return 'ok';
+          },
           (p, ok) => {
             this.listingInFlight.delete(p);
             if (!ok) this.played.add(p);
@@ -533,17 +602,7 @@ export class PlatformWorker {
           'match',
           signal,
           () => this.matchSource.next(),
-          async (m) => {
-            try {
-              await this.processMatch(m, signal);
-            } catch (err) {
-              if (!isAbortError(err) && !(err instanceof RiotAuthError)) {
-                await this.fail(m.matchId, errorMessage(err));
-                return;
-              }
-              throw err;
-            }
-          },
+          async (m) => ((await this.processMatch(m, signal)) === 'retry' ? 'retry' : 'ok'),
           (m) => this.matchSource.release(m),
         ),
       );
@@ -557,6 +616,7 @@ export class PlatformWorker {
           async (d) => {
             try {
               await this.dailyRefresh(d, signal);
+              return 'ok';
             } catch (err) {
               this.dailyCooldown.set(d.puuid, this.clock.now() + HOUR);
               throw err;
@@ -572,7 +632,10 @@ export class PlatformWorker {
           'enrichment',
           signal,
           () => this.enrichmentSource.next(),
-          (e) => this.enrich(e, signal),
+          async (e) => {
+            await this.enrich(e, signal);
+            return 'ok';
+          },
           (e) => this.enrichmentSource.release(e),
         ),
       );
@@ -623,9 +686,11 @@ export class PlatformWorker {
     kind: string,
     signal: AbortSignal,
     next: () => Promise<T | null>,
-    handle: (item: T) => Promise<unknown>,
+    handle: (item: T) => Promise<'ok' | 'retry'>,
     release: (item: T, ok: boolean) => void,
   ): Promise<void> {
+    /** Consecutive items of this loop that hit a transient error. */
+    let transientStreak = 0;
     while (!signal.aborted) {
       let item: T | null = null;
       try {
@@ -642,13 +707,27 @@ export class PlatformWorker {
         continue;
       }
       let ok = false;
+      let transient = false;
       try {
-        await handle(item);
+        transient = (await handle(item)) === 'retry';
         ok = true;
       } catch (err) {
-        if (!isAbortError(err)) this.recordError(kind, err);
+        if (!isAbortError(err)) {
+          this.recordError(kind, err);
+          transient = classifyError(err) === 'transient';
+        }
       } finally {
         release(item, ok);
+      }
+      if (transient) {
+        transientStreak++;
+        const backoff = Math.min(
+          this.opts.transientBackoffMs * 2 ** Math.min(transientStreak - 1, 20),
+          this.opts.maxTransientBackoffMs,
+        );
+        if (!(await this.sleep(backoff, signal))) break;
+      } else if (ok) {
+        transientStreak = 0;
       }
     }
   }

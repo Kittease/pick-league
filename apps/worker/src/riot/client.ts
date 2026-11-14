@@ -4,7 +4,8 @@
  * - 200 → parsed JSON; 404 → null ("not found" is a normal result).
  * - 429 → the scope named by `X-Rate-Limit-Type` is blocked for `Retry-After`; without
  *   `Retry-After` (service/underlying limit) the method backs off exponentially. Then retried.
- * - 5xx and network errors → retried with exponential backoff.
+ * - 5xx and network errors → retried with exponential backoff, then RiotHttpError /
+ *   RiotNetworkError.
  * - 401/403 → RiotAuthError (bad or expired key), not retried.
  *
  * The API key only ever goes into the `X-Riot-Token` header: it is never logged.
@@ -55,6 +56,21 @@ export class RiotAuthError extends RiotHttpError {
   constructor(status: number, method: string, path: string) {
     super(status, method, path);
     this.message = `Riot API rejected the key (HTTP ${status}): RIOT_API_KEY is invalid or expired`;
+  }
+}
+
+/** Network error or timeout that outlasted the retries (the cause is kept). */
+export class RiotNetworkError extends Error {
+  override name = 'RiotNetworkError';
+  constructor(
+    readonly method: string,
+    readonly path: string,
+    cause: unknown,
+  ) {
+    super(
+      `Riot API ${method} network error (${path}): ${isAbortError(cause) ? 'timeout' : cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
   }
 }
 
@@ -302,7 +318,9 @@ export class RiotClient implements RiotApi {
       } catch (err) {
         if (signal?.aborted) throw abortError();
         serverFailures++;
-        if (serverFailures > (this.options.maxServerRetries ?? 4)) throw err;
+        if (serverFailures > (this.options.maxServerRetries ?? 4)) {
+          throw new RiotNetworkError(method, path, err);
+        }
         const wait = base * 2 ** (serverFailures - 1);
         this.log.warn('riot network error, retrying', {
           host: limiter.host,

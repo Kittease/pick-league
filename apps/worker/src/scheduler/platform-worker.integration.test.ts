@@ -20,7 +20,13 @@ import type {
 import matchFixture from '../parser/fixtures/match.json';
 import timelineFixture from '../parser/fixtures/timeline.json';
 import type { PatchVerdict } from '../patches.ts';
-import type { MatchIdsQuery, Priority, RiotApi } from '../riot/client.ts';
+import {
+  type MatchIdsQuery,
+  type Priority,
+  type RiotApi,
+  RiotHttpError,
+  RiotNetworkError,
+} from '../riot/client.ts';
 import { type PatchView, PlatformWorker } from './platform-worker.ts';
 
 const URL = process.env.DATABASE_URL_TEST;
@@ -71,9 +77,17 @@ class FakeRiot implements RiotApi {
   matchIds = new Map<string, string[]>();
   idQueries: MatchIdsQuery[] = [];
   matches = new Map<string, { match: MatchDto; timeline: TimelineDto }>();
+  /** Errors thrown by the next calls, keyed like `calls` ('match:EUW1_1', 'league:CHALLENGER'…). */
+  errors = new Map<string, Error[]>();
+
+  private maybeThrow(call: string) {
+    const err = this.errors.get(call)?.shift();
+    if (err) throw err;
+  }
 
   async getLeague(_p: Platform, tier: LadderTier) {
     this.calls.push(`league:${tier}`);
+    this.maybeThrow(`league:${tier}`);
     return this.leagues[tier];
   }
   async getMatchIds(_p: Platform, puuid: string, q: MatchIdsQuery) {
@@ -85,10 +99,12 @@ class FakeRiot implements RiotApi {
   }
   async getMatch(_p: Platform, id: string) {
     this.calls.push(`match:${id}`);
+    this.maybeThrow(`match:${id}`);
     return this.matches.get(id)?.match ?? null;
   }
   async getTimeline(_p: Platform, id: string) {
     this.calls.push(`timeline:${id}`);
+    this.maybeThrow(`timeline:${id}`);
     return this.matches.get(id)?.timeline ?? null;
   }
   async getAccount(_p: Platform, puuid: string, priority: Priority): Promise<AccountDto | null> {
@@ -379,13 +395,123 @@ d('PlatformWorker (Postgres)', () => {
     expect(rows[0]?.last_error).toContain('15.23');
   });
 
-  test('missing match → failed attempt', async () => {
+  const queueRow = async (matchId: string) => {
+    const [row] = await db`
+      SELECT status, attempts, transient_errors FROM match_fetch_queue WHERE match_id = ${matchId}`;
+    return row;
+  };
+  const queued = (matchId: string) => ({ matchId, platform: 'EUW1' as const, attempts: 0 });
+
+  test('missing match → failed attempt, FAILED on the second one', async () => {
     await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000777']);
-    expect(
-      await worker.processMatch({ matchId: 'EUW1_7000000777', platform: 'EUW1', attempts: 0 }),
-    ).toBe('failed');
-    const [row] = await db`SELECT attempts, status FROM match_fetch_queue`;
-    expect(row).toMatchObject({ attempts: 1, status: 'PENDING' });
+    expect(await worker.processMatch(queued('EUW1_7000000777'))).toBe('failed');
+    expect(await queueRow('EUW1_7000000777')).toMatchObject({ attempts: 1, status: 'PENDING' });
+    expect(await worker.processMatch(queued('EUW1_7000000777'))).toBe('failed');
+    expect(await queueRow('EUW1_7000000777')).toMatchObject({ attempts: 2, status: 'FAILED' });
+  });
+
+  test('deterministic errors (other 4xx, parse error) fail a match on its second attempt', async () => {
+    const broken = makeMatch('EUW1_7000000601', '15.22.1.1');
+    broken.match.info.participants = broken.match.info.participants.slice(0, 9);
+    riot.matches.set('EUW1_7000000601', broken);
+    riot.errors.set('match:EUW1_7000000602', [
+      new RiotHttpError(400, 'match-v5.match', '/x'),
+      new RiotHttpError(400, 'match-v5.match', '/x'),
+    ]);
+    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000601', 'EUW1_7000000602']);
+    for (const id of ['EUW1_7000000601', 'EUW1_7000000602']) {
+      expect(await worker.processMatch(queued(id))).toBe('failed');
+      expect(await worker.processMatch(queued(id))).toBe('failed');
+      expect(await queueRow(id)).toMatchObject({
+        attempts: 2,
+        transient_errors: 0,
+        status: 'FAILED',
+      });
+    }
+    expect(riot.calls.filter((c) => c === 'match:EUW1_7000000601')).toHaveLength(2);
+  });
+
+  test('transient errors (5xx, 429, network) defer a match without counting attempts, up to a cap', async () => {
+    const capped = new PlatformWorker({
+      platform: 'EUW1',
+      db,
+      riot,
+      patches,
+      clock: fixedClock,
+      options: { maxTransientErrors: 3 },
+    });
+    riot.matches.set('EUW1_7000000700', makeMatch('EUW1_7000000700', '15.22.1.1'));
+    riot.errors.set('match:EUW1_7000000700', [
+      new RiotHttpError(503, 'match-v5.match', '/x'),
+      new RiotHttpError(429, 'match-v5.match', '/x'),
+    ]);
+    riot.errors.set('timeline:EUW1_7000000700', [
+      new RiotNetworkError('match-v5.timeline', '/x', new TypeError('fetch failed')),
+    ]);
+    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000700', 'EUW1_7000000701']);
+    for (let i = 0; i < 3; i++) {
+      expect(await capped.processMatch(queued('EUW1_7000000700'))).toBe('retry');
+    }
+    expect(await queueRow('EUW1_7000000700')).toMatchObject({
+      attempts: 0,
+      transient_errors: 3,
+      status: 'PENDING',
+    });
+    // Once Riot answers again, it is stored.
+    expect(await capped.processMatch(queued('EUW1_7000000700'))).toBe('added');
+
+    // Safety cap: a match that keeps failing transiently ends up FAILED.
+    riot.errors.set(
+      'match:EUW1_7000000701',
+      Array.from({ length: 3 }, () => new RiotHttpError(500, 'match-v5.match', '/x')),
+    );
+    expect(await capped.processMatch(queued('EUW1_7000000701'))).toBe('retry');
+    expect(await capped.processMatch(queued('EUW1_7000000701'))).toBe('retry');
+    expect(await capped.processMatch(queued('EUW1_7000000701'))).toBe('failed');
+    expect(await queueRow('EUW1_7000000701')).toMatchObject({ attempts: 0, status: 'FAILED' });
+  });
+
+  test('a loop backs off after transient errors, exponentially', async () => {
+    const sleeps: number[] = [];
+    const recordingClock = {
+      ...fixedClock,
+      sleep: (ms: number, signal?: AbortSignal) => {
+        sleeps.push(ms);
+        return fixedClock.sleep(ms, signal);
+      },
+    };
+    const backoff = new PlatformWorker({
+      platform: 'EUW1',
+      db,
+      riot,
+      patches,
+      clock: recordingClock,
+      options: {
+        idleMs: 10,
+        transientBackoffMs: 1_000,
+        maxTransientBackoffMs: 3_000,
+        concurrency: { listing: 0, match: 1, daily: 0, enrichment: 0 },
+      },
+    });
+    const ids = Array.from({ length: 4 }, (_, i) => `EUW1_70000008${String(i).padStart(2, '0')}`);
+    for (const id of ids) riot.errors.set(`match:${id}`, [new RiotHttpError(503, 'm', '/x')]);
+    await enqueueMatchIds(db, 'EUW1', ids);
+    const ac = new AbortController();
+    const running = backoff.start(ac.signal);
+    const backoffs = () => sleeps.filter((ms) => ms >= 1_000 && ms < 60_000);
+    for (let i = 0; i < 200 && backoffs().length < 4; i++) {
+      await Bun.sleep(25);
+    }
+    ac.abort();
+    await running;
+    expect(backoffs()).toEqual([1_000, 2_000, 3_000, 3_000]);
+    for (const id of ids) {
+      expect(await queueRow(id)).toMatchObject({
+        attempts: 0,
+        transient_errors: 1,
+        status: 'PENDING',
+      });
+    }
   });
 
   test('daily refresh and enrichment use their priorities and store the data', async () => {

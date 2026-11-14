@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { FakeClock, flushMicrotasks } from '../clock.ts';
-import { PRIORITY, RiotAuthError, RiotClient, RiotHttpError } from './client.ts';
+import { PRIORITY, RiotAuthError, RiotClient, RiotHttpError, RiotNetworkError } from './client.ts';
 
 const KEY = 'RGAPI-00000000-0000-0000-0000-000000000000';
 
@@ -123,6 +123,20 @@ describe('RiotClient', () => {
     expect(calls).toHaveLength(5);
     expect(error).toBeInstanceOf(RiotHttpError);
     expect((error as RiotHttpError).status).toBe(503);
+  });
+
+  test('network errors are retried, then fail as RiotNetworkError', async () => {
+    const { client, clock, calls } = setup(() => {
+      throw new TypeError('fetch failed');
+    });
+    let error: unknown;
+    client.getMatch('EUW1', 'EUW1_1').catch((e) => {
+      error = e;
+    });
+    for (let i = 0; i < 10; i++) await clock.advance(10_000);
+    expect(calls).toHaveLength(5);
+    expect(error).toBeInstanceOf(RiotNetworkError);
+    expect((error as Error).message).toContain('fetch failed');
   });
 
   test('5xx then success', async () => {
