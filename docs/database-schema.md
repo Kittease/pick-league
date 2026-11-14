@@ -144,7 +144,8 @@ CREATE TABLE players (
   tag_line              text,
   name_updated_at       timestamptz,
   -- solo queue rank: ladder players get it from ladder_entries;
-  -- others from league-v4 entries/by-puuid (low priority)
+  -- others from league-v4 entries/by-puuid (low priority).
+  -- Also the tier list rank filter (current tier, read when the stats views are refreshed).
   solo_tier             solo_tier,
   solo_division         smallint,            -- 1..4, NULL for Master+
   solo_lp               integer,
@@ -380,6 +381,39 @@ CREATE TABLE worker_runs (
   error         text
 );
 ```
+
+## Stats views (owned by apps/api)
+
+Materialized views computed from the tables above, refreshed by the API in the order of
+`STATS_REFRESH_ORDER` (`apps/api/src/stats/refresh.ts`): served views have a unique index and are
+refreshed `CONCURRENTLY`, intermediate ones plainly. All are keyed by patch and exclude remakes.
+Definitions: `packages/db/migrations/0002_stats_views.sql` (traits, compositions, champion+role
+baselines, pairwise vs/with, build choices), `0003_stats_bans.sql` (tier list ban rates) and
+`0006_tierlist_filters.sql` (tier list server/rank filters, below).
+
+```sql
+-- rank_level = 2 CHALLENGER, 1 GRANDMASTER, 0 anything else (MASTER, below Master, unknown),
+-- from players.solo_tier at refresh time. Filter "Grandmaster+" = rank_level >= 1,
+-- "Challenger only" = 2; "Master+" (default) and "all servers" read the unfiltered views.
+
+-- Intermediate: one row per participant of a non-remake match (position may be NULL).
+stats_tierlist_participants (patch, platform, rank_level, match_id, participant_id,
+                             team_id, champion_id, position, win)           -- unique (match_id, participant_id)
+
+-- Served, summed over the requested (platform, rank_level) segments at request time.
+stats_tierlist_roles  (patch, platform, rank_level, position, champion_id, games, wins)
+stats_tierlist_vs     (patch, platform, rank_level, position, champion_id,
+                       enemy_position, enemy_id, games, wins)   -- lane opponents only (LANE_ROLES)
+stats_tierlist_with   (patch, platform, rank_level, position, champion_id,
+                       ally_position, ally_id, games, wins)     -- duo partners only (DUO_ROLES)
+stats_tierlist_bans   (patch, platform, rank_level, champion_id,
+                       participants)  -- counted participants whose match banned the champion
+stats_tierlist_totals (patch, platform, rank_level, participants)  -- ban rate denominator
+```
+
+The segment of a vs/with row is the one of the champion's own player. Ban rates under filters are
+weighted per counted participant (a match counts once per counted player in it), which is exactly
+banned matches / matches when every participant of a server is counted.
 
 ## Not in the database
 
