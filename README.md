@@ -62,6 +62,10 @@ bun run dev:desktop      # opens the app; start League whenever you like
   picked and not-owned champions are left out.
 - When you lock in it switches to the build: items in buy order (starting, early, core,
   situational), runes, summoner spells and skill order, every element with its reasons.
+- **Until the game ends** it keeps that champion select on screen, marked "In game": your
+  champion and role, both teams and the build as it was when champion select ended (nothing is
+  fetched or applied again). It goes back to the tier list once the game is over; a dodged
+  champion select is dropped right away. Opened mid-game, the app reads the teams from the client.
 - Runes and summoner spells are **applied automatically when you lock in** (setting
   "Apply runes and spells on lock-in", on by default; an "Apply runes + spells" button does it
   by hand). Runes go to a page named `PickLeague`; if every page slot holds one of your pages,
@@ -85,8 +89,8 @@ the app's user data folder. `PICKLEAGUE_API_URL=http://<vps-ip>:3000` also overr
 run.
 
 **Demo mode, without League.** `bun run dev:desktop:mock` (or the "Demo mode" switch in
-Settings) replays a scripted champion select with a fake account, fake owned champions and
-mastery, and fake rune pages. To also run without the API stack, start the dev-only fake API,
+Settings) replays a scripted champion select, then a 40-second fake game, with a fake account,
+fake owned champions and mastery, and fake rune pages. To also run without the API stack, start the dev-only fake API,
 which answers with made-up numbers in the contract's shape:
 
 ```sh
