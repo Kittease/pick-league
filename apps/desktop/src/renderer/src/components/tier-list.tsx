@@ -59,7 +59,7 @@ import { ConfidencePips } from './picks-panel';
 import { DeltaText } from './reasons';
 import { ChampionRelations } from './tier-list-relations';
 
-/** A role's tier list is re-fetched after this long (the API refreshes its stats every ~15 min). */
+/** A role's tier list is re-fetched after this long (the API refreshes its stats hourly, or on demand). */
 const CACHE_MS = 5 * 60_000;
 
 type Loaded<T> =

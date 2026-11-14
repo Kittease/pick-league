@@ -37,7 +37,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     rateLimitPerMinute: int(env, 'RATE_LIMIT_PER_MINUTE', 120),
     rateLimitBurst: int(env, 'RATE_LIMIT_BURST', 30),
     trustProxy: env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true',
-    statsRefreshIntervalMs: int(env, 'STATS_REFRESH_MINUTES', 15) * 60_000,
+    statsRefreshIntervalMs: int(env, 'STATS_REFRESH_MINUTES', 60) * 60_000,
     statsManualCooldownMs: int(env, 'STATS_MANUAL_REFRESH_COOLDOWN_SECONDS', 60) * 1000,
   };
 }

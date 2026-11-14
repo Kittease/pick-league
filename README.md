@@ -80,7 +80,7 @@ bun run dev:desktop      # opens the app; start League whenever you like
 - The header shows how fresh the API's stats are ("Stats updated 12 min ago", plus "+N new"
   when the worker stored matches the stats don't include yet). The refresh button next to it asks
   the API to recompute them now — handy right before champion select; picks and build reload
-  when it is done. The API refreshes on its own every 15 minutes anyway. When data collection
+  when it is done. The API refreshes on its own every hour anyway. When data collection
   stopped, the header says so in red with the time since, and a line under it says how to fix
   it: "Riot key rejected" (put a new key in `.env`, then run `docker compose up -d`) or
   "Collection stopped" (the worker is not running; `docker compose up -d` starts it).
@@ -188,7 +188,7 @@ toward 0 by sample size, 1v1 for top / jungle / mid and 2v2 for the bot lane (ow
 both enemy bot laners).
 
 The API owns the stats layer: materialized views (`packages/db/migrations/0002_stats_views.sql`)
-refreshed in the background every `STATS_REFRESH_MINUTES` (default 15) when matches changed.
+refreshed in the background every `STATS_REFRESH_MINUTES` (default 60) when matches changed.
 `POST /stats/refresh` triggers the same refresh on demand. It is public, so besides the per-IP
 rate limit it refuses to start less than `STATS_MANUAL_REFRESH_COOLDOWN_SECONDS` (60) after the
 previous refresh finished, and the Postgres advisory lock keeps timer and manual runs (on any
@@ -197,7 +197,7 @@ Engine weights and thresholds live in `apps/api/src/engine/config.ts`.
 
 Settings (env): `DATABASE_URL`, `PORT`, `LOG_LEVEL`, `CACHE_TTL_SECONDS` (600),
 `RATE_LIMIT_PER_MINUTE` (120 per IP, 0 = off), `RATE_LIMIT_BURST` (30), `TRUST_PROXY` (use
-`X-Forwarded-For`), `STATS_REFRESH_MINUTES` (15), `STATS_MANUAL_REFRESH_COOLDOWN_SECONDS` (60).
+`X-Forwarded-For`), `STATS_REFRESH_MINUTES` (60), `STATS_MANUAL_REFRESH_COOLDOWN_SECONDS` (60).
 
 ```sh
 PORT=3001 bun run dev:api
