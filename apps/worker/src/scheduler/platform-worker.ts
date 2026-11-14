@@ -329,10 +329,11 @@ export class PlatformWorker {
         signal,
       );
       // Ids come newest first: once one is known to be from an older patch, the rest are too.
-      const oldAt = ids.findIndex((id) => (gameIdOf(id) ?? 0) <= this.oldPatchMaxGameId);
-      const kept = (oldAt >= 0 ? ids.slice(0, oldAt) : ids).filter(
-        (id) => platformFromMatchId(id) === this.platform,
-      );
+      // Only this platform's ids are comparable with the bound (game ids are per platform, and a
+      // regional cluster lists the other platforms' matches too).
+      const own = ids.filter((id) => platformFromMatchId(id) === this.platform);
+      const oldAt = own.findIndex((id) => this.isKnownOldPatch(gameIdOf(id)));
+      const kept = oldAt >= 0 ? own.slice(0, oldAt) : own;
       added += await enqueueMatchIds(this.db, this.platform, kept);
       if (oldAt >= 0 || ids.length < 100) break;
     }
@@ -354,7 +355,7 @@ export class PlatformWorker {
       this.tooNewMinGameId = null;
       this.tooNewGeneration = this.patches.generation;
     }
-    if (gameId !== null && gameId <= this.oldPatchMaxGameId) {
+    if (this.isKnownOldPatch(gameId)) {
       await markMatchSkipped(this.db, matchId);
       this.counters.matchesSkipped++;
       return 'skipped';
@@ -420,6 +421,11 @@ export class PlatformWorker {
       enrichmentEnqueued: result.enrichmentEnqueued,
     });
     return 'added';
+  }
+
+  /** A game id of this platform at or below the old-patch bound (unparseable ids are not). */
+  private isKnownOldPatch(gameId: number | null): boolean {
+    return gameId !== null && gameId <= this.oldPatchMaxGameId;
   }
 
   private async fail(matchId: string, error: string): Promise<MatchOutcome> {

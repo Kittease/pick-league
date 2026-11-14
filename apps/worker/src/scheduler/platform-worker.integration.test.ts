@@ -336,6 +336,33 @@ d('PlatformWorker (Postgres)', () => {
     expect(await worker.listPlayerMatches(ladderPuuid(0))).toBe(2);
   });
 
+  test("listing cut-off ignores other platforms' ids and unparseable ids", async () => {
+    riot.matches.set('EUW1_7000000100', makeMatch('EUW1_7000000100', '15.21.700.1'));
+    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000100']);
+    const q = { matchId: 'EUW1_7000000100', platform: 'EUW1' as const, attempts: 0 };
+    expect(await worker.processMatch(q)).toBe('skipped');
+
+    riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
+    await worker.refreshLadder();
+    // EUN1 ids share the cluster but not the id sequence: a small EUN1 id says nothing about EUW1.
+    riot.matchIds.set(ladderPuuid(0), [
+      'EUW1_7000000400',
+      'EUN1_3000000000',
+      'EUW1_not-a-number',
+      'EUW1_7000000300',
+      'EUW1_7000000090',
+      'EUW1_7000000080',
+    ]);
+    expect(await worker.listPlayerMatches(ladderPuuid(0))).toBe(3);
+    const rows = await db<{ match_id: string }[]>`
+      SELECT match_id FROM match_fetch_queue WHERE status = 'PENDING' ORDER BY match_id`;
+    expect(rows.map((r) => r.match_id)).toEqual([
+      'EUW1_7000000300',
+      'EUW1_7000000400',
+      'EUW1_not-a-number',
+    ]);
+  });
+
   test('patch newer than Data Dragon: deferred and a patch refresh is requested', async () => {
     riot.matches.set('EUW1_7000000900', makeMatch('EUW1_7000000900', '15.23.100.1'));
     await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000900', 'EUW1_7000000950']);
