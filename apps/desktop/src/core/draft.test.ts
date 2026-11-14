@@ -1,8 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { buildRequestSchema, type Position, picksRequestSchema } from '@pick-league/shared';
+import {
+  buildRequestSchema,
+  type PickCandidate,
+  type Position,
+  picksRequestSchema,
+} from '@pick-league/shared';
 import {
   allBans,
   ban,
+  championPool,
   currentTurn,
   DRAFT_PICKS_LIMIT,
   DRAFT_TURNS,
@@ -289,5 +295,69 @@ describe('draft: build request', () => {
 
   test('null for an empty slot', () => {
     expect(draftBuildRequest(afterBans(), 'blue', 'TOP')).toBeNull();
+  });
+});
+
+describe('draft: champion pool', () => {
+  const champions = [
+    { id: 1, name: 'Alpha' },
+    { id: 2, name: "Bel'Tor" },
+    { id: 3, name: 'Gamma Ray' },
+    { id: 4, name: 'Delta' },
+    { id: 5, name: 'Epsilon' },
+  ];
+  const candidate = (championId: number, score: number): PickCandidate => ({
+    championId,
+    score,
+    confidence: 0.5,
+    patchesUsed: ['16.22'],
+    games: 300,
+    winRate: 0.51,
+    reasons: [],
+  });
+  const ids = (pool: ReturnType<typeof championPool>) => ({
+    ranked: pool.ranked.map((r) => [r.champion.id, r.rank]),
+    rest: pool.rest.map((c) => c.id),
+  });
+
+  test('ranked champions in API order, then the others in name order', () => {
+    const pool = championPool(champions, new Set(), [candidate(4, 0.03), candidate(2, 0.01)], '');
+    expect(ids(pool)).toEqual({
+      ranked: [
+        [4, 1],
+        [2, 2],
+      ],
+      rest: [1, 3, 5],
+    });
+    expect(pool.ranked[0]?.candidate.score).toBe(0.03);
+  });
+
+  test('banned and picked champions are left out, also from stale candidates', () => {
+    const pool = championPool(
+      champions,
+      new Set([4, 5]),
+      [candidate(4, 0.03), candidate(2, 0.01), candidate(99, 0.02)],
+      '',
+    );
+    expect(ids(pool)).toEqual({ ranked: [[2, 1]], rest: [1, 3] });
+  });
+
+  test('search ignores case, spaces and punctuation, and keeps the ranks', () => {
+    const cands = [candidate(1, 0.03), candidate(2, 0.01)];
+    expect(ids(championPool(champions, new Set(), cands, 'beltor'))).toEqual({
+      ranked: [[2, 2]],
+      rest: [],
+    });
+    expect(ids(championPool(champions, new Set(), cands, ' GAMMAR'))).toEqual({
+      ranked: [],
+      rest: [3],
+    });
+  });
+
+  test('without recommendations (ban phase, API down) every available champion is in the rest', () => {
+    expect(ids(championPool(champions, new Set([1]), null, ''))).toEqual({
+      ranked: [],
+      rest: [2, 3, 4, 5],
+    });
   });
 });
