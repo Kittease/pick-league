@@ -109,7 +109,8 @@ function asPlayer(p: LcuGameflowPlayer, cellId: number, team: number): LcuChampS
   };
 }
 
-function isMe(p: { puuid?: string; summonerId?: number }, me: LcuCurrentSummoner): boolean {
+/** Whether a player of the game is the user (by puuid, else summoner id). */
+export function isMe(p: { puuid?: string; summonerId?: number }, me: LcuCurrentSummoner): boolean {
   if (p.puuid && me.puuid) return p.puuid === me.puuid;
   return Boolean(p.summonerId && me.summonerId && p.summonerId === me.summonerId);
 }

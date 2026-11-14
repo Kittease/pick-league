@@ -17,6 +17,7 @@ import type {
   TierListResponse,
 } from '@pick-league/shared';
 import type { ChampSelectView } from './champ-select.ts';
+import type { LobbyView } from './live-lobby.ts';
 import type { FlashKey } from './spells.ts';
 
 export interface Settings {
@@ -101,6 +102,12 @@ export interface AppState {
    * until the game ends. Nothing is fetched (picks) nor applied anymore.
    */
   inGame: boolean;
+  /**
+   * Rank, recent form and mastery of the players of the game in progress (only once it has
+   * started, never in champion select). Players by champion and role: no names, no puuids.
+   * Null outside a game.
+   */
+  lobby: LobbyView | null;
   /** championId → the user's mastery. */
   mastery: Record<number, MasteryEntry>;
   /** Number of champions the account can play; null when unknown. */

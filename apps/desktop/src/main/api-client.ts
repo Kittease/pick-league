@@ -7,6 +7,9 @@ import {
   type BuildResponse,
   DEFAULT_TIER_LIST_FILTERS,
   type HealthResponse,
+  LIVE_PLAYERS_ROUTE,
+  type LivePlayersRequest,
+  type LivePlayersResponse,
   type PicksRequestInput,
   type PicksResponse,
   type Position,
@@ -43,6 +46,8 @@ export interface ApiClient {
   statsStatus(): Promise<StatsStatusResponse>;
   /** Asks the API to refresh its stats views now (answers immediately). */
   statsRefresh(): Promise<StatsRefreshResponse>;
+  /** Queues the lookups of a game's players; repeat until `done` (never cached). */
+  livePlayers(request: LivePlayersRequest): Promise<LivePlayersResponse>;
   tierList(role: Position, filters?: TierListFilters, patch?: string): Promise<TierListResponse>;
   tierListChampion(
     role: Position,
@@ -106,6 +111,7 @@ export function createApiClient(
     build: (request) => call(API_ROUTES.build, request),
     statsStatus: () => call(API_ROUTES.statsStatus),
     statsRefresh: () => call(API_ROUTES.statsRefresh, undefined, 'POST'),
+    livePlayers: (request) => call(LIVE_PLAYERS_ROUTE, request),
     tierList: (role, filters = DEFAULT_TIER_LIST_FILTERS, patch = 'latest') =>
       call(`${TIER_LIST_ROUTE}?${new URLSearchParams({ role, patch, ...filters })}`),
     tierListChampion: (role, championId, filters = DEFAULT_TIER_LIST_FILTERS, patch = 'latest') =>

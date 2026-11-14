@@ -8,8 +8,12 @@ import {
   type BuildRequestInput,
   type BuildResponse,
   buildRequestSchema,
+  type LivePlayersResponse,
+  type LiveWorkerState,
   type PicksRequestInput,
   type PicksResponse,
+  PLATFORMS,
+  type Platform,
   type Position,
   picksRequestSchema,
   type StaticDataResponse,
@@ -40,6 +44,14 @@ import {
   nextLobby,
   sessionFromGameflow,
 } from '../core/game-flow.ts';
+import {
+  canLookUpLobby,
+  type LiveLobbyRequest,
+  type LobbyState,
+  lobbyRequestFromGameflow,
+  lobbyView,
+  platformFromLcu,
+} from '../core/live-lobby.ts';
 import { type ApiClient, ApiClientError } from './api-client.ts';
 import { type ApplyResult, applyBuild } from './apply.ts';
 import type { LcuApi } from './lcu/api.ts';
@@ -56,6 +68,29 @@ const LEAVING_TIMEOUT_MS = 3_000;
 /** A failed auto-apply (e.g. the client briefly busy) is tried again, this many times in all. */
 const AUTO_APPLY_ATTEMPTS = 3;
 const AUTO_APPLY_RETRY_MS = 3_000;
+/** Lobby lookup: the API is asked again this often until every player is in… */
+const LOBBY_POLL_MS = 3_000;
+/** …for at most this long (the worker is slow or down). */
+const LOBBY_MAX_MS = 5 * 60_000;
+
+const WORKER_MESSAGE: Record<LiveWorkerState, string | null> = {
+  ok: null,
+  stalled: 'The PickLeague worker is not running: the players are looked up once it is back.',
+  key_rejected: 'Riot rejects the API key of the worker: the players cannot be looked up.',
+  unsupported: 'The PickLeague worker does not collect your server (see PLATFORMS in its .env).',
+};
+
+/** Lookup of the game in progress. Holds the players' puuids: it never leaves the main process. */
+interface LobbyLookup {
+  request: LiveLobbyRequest;
+  platform: Platform;
+  startedAt: number;
+  response: LivePlayersResponse | null;
+  timer: ReturnType<typeof setTimeout> | null;
+  inFlight: boolean;
+  /** Every player is in, or there is no point asking again. */
+  finished: boolean;
+}
 
 export interface ControllerDeps {
   settings: Settings;
@@ -67,6 +102,9 @@ export interface ControllerDeps {
   log(message: string): void;
   /** Delay before a failed auto-apply is tried again (tests shorten it). */
   autoApplyRetryMs?: number;
+  /** Lobby lookup poll period and limit (tests shorten them). */
+  lobbyPollMs?: number;
+  lobbyMaxMs?: number;
 }
 
 function errorInfo(e: unknown): { message: string; code: string | null } {
@@ -126,6 +164,9 @@ export class Controller {
   private statsTimer: ReturnType<typeof setTimeout> | null = null;
   /** A refresh requested from this app is in progress (→ `stats.lastManual` when it ends). */
   private manualRefresh: { includedBefore: number } | null = null;
+  /** Lookup of the players of the game in progress (one per game). */
+  private lobbyLookup: LobbyLookup | null = null;
+  private lobbyStarting = false;
 
   constructor(private readonly deps: ControllerDeps) {
     this.api = deps.createApi(deps.settings.apiUrl);
@@ -142,6 +183,7 @@ export class Controller {
       stats: { status: null, refreshing: false, lastManual: null },
       champSelect: null,
       inGame: false,
+      lobby: null,
       mastery: {},
       availableCount: null,
       ownedChampionIds: null,
@@ -173,6 +215,7 @@ export class Controller {
     if (this.buildTimer) clearTimeout(this.buildTimer);
     if (this.leavingTimer) clearTimeout(this.leavingTimer);
     this.cancelAutoApplyRetry();
+    this.stopLobbyLookup();
   }
 
   getState(): AppState {
@@ -208,6 +251,7 @@ export class Controller {
       this.patch({ stats: { status: null, refreshing: false, lastManual: null } });
       void this.pollStats();
       this.refetch();
+      this.restartLobbyPolling();
     }
     if (next.fallbackRole !== prev.fallbackRole || next.ownedOnly !== prev.ownedOnly) {
       if (this.lobby.stage === 'select') this.showSelect(false);
@@ -231,6 +275,8 @@ export class Controller {
     void this.checkHealth();
     if (!this.staticData) void this.ensureStatic();
     this.refetch();
+    const lobby = this.state.lobby?.state;
+    if (lobby === 'error' || lobby === 'timeout') this.restartLobbyPolling();
   }
 
   /** Asks the API to include every stored match in its stats, then follows the refresh. */
@@ -318,6 +364,7 @@ export class Controller {
     this.lcuApi = status.api;
     this.patch({ lcu: { ...this.state.lcu, state: 'connected', message: null } });
     if (!wasConnected) void this.loadAccount();
+    this.syncLobbyLookup();
   }
 
   private async loadAccount(): Promise<void> {
@@ -380,6 +427,7 @@ export class Controller {
       }
     }
     // `leaving`: the last champion select stays as it is until the next phase tells.
+    this.syncLobbyLookup();
   }
 
   private showSelect(isNew: boolean): void {
@@ -423,9 +471,11 @@ export class Controller {
     this.buildKey = '';
     this.previewChampionId = null;
     this.cancelAutoApplyRetry();
+    this.stopLobbyLookup();
     this.patch({
       champSelect: null,
       inGame: false,
+      lobby: null,
       picks: { status: 'idle' },
       build: { status: 'idle' },
       buildTarget: null,
@@ -452,6 +502,140 @@ export class Controller {
     } finally {
       this.recovering = false;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lobby lookup (players of the game in progress)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Once the game is running (never in champion select), looks its players up once; asks the API
+   * again until every player is in; stops when the game ends.
+   */
+  private syncLobbyLookup(): void {
+    if (this.lobby.stage !== 'game') {
+      this.stopLobbyLookup();
+      if (this.state.lobby) this.patch({ lobby: null });
+      return;
+    }
+    if (!canLookUpLobby(this.lobby.phase)) return;
+    const lookup = this.lobbyLookup;
+    if (!lookup) {
+      void this.startLobbyLookup();
+    } else if (!lookup.finished && !lookup.timer && !lookup.inFlight) {
+      // Back in game after the client was gone: carry on asking.
+      void this.pollLobby();
+    }
+  }
+
+  private async startLobbyLookup(): Promise<void> {
+    const api = this.lcuApi;
+    if (!api || this.lobbyStarting) return;
+    this.lobbyStarting = true;
+    try {
+      const [gameflow, me, hints] = await Promise.all([
+        api.getGameflowSession(),
+        api.getCurrentSummoner(),
+        api.getPlatformHints(),
+      ]);
+      if (api !== this.lcuApi || this.lobby.stage !== 'game' || this.lobbyLookup) return;
+      // The guard is applied again on what the client says now (never champion select).
+      const request =
+        gameflow && me ? lobbyRequestFromGameflow(gameflow, me, this.lobby.phase) : null;
+      if (!request) return; // tried again on the next client event
+      const platform = platformFromLcu(hints);
+      if (!platform) {
+        const server = hints.region ?? hints.platformId ?? 'unknown';
+        this.lobbyLookup = null;
+        this.patch({
+          lobby: lobbyView(
+            request,
+            null,
+            null,
+            'unsupported',
+            `Players are looked up on ${PLATFORMS.join(', ')} only (your server: ${server}).`,
+          ),
+        });
+        return;
+      }
+      this.lobbyLookup = {
+        request,
+        platform,
+        startedAt: Date.now(),
+        response: null,
+        timer: null,
+        inFlight: false,
+        finished: false,
+      };
+      this.deps.log(`game in progress: looking up ${request.players.length} players`);
+      this.patch({ lobby: lobbyView(request, platform, null, 'loading') });
+      void this.pollLobby();
+    } catch (e) {
+      this.deps.log(`lobby lookup not started: ${errorInfo(e).message}`);
+    } finally {
+      this.lobbyStarting = false;
+    }
+  }
+
+  private async pollLobby(): Promise<void> {
+    const lookup = this.lobbyLookup;
+    if (!lookup || lookup.finished || lookup.inFlight) return;
+    if (lookup.timer) clearTimeout(lookup.timer);
+    lookup.timer = null;
+    // Game over screen or client gone: resumed by `syncLobbyLookup` if the game is back.
+    if (!canLookUpLobby(this.lobby.phase)) return;
+    const showLobby = (state: LobbyState, message: string | null) =>
+      this.patch({
+        lobby: lobbyView(lookup.request, lookup.platform, lookup.response, state, message),
+      });
+    if (Date.now() - lookup.startedAt > (this.deps.lobbyMaxMs ?? LOBBY_MAX_MS)) {
+      lookup.finished = true;
+      showLobby('timeout', 'Stopped waiting: the worker did not look every player up in time.');
+      return;
+    }
+    lookup.inFlight = true;
+    const api = this.api;
+    try {
+      const res = await api.livePlayers({
+        platform: lookup.platform,
+        players: lookup.request.players,
+      });
+      if (lookup !== this.lobbyLookup || api !== this.api) return;
+      lookup.response = res;
+      lookup.finished = res.done;
+      showLobby(
+        res.worker === 'unsupported' ? 'unsupported' : res.done ? 'done' : 'loading',
+        WORKER_MESSAGE[res.worker],
+      );
+    } catch (e) {
+      if (lookup !== this.lobbyLookup || api !== this.api) return;
+      const info = errorInfo(e);
+      // An API without /live/players (older version) or refusing the request: no point retrying.
+      if (info.code === 'NOT_FOUND' || info.code === 'BAD_REQUEST') lookup.finished = true;
+      showLobby('error', info.message);
+    } finally {
+      lookup.inFlight = false;
+    }
+    if (lookup === this.lobbyLookup && !lookup.finished) {
+      lookup.timer = setTimeout(
+        () => void this.pollLobby(),
+        this.deps.lobbyPollMs ?? LOBBY_POLL_MS,
+      );
+    }
+  }
+
+  /** New API address, Retry after an error or a timeout: ask again from now. */
+  private restartLobbyPolling(): void {
+    const lookup = this.lobbyLookup;
+    if (!lookup) return;
+    lookup.startedAt = Date.now();
+    lookup.finished = false;
+    void this.pollLobby();
+  }
+
+  private stopLobbyLookup(): void {
+    if (this.lobbyLookup?.timer) clearTimeout(this.lobbyLookup.timer);
+    this.lobbyLookup = null;
   }
 
   // ---------------------------------------------------------------------------
