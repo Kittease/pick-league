@@ -227,6 +227,8 @@ export class PlatformWorker {
   /** Failed listings: consecutive failures, and when the player may be listed again. */
   private readonly listingFailures = new Map<string, number>();
   private readonly listingCooldown = new Map<string, number>();
+  /** Players whose listing started while `loadPendingListings` was querying (null otherwise). */
+  private listingsStartedDuringLoad: Set<string> | null = null;
   /**
    * Highest game id seen with a patch older than the latest: older ids are skipped unfetched, and
    * listings stop there (the first previous-patch match bounds every history).
@@ -369,8 +371,22 @@ export class PlatformWorker {
    * restarts) and those never listed (e.g. a restart interrupted their first listing).
    */
   private async loadPendingListings(): Promise<void> {
-    for (const p of await playersWithListingRequested(this.db, this.platform)) this.played.add(p);
-    for (const p of await trackedPlayersNeverListed(this.db, this.platform)) this.played.add(p);
+    // The rows may be stale by the time they arrive: a listing that started meanwhile (or is
+    // still running) already covers them. A genuinely new "played" signal comes from the ladder.
+    const started = new Set<string>();
+    this.listingsStartedDuringLoad = started;
+    let pending: string[];
+    try {
+      pending = [
+        ...(await playersWithListingRequested(this.db, this.platform)),
+        ...(await trackedPlayersNeverListed(this.db, this.platform)),
+      ];
+    } finally {
+      this.listingsStartedDuringLoad = null;
+    }
+    for (const p of pending) {
+      if (!this.listingInFlight.has(p) && !started.has(p)) this.played.add(p);
+    }
   }
 
   /** Next player to list: FIFO, skipping players being listed or cooling down after a failure. */
@@ -383,6 +399,7 @@ export class PlatformWorker {
       if (until !== undefined && until > now) continue;
       this.played.delete(p);
       this.listingInFlight.add(p);
+      this.listingsStartedDuringLoad?.add(p);
       return p;
     }
     return null;
