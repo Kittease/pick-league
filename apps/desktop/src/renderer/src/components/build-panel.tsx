@@ -10,7 +10,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/h
 import { Skeleton } from '@/components/ui/skeleton';
 import { compact, confidenceLabel, patchesText, percent, SKILL_KEY } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import type { AppState } from '../../../core/app-state.ts';
+import type { AppState, Loadable, MasteryEntry } from '../../../core/app-state.ts';
 import { arrangeSpells, type FlashKey } from '../../../core/spells.ts';
 import type { StaticLookup } from '../hooks/use-app';
 import { ChampionIcon, GameIcon } from './game-icon';
@@ -346,7 +346,6 @@ function ApplyBar({ state }: { state: AppState }) {
 
 export function BuildPanel({ state, lookup }: { state: AppState; lookup: StaticLookup | null }) {
   const { build, buildTarget } = state;
-  const data = build.status === 'idle' ? null : build.data;
   if (!buildTarget) {
     return (
       <div className="grid flex-1 place-items-center p-8 text-center text-sm text-muted-foreground">
@@ -356,27 +355,72 @@ export function BuildPanel({ state, lookup }: { state: AppState; lookup: StaticL
       </div>
     );
   }
-  const champ = lookup?.champion(buildTarget.championId);
-  const name = champ?.name ?? `#${buildTarget.championId}`;
+  return (
+    <BuildView
+      championId={buildTarget.championId}
+      build={build}
+      lookup={lookup}
+      mastery={state.mastery[buildTarget.championId]}
+      badge={buildTarget.preview ? 'preview' : state.inGame ? 'in game' : 'locked in'}
+      badgeTone={buildTarget.preview ? 'muted' : 'primary'}
+      actions={<ApplyBar state={state} />}
+      onRetry={() => void window.pickleague.refresh()}
+      mySpells={state.champSelect?.mySpells ?? null}
+      flashKey={state.settings.flashKey}
+    />
+  );
+}
+
+/**
+ * A build with its header (champion, badge, patch + sample), error and loading states: the live
+ * champion select one (`BuildPanel`) or any other given build (draft planner).
+ */
+export function BuildView({
+  championId,
+  build,
+  lookup,
+  mastery,
+  badge,
+  badgeTone,
+  leading,
+  actions,
+  onRetry,
+  mySpells,
+  flashKey,
+}: {
+  championId: number;
+  build: Loadable<BuildResponse>;
+  lookup: StaticLookup | null;
+  mastery?: MasteryEntry;
+  /** Short uppercase label next to the name ("locked in", "preview"…). */
+  badge: string;
+  badgeTone: 'primary' | 'muted';
+  /** Before the champion icon (e.g. a back button). */
+  leading?: React.ReactNode;
+  /** Right end of the header (e.g. the Apply button). */
+  actions?: React.ReactNode;
+  onRetry: () => void;
+  mySpells: [number, number] | null;
+  flashKey: FlashKey;
+}) {
+  const data = build.status === 'idle' ? null : build.data;
+  const champ = lookup?.champion(championId);
+  const name = champ?.name ?? `#${championId}`;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
-        <ChampionIcon
-          src={champ?.iconUrl}
-          name={name}
-          size={44}
-          mastery={state.mastery[buildTarget.championId]}
-        />
+        {leading}
+        <ChampionIcon src={champ?.iconUrl} name={name} size={44} mastery={mastery} />
         <div className="flex min-w-0 flex-col leading-tight">
           <span className="flex items-baseline gap-2">
             <span className="text-lg font-semibold">{name}</span>
             <span
               className={cn(
                 'text-[10px] font-semibold tracking-wider uppercase',
-                buildTarget.preview ? 'text-muted-foreground' : 'text-primary',
+                badgeTone === 'muted' ? 'text-muted-foreground' : 'text-primary',
               )}
             >
-              {buildTarget.preview ? 'preview' : state.inGame ? 'in game' : 'locked in'}
+              {badge}
             </span>
           </span>
           {data && (
@@ -386,9 +430,7 @@ export function BuildPanel({ state, lookup }: { state: AppState; lookup: StaticL
             </span>
           )}
         </div>
-        <div className="ml-auto">
-          <ApplyBar state={state} />
-        </div>
+        {actions && <div className="ml-auto">{actions}</div>}
       </div>
 
       {build.status === 'error' && (
@@ -396,7 +438,7 @@ export function BuildPanel({ state, lookup }: { state: AppState; lookup: StaticL
           tone={build.code === 'NO_DATA' ? 'warn' : 'bad'}
           title="Build unavailable"
           message={build.message}
-          action={{ label: 'Retry', onClick: () => void window.pickleague.refresh() }}
+          action={{ label: 'Retry', onClick: onRetry }}
         />
       )}
 
@@ -410,12 +452,7 @@ export function BuildPanel({ state, lookup }: { state: AppState; lookup: StaticL
           </div>
         )}
         {data && (
-          <BuildDetails
-            build={data}
-            lookup={lookup}
-            mySpells={state.champSelect?.mySpells ?? null}
-            flashKey={state.settings.flashKey}
-          />
+          <BuildDetails build={data} lookup={lookup} mySpells={mySpells} flashKey={flashKey} />
         )}
       </div>
     </div>
