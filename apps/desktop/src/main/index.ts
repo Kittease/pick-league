@@ -219,6 +219,9 @@ async function main(): Promise<void> {
       isPosition(role) ? role : settings.fallbackRole,
     ),
   );
+  // Draft planner: the bodies come from the renderer, validated by the controller.
+  ipcMain.handle(IPC.draftPicks, (_e, request: unknown) => controller.draftPicks(request));
+  ipcMain.handle(IPC.draftBuild, (_e, request: unknown) => controller.draftBuild(request));
 
   controller.start();
   createWindow(controller);

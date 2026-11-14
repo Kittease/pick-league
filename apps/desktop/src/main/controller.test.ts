@@ -381,3 +381,42 @@ describe('controller: auto-apply', () => {
     expect(applies).toBe(1);
   });
 });
+
+describe('controller: draft planner', () => {
+  test('forwards a valid picks request, without any champion select', async () => {
+    const { controller, calls } = setup();
+    const result = await controller.draftPicks({
+      role: 'MIDDLE',
+      allies: [{ championId: 1, role: 'TOP' }],
+      enemies: [11],
+      bans: [101],
+      limit: 100,
+    });
+    expect(result).toEqual({ ok: true, data: { role: 'MIDDLE', patch: '15.22', candidates: [] } });
+    expect(calls.picks).toBe(1);
+  });
+
+  test('forwards a valid build request', async () => {
+    const { controller, calls } = setup();
+    const result = await controller.draftBuild({
+      championId: 14,
+      role: 'UTILITY',
+      allies: [{ championId: 15, role: 'BOTTOM' }],
+      enemies: [{ championId: 4, role: 'BOTTOM' }],
+    });
+    expect(result.ok && result.data.championId).toBe(14);
+    expect(calls.build).toBe(1);
+  });
+
+  test('refuses malformed bodies from the renderer without calling the API', async () => {
+    const { controller, calls } = setup();
+    for (const bad of [null, 'MIDDLE', { role: 'MID' }, { role: 'TOP', enemies: [-1] }]) {
+      expect(await controller.draftPicks(bad)).toMatchObject({ ok: false, code: 'BAD_REQUEST' });
+    }
+    for (const bad of [undefined, { role: 'TOP' }, { championId: 1.5, role: 'TOP' }]) {
+      expect(await controller.draftBuild(bad)).toMatchObject({ ok: false, code: 'BAD_REQUEST' });
+    }
+    expect(calls.picks).toBe(0);
+    expect(calls.build).toBe(0);
+  });
+});

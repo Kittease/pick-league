@@ -4,16 +4,18 @@
  * its game is played. Owns `AppState` and pushes every change to the UI.
  */
 
-import type {
-  BuildRequestInput,
-  BuildResponse,
-  PicksRequestInput,
-  PicksResponse,
-  Position,
-  StaticDataResponse,
-  TierListChampionResponse,
-  TierListFilters,
-  TierListResponse,
+import {
+  type BuildRequestInput,
+  type BuildResponse,
+  buildRequestSchema,
+  type PicksRequestInput,
+  type PicksResponse,
+  type Position,
+  picksRequestSchema,
+  type StaticDataResponse,
+  type TierListChampionResponse,
+  type TierListFilters,
+  type TierListResponse,
 } from '@pick-league/shared';
 import type {
   ApiResult,
@@ -84,6 +86,10 @@ async function toResult<T>(call: Promise<T>): Promise<ApiResult<T>> {
   } catch (e) {
     return { ok: false, ...errorInfo(e) };
   }
+}
+
+function badDraftRequest(what: 'picks' | 'build'): ApiResult<never> {
+  return { ok: false, code: 'BAD_REQUEST', message: `Invalid draft ${what} request` };
 }
 
 function dataOf<T>(l: Loadable<T>): T | null {
@@ -269,6 +275,22 @@ export class Controller {
 
   genericBuild(championId: number, role: Position): Promise<ApiResult<BuildResponse>> {
     return toResult(this.api.build({ championId, role, allies: [], enemies: [] }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Draft planner (one-off calls with bodies built by the renderer: validated first)
+  // ---------------------------------------------------------------------------
+
+  async draftPicks(request: unknown): Promise<ApiResult<PicksResponse>> {
+    const parsed = picksRequestSchema.safeParse(request);
+    if (!parsed.success) return badDraftRequest('picks');
+    return toResult(this.api.picks(parsed.data));
+  }
+
+  async draftBuild(request: unknown): Promise<ApiResult<BuildResponse>> {
+    const parsed = buildRequestSchema.safeParse(request);
+    if (!parsed.success) return badDraftRequest('build');
+    return toResult(this.api.build(parsed.data));
   }
 
   // ---------------------------------------------------------------------------

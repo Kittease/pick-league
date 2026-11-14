@@ -4,7 +4,9 @@
  */
 
 import type {
+  BuildRequestInput,
   BuildResponse,
+  PicksRequestInput,
   PicksResponse,
   Position,
   StaticDataResponse,
@@ -131,6 +133,8 @@ export const IPC = {
   tierList: 'pickleague:tier-list',
   tierListChampion: 'pickleague:tier-list-champion',
   genericBuild: 'pickleague:generic-build',
+  draftPicks: 'pickleague:draft-picks',
+  draftBuild: 'pickleague:draft-build',
 } as const;
 
 /** Window chrome drawn by the app itself (frameless window on Windows and Linux). */
@@ -175,5 +179,9 @@ export interface PickLeagueBridge {
   ): Promise<ApiResult<TierListChampionResponse>>;
   /** Build of a champion in a role with no allies/enemies (tier list "View build"). */
   getGenericBuild(championId: number, role: Position): Promise<ApiResult<BuildResponse>>;
+  /** Draft planner: pick recommendations for a simulated draft (no League client involved). */
+  draftPicks(request: PicksRequestInput): Promise<ApiResult<PicksResponse>>;
+  /** Draft planner: build of a drafted champion against the simulated teams. */
+  draftBuild(request: BuildRequestInput): Promise<ApiResult<BuildResponse>>;
   onState(listener: (state: AppState) => void): () => void;
 }
