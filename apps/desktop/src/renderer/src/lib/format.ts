@@ -1,4 +1,4 @@
-import type { Position, ReasonKind } from '@pick-league/shared';
+import type { LanePhaseDiff, Position, ReasonKind } from '@pick-league/shared';
 
 export const ROLE_LABEL: Record<Position, string> = {
   TOP: 'Top',
@@ -51,6 +51,47 @@ export const REASON_KIND_LABEL: Record<ReasonKind, string> = {
   patch_fallback: 'Previous patch added',
   lane_phase: 'Lane phase',
 };
+
+const intFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+
+/** 420 → "+420", -420 → "−420", 1240 → "+1,240"; anything that rounds to zero → "0". */
+export function signedNumber(x: number, digits = 0): string {
+  const r = Number(x.toFixed(digits));
+  const s = intFormat.format(Math.abs(r));
+  return r > 0 ? `+${s}` : r < 0 ? `−${s}` : '0';
+}
+
+/** CS difference: one decimal under 10 ("−0.4", "+8.5"), whole numbers above ("+12"). */
+function csText(cs: number): string {
+  return signedNumber(cs, Math.abs(cs) < 10 ? 1 : 0);
+}
+
+/** The gold part ("−420 gold") and the rest (" · −8 CS · −310 XP at 10 min"), styled apart. */
+export function lanePhaseParts(lane: LanePhaseDiff): { gold: string; rest: string } {
+  return {
+    gold: `${signedNumber(lane.gold)} gold`,
+    rest: ` · ${csText(lane.cs)} CS · ${signedNumber(lane.xp)} XP at ${lane.minute} min`,
+  };
+}
+
+/** "−420 gold · −8 CS · −310 XP at 10 min" (the 2v2 is marked by the caller). */
+export function lanePhaseText(lane: LanePhaseDiff): string {
+  const { gold, rest } = lanePhaseParts(lane);
+  return gold + rest;
+}
+
+/** Compact gold figure for a table cell: "+250g @10", "−1.2kg @10". */
+export function laneGoldShort(lane: LanePhaseDiff): string {
+  const gold =
+    Math.abs(lane.gold) >= 1000 ? `${signedNumber(lane.gold / 1000, 1)}k` : signedNumber(lane.gold);
+  return `${gold}g @${lane.minute}`;
+}
+
+/** Tooltip of a lane-phase figure: every number and the sample. */
+export function laneTitle(lane: LanePhaseDiff): string {
+  const where = lane.duo ? 'bot lane 2v2, with the duo partners' : '1v1';
+  return `Lane at ${lane.minute} min (${where}): ${signedNumber(lane.gold)} gold, ${csText(lane.cs)} CS, ${signedNumber(lane.xp)} XP, average over ${intFormat.format(lane.games)} matchups (shrunk by sample size)`;
+}
 
 /** Sample-size confidence used to fade thin evidence: 0 games → 0.25, ≥ 1000 → 1. */
 export function sampleWeight(games: number): number {

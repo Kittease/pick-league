@@ -1,5 +1,13 @@
-import type { Reason } from '@pick-league/shared';
-import { compact, deltaPoints, deltaSign, REASON_KIND_LABEL, sampleWeight } from '@/lib/format';
+import type { LanePhaseDiff, Reason } from '@pick-league/shared';
+import {
+  compact,
+  deltaPoints,
+  deltaSign,
+  lanePhaseParts,
+  laneTitle,
+  REASON_KIND_LABEL,
+  sampleWeight,
+} from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 /** Scale of the diverging bar: ±5 points fills one half. */
@@ -48,7 +56,46 @@ export function DeltaText({ delta, className }: { delta: number; className?: str
   );
 }
 
-/** One row per reason: kind, readable label, delta bar, games. */
+/**
+ * Lane-phase figures, "−420 gold · −8 CS · −310 XP at 10 min": gold coloured by side, "2v2" for
+ * the bot lane (own + duo partner vs both enemy bot laners). The tooltip has the sample.
+ */
+export function LanePhaseLine({
+  lane,
+  title,
+  className,
+}: {
+  lane: LanePhaseDiff;
+  /** Tooltip (default: every number and the sample). */
+  title?: string;
+  className?: string;
+}) {
+  const { gold, rest } = lanePhaseParts(lane);
+  const sign = Math.sign(Math.round(lane.gold));
+  return (
+    <span className={cn('num', className)} title={title ?? laneTitle(lane)}>
+      <span
+        className={cn(
+          'font-medium',
+          sign > 0 ? 'text-up' : sign < 0 ? 'text-down' : 'text-muted-foreground',
+        )}
+      >
+        {gold}
+      </span>
+      <span className="text-foreground/80">{rest}</span>
+      {lane.duo && (
+        <span className="ml-1.5 border border-border px-1 align-[1px] text-[9px] text-muted-foreground">
+          2v2
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * One row per reason: kind, readable label, delta bar, games. Lane-phase reasons show their
+ * figures instead of the label (kept as the tooltip) and only their sample (they do not score).
+ */
 export function ReasonList({ reasons, className }: { reasons: Reason[]; className?: string }) {
   if (reasons.length === 0) {
     return (
@@ -66,11 +113,19 @@ export function ReasonList({ reasons, className }: { reasons: Reason[]; classNam
           <span className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
             {REASON_KIND_LABEL[r.kind] ?? r.kind}
           </span>
-          <span className="line-clamp-2 text-foreground/90" title={r.label}>
-            {r.label}
-          </span>
+          {r.kind === 'lane_phase' && r.lane ? (
+            <LanePhaseLine lane={r.lane} title={r.label} className="line-clamp-2" />
+          ) : (
+            <span className="line-clamp-2 text-foreground/90" title={r.label}>
+              {r.label}
+            </span>
+          )}
           <span className="flex items-center gap-2">
-            {r.delta !== 0 || r.games > 0 ? (
+            {r.kind === 'lane_phase' ? (
+              <span className="num ml-12 w-12 text-right text-[10px] text-muted-foreground">
+                n={compact(r.games)}
+              </span>
+            ) : r.delta !== 0 || r.games > 0 ? (
               <>
                 <DeltaBar delta={r.delta} games={r.games} className="w-10" />
                 <span className="num w-12 text-right text-[10px] text-muted-foreground">
