@@ -32,6 +32,8 @@ import { HostLimiter, type HostLimiterOptions, type HostLimiterStats } from './r
 
 /** Priority levels of docs/architecture.md (higher = served first). */
 export const PRIORITY = {
+  /** Players of a live game the desktop asked about (someone is waiting for them). */
+  LIVE_LOOKUP: 6,
   LADDER: 5,
   MATCH_IDS: 4,
   MATCH: 3,
@@ -80,6 +82,8 @@ export interface MatchIdsQuery {
   start?: number;
   /** 1..100 */
   count?: number;
+  /** Default: MATCH_IDS. */
+  priority?: Priority;
 }
 
 /** What the scheduler needs from Riot (a fake implements it in tests). */
@@ -91,7 +95,13 @@ export interface RiotApi {
     query: MatchIdsQuery,
     signal?: AbortSignal,
   ): Promise<MatchIdsDto>;
-  getMatch(platform: Platform, matchId: string, signal?: AbortSignal): Promise<MatchDto | null>;
+  /** `priority` defaults to MATCH. */
+  getMatch(
+    platform: Platform,
+    matchId: string,
+    signal?: AbortSignal,
+    priority?: Priority,
+  ): Promise<MatchDto | null>;
   getTimeline(
     platform: Platform,
     matchId: string,
@@ -115,6 +125,14 @@ export interface RiotApi {
     priority: Priority,
     signal?: AbortSignal,
   ): Promise<LeagueEntryDto[] | null>;
+  /** Mastery of one champion; null when the player never played it (404). */
+  getChampionMastery(
+    platform: Platform,
+    puuid: string,
+    championId: number,
+    priority: Priority,
+    signal?: AbortSignal,
+  ): Promise<ChampionMasteryDto | null>;
 }
 
 export interface RiotClientOptions {
@@ -179,19 +197,19 @@ export class RiotClient implements RiotApi {
       matchBaseUrl(platform),
       'match-v5.ids-by-puuid',
       `/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?${params}`,
-      PRIORITY.MATCH_IDS,
+      q.priority ?? PRIORITY.MATCH_IDS,
       signal,
     );
     return ids ?? [];
   }
 
-  getMatch(platform: Platform, matchId: string, signal?: AbortSignal) {
+  getMatch(platform: Platform, matchId: string, signal?: AbortSignal, priority?: Priority) {
     return this.request<MatchDto>(
       platform,
       matchBaseUrl(platform),
       'match-v5.match',
       `/lol/match/v5/matches/${encodeURIComponent(matchId)}`,
-      PRIORITY.MATCH,
+      priority ?? PRIORITY.MATCH,
       signal,
     );
   }
@@ -235,6 +253,23 @@ export class RiotClient implements RiotApi {
       platformBaseUrl(platform),
       'league-v4.entries-by-puuid',
       `/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`,
+      priority,
+      signal,
+    );
+  }
+
+  getChampionMastery(
+    platform: Platform,
+    puuid: string,
+    championId: number,
+    priority: Priority,
+    signal?: AbortSignal,
+  ) {
+    return this.request<ChampionMasteryDto>(
+      platform,
+      platformBaseUrl(platform),
+      'champion-mastery-v4.by-puuid-by-champion',
+      `/lol/champion-mastery/v4/champion-masteries/by-puuid/${encodeURIComponent(puuid)}/by-champion/${Math.trunc(championId)}`,
       priority,
       signal,
     );

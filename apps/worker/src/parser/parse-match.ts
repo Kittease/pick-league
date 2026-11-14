@@ -52,6 +52,15 @@ export function durationSeconds(info: MatchDto['info']): number {
   return info.gameEndTimestamp !== undefined ? Math.round(d) : Math.round(d / 1000);
 }
 
+/** Remake: aborted, or ended by the early-surrender vote within the first minutes. */
+export function isRemakeMatch(info: MatchDto['info']): boolean {
+  const aborted = (info.endOfGameResult ?? '').toLowerCase().startsWith('abort');
+  const anyEarlySurrender = (info.participants ?? []).some(
+    (p) => p.gameEndedInEarlySurrender === true,
+  );
+  return aborted || (anyEarlySurrender && durationSeconds(info) < REMAKE_MAX_DURATION_S);
+}
+
 export function parseMatch(match: MatchDto, timeline: TimelineDto): ParsedMatch {
   const info = match.info;
   const matchId = match.metadata?.matchId;
@@ -79,8 +88,7 @@ export function parseMatch(match: MatchDto, timeline: TimelineDto): ParsedMatch 
   const durationS = durationSeconds(info);
   const anyEarlySurrender = participantsDto.some((p) => p.gameEndedInEarlySurrender === true);
   const anySurrender = participantsDto.some((p) => p.gameEndedInSurrender === true);
-  const aborted = (info.endOfGameResult ?? '').toLowerCase().startsWith('abort');
-  const isRemake = aborted || (anyEarlySurrender && durationS < REMAKE_MAX_DURATION_S);
+  const isRemake = isRemakeMatch(info);
   const isEarlySurrender =
     !isRemake && (anyEarlySurrender || anySurrender) && durationS < EARLY_SURRENDER_MAX_DURATION_S;
 
