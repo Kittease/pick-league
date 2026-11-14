@@ -15,7 +15,7 @@ import { arrangeSpells, type FlashKey } from '../../../core/spells.ts';
 import type { StaticLookup } from '../hooks/use-app';
 import { ChampionIcon, GameIcon } from './game-icon';
 import { Notice } from './notice';
-import { DeltaText, ReasonList } from './reasons';
+import { DeltaText, LanePhaseLine, ReasonList } from './reasons';
 
 function SectionTitle({ children, meta }: { children: React.ReactNode; meta?: React.ReactNode }) {
   return (
@@ -264,6 +264,33 @@ function SkillOrder({ build }: { build: BuildResponse }) {
   );
 }
 
+/**
+ * How the lane phase goes vs the lane opponent the build adapts to: gold / CS / XP difference at
+ * 10 and 15 min (bot lane 2v2). Explains the matchup, changes nothing in the build.
+ */
+function LanePhase({ build, lookup }: { build: BuildResponse; lookup: StaticLookup | null }) {
+  const reasons = (build.lanePhase ?? []).filter((r) => r.lane);
+  const first = reasons[0];
+  if (!first) return null;
+  const opponentId = first.championIds?.[0];
+  const champ = opponentId !== undefined ? lookup?.champion(opponentId) : undefined;
+  const name = champ?.name ?? (opponentId !== undefined ? `#${opponentId}` : 'lane opponent');
+  return (
+    <section>
+      <SectionTitle meta={`${compact(first.games)} matchups`}>Lane phase</SectionTitle>
+      <div className="flex items-center gap-3">
+        <ChampionIcon src={champ?.iconUrl} name={name} size={30} />
+        <span className="text-xs text-muted-foreground">vs {name}</span>
+        <span className="flex flex-col gap-0.5 text-xs">
+          {reasons.map(
+            (r) => r.lane && <LanePhaseLine key={r.lane.minute} lane={r.lane} title={r.label} />,
+          )}
+        </span>
+      </div>
+    </section>
+  );
+}
+
 function ApplyBar({ state }: { state: AppState }) {
   const { apply, buildTarget, champSelect, settings } = state;
   if (state.inGame) {
@@ -409,6 +436,7 @@ export function BuildDetails({
 }) {
   return (
     <div className="flex flex-col gap-6 p-4">
+      <LanePhase build={build} lookup={lookup} />
       <section className="grid grid-cols-[1fr_1fr_1.3fr_1.3fr] gap-4">
         <div className="flex min-w-0 flex-col gap-4">
           <ItemGroup title="Starting" items={build.items.starting} lookup={lookup} />
