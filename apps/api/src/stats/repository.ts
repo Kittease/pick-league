@@ -376,7 +376,10 @@ export async function championExists(
 // Tier list
 // ---------------------------------------------------------------------------
 
-/** One champion in `position` vs enemies in `enemyPositions` (lane opponents), per patch. */
+/**
+ * One champion in `position` vs enemies in `enemyPositions` (lane opponents), per patch.
+ * `::int` here and below: an id beyond the smallint column range gives no rows, not an error.
+ */
 export async function loadLaneVsOfChampion(
   q: Queryable,
   patches: PatchId[],
@@ -388,7 +391,7 @@ export async function loadLaneVsOfChampion(
     { patch: string; enemy_position: Position; enemy_id: number; games: number; wins: number }[]
   >`
     SELECT patch, enemy_position, enemy_id, games, wins FROM stats_champion_vs
-    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
+    WHERE patch IN ${q(patches)} AND champion_id = ${championId}::int AND position = ${position}
       AND enemy_position IN ${q([...enemyPositions])}`;
   return rows.map((r) => ({
     patch: r.patch,
@@ -412,7 +415,7 @@ export async function loadAlliesOfChampion(
     { patch: string; ally_position: Position; ally_id: number; games: number; wins: number }[]
   >`
     SELECT patch, ally_position, ally_id, games, wins FROM stats_champion_with
-    WHERE patch IN ${q(patches)} AND position = ${position} AND champion_id = ${championId}`;
+    WHERE patch IN ${q(patches)} AND position = ${position} AND champion_id = ${championId}::int`;
   return rows.map((r) => ({
     patch: r.patch,
     position,

@@ -386,7 +386,12 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     );
     const kr = byServer[0] as TierListResponse;
     expect(kr.filters).toEqual({ platform: 'KR', rank: 'MASTER' });
-    expect(kr.roleGames).toBe(750 * 2); // one support per team, 750 KR matches on CUR
+    // One support per team of the KR matches on CUR, remakes excluded.
+    const [kr2] = await db<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM participants p JOIN matches m ON m.id = p.match_id
+      WHERE m.platform = 'KR' AND m.patch = ${CUR} AND NOT m.is_remake AND p.position = 'UTILITY'`;
+    expect(kr.roleGames).toBe(kr2?.n ?? -1);
+    expect(kr.roleGames).toBeGreaterThan(1400);
     expect(byServer.reduce((s, t) => s + t.roleGames, 0)).toBe(all.roleGames);
     expect(kr.entries.length).toBeGreaterThan(0);
 
