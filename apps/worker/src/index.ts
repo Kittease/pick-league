@@ -28,11 +28,7 @@ const log = createLogger(config.logLevel, { service: 'worker' });
 const db = createDb(config.databaseUrl, { max: 10 });
 
 const { applied } = await migrate(db, { log: (m) => log.info(m) });
-log.info('migrations ok', {
-  applied: applied.length,
-  platforms: config.platforms,
-  masterPlayers: config.masterPlayers,
-});
+log.info('migrations ok', { applied: applied.length, platforms: config.platforms });
 
 const riot = new RiotClient({ apiKey: config.riotApiKey, log });
 const patches = new PatchTracker(db, createDdragonClient(), { log });
@@ -45,7 +41,6 @@ const workers = config.platforms.map(
       patches,
       log,
       requestCount: () => riot.requestsFor(platform),
-      options: { masterPlayers: config.masterPlayers },
     }),
 );
 

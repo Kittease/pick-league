@@ -249,43 +249,116 @@ d('PlatformWorker (Postgres)', () => {
     expect((await worker.progress()).playedToList).toBe(4);
   });
 
-  test('ladder refresh keeps only the top Master players by LP, or none with masterPlayers 0', async () => {
-    const master = (lp: number) =>
-      ({
-        ...ladder(1, () => 30)[0],
-        puuid: `fake-master-${lp}`,
-        leaguePoints: lp,
-      }) as LeagueListDto['entries'][number];
-    riot.leagues.MASTER.entries = [master(100), master(300), master(200)];
-    const top2 = new PlatformWorker({
-      platform: 'EUW1',
-      db,
-      riot,
-      patches,
-      clock: fixedClock,
-      options: { masterPlayers: 2 },
-    });
-    expect(await top2.refreshLadder()).toBe(2);
-    const rows = await db<{ puuid: string; tier: string }[]>`
-      SELECT puuid, tier FROM ladder_entries ORDER BY puuid`;
-    expect([...rows]).toEqual([
-      { puuid: 'fake-master-200', tier: 'MASTER' },
-      { puuid: 'fake-master-300', tier: 'MASTER' },
-    ]);
+  const master = (lp: number) =>
+    ({
+      ...ladder(1, () => 30)[0],
+      puuid: `fake-master-${lp}`,
+      leaguePoints: lp,
+    }) as LeagueListDto['entries'][number];
+  const trackedMasters = async () =>
+    (
+      await db<{ puuid: string }[]>`
+        SELECT puuid FROM ladder_entries WHERE tier = 'MASTER' ORDER BY league_points DESC`
+    ).map((r) => r.puuid);
 
-    riot.calls = [];
+  test('ladder refresh tracks Challenger and Grandmaster, then only the Master players asked for', async () => {
     riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
-    const none = new PlatformWorker({
+    riot.leagues.MASTER.entries = [master(100), master(300), master(200)];
+    expect(await worker.refreshLadder()).toBe(1);
+    expect(riot.calls).toEqual(['league:CHALLENGER', 'league:GRANDMASTER', 'league:MASTER']);
+    expect(await trackedMasters()).toEqual([]);
+    expect(await worker.progress()).toMatchObject({ masterTracked: 0, masterTotal: 3 });
+
+    expect(await worker.refreshLadder(undefined, 2)).toBe(2);
+    expect(await trackedMasters()).toEqual(['fake-master-300', 'fake-master-200']);
+    // Later refreshes keep that many, also after a restart (read back from ladder_entries).
+    riot.leagues.MASTER.entries = [master(100), master(300), master(250)];
+    const restarted = new PlatformWorker({
       platform: 'EUW1',
       db,
       riot,
       patches,
       clock: fixedClock,
-      options: { masterPlayers: 0 },
     });
-    await none.refreshLadder();
-    expect(riot.calls).toEqual(['league:CHALLENGER', 'league:GRANDMASTER']);
-    expect(await count(db, 'ladder_entries')).toBe(1);
+    await restarted.refreshLadder();
+    expect(await trackedMasters()).toEqual(['fake-master-300', 'fake-master-250']);
+  });
+
+  test('start(): Master players are added top down, a step at a time, once the queues are empty', async () => {
+    riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
+    riot.leagues.MASTER.entries = [master(100), master(300), master(200)];
+    riot.matchIds.set(ladderPuuid(0), ['EUW1_7000000900']);
+    riot.matchIds.set('fake-master-200', ['EUW1_7000000902']);
+    riot.matchIds.set('fake-master-300', ['EUW1_7000000901', 'EUW1_7000000900']);
+    const w = new PlatformWorker({
+      platform: 'EUW1',
+      db,
+      riot,
+      patches,
+      clock: fixedClock,
+      options: {
+        idleMs: 10,
+        expansionCheckMs: 10,
+        masterStep: 2,
+        expandBelowPendingMatches: 5,
+        concurrency: { listing: 1, match: 0, daily: 0, enrichment: 0 },
+      },
+    });
+    const ac = new AbortController();
+    const running = w.start(ac.signal);
+    for (let i = 0; i < 200 && !riot.calls.includes('ids:fake-master-100:0'); i++) {
+      await Bun.sleep(10);
+    }
+    ac.abort();
+    await running;
+
+    // Challenger first; then the best two Master players, best first; then the last one.
+    expect(riot.calls.filter((c) => c.startsWith('ids:'))).toEqual([
+      `ids:${ladderPuuid(0)}:0`,
+      'ids:fake-master-300:0',
+      'ids:fake-master-200:0',
+      'ids:fake-master-100:0',
+    ]);
+    expect(await trackedMasters()).toEqual([
+      'fake-master-300',
+      'fake-master-200',
+      'fake-master-100',
+    ]);
+    expect((await w.progress()).masterTracked).toBe(3);
+    // Matches are queued with the best ladder position of the players who listed them.
+    const queued = await db<{ match_id: string; fetch_rank: number }[]>`
+      SELECT match_id, fetch_rank FROM match_fetch_queue ORDER BY match_id`;
+    expect([...queued]).toEqual([
+      { match_id: 'EUW1_7000000900', fetch_rank: 0 },
+      { match_id: 'EUW1_7000000901', fetch_rank: 1 },
+      { match_id: 'EUW1_7000000902', fetch_rank: 2 },
+    ]);
+  });
+
+  test('more Master players only once no listing waits and few matches are queued', async () => {
+    riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
+    riot.leagues.MASTER.entries = [master(100)];
+    const deps = {
+      platform: 'EUW1' as const,
+      db,
+      riot,
+      patches,
+      clock: fixedClock,
+      options: { expandBelowPendingMatches: 1 },
+    };
+    const w = new PlatformWorker(deps);
+    await w.refreshLadder();
+    // The Challenger player waits for a listing.
+    expect(await w.canTrackMoreMasters()).toBe(false);
+
+    riot.matchIds.set(ladderPuuid(0), ['EUW1_7000000002', 'EUW1_7000000001']);
+    await w.listPlayerMatches(ladderPuuid(0));
+    // Nothing left to list, but two matches queued.
+    const idle = new PlatformWorker(deps);
+    await idle.refreshLadder();
+    expect(await idle.canTrackMoreMasters()).toBe(false);
+    await db`UPDATE match_fetch_queue SET status = 'DONE' WHERE match_id = 'EUW1_7000000001'`;
+    expect(await idle.canTrackMoreMasters()).toBe(true);
   });
 
   test('first listing goes back 14 days, paginates, then continues from matches_synced_until', async () => {
@@ -674,7 +747,7 @@ d('PlatformWorker (Postgres)', () => {
       riot,
       patches,
       clock: fixedClock,
-      options: { idleMs: 10, authErrorPauseMs: 50, masterPlayers: 0 },
+      options: { idleMs: 10, authErrorPauseMs: 50 },
     });
     const auth = () => new RiotAuthError(401, 'league-v4', '/x');
     riot.errors.set('league:CHALLENGER', [auth()]);

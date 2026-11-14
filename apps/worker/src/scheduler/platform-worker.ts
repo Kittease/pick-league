@@ -2,13 +2,17 @@
  * One platform's crawler. Five kinds of work run concurrently and all wait on the same per-host
  * rate limiters, which serve the highest priority first (docs/architecture.md, "Worker"):
  *
- * 1. ladder refresh (hourly)            → platform host, priority 5
+ * 1. ladder refresh (hourly, and when Master grows) → platform host, priority 5
  * 2. match-id listing of "played" players → match cluster, priority 4
  * 3. match + timeline fetch             → match cluster, priority 3
  * 4. daily account + mastery refresh    → account cluster + platform host, priority 2
  * 5. enrichment (mastery + rank)        → platform host, priority 1
  *
  * So level 5 only gets a host's budget when nothing of a higher level is waiting for it.
+ *
+ * Players are tracked from the top of the ladder down: Challenger and Grandmaster, then Master by
+ * LP, `masterStep` more each time the queues are nearly empty. Listings and match fetches follow
+ * the ladder order too, so the best players' matches always come first.
  */
 import {
   claimEnrichment,
@@ -28,6 +32,7 @@ import {
   getMatchesSyncedUntil,
   insertParsedMatch,
   type LadderEntryInput,
+  ladderOrder,
   type MasteryInput,
   markMatchFailed,
   markMatchSkipped,
@@ -61,7 +66,6 @@ import {
   RANKED_SOLO_QUEUE,
 } from '@pick-league/shared';
 import { type Clock, isAbortError, systemClock } from '../clock.ts';
-import { DEFAULT_MASTER_PLAYERS } from '../config.ts';
 import { errorMessage, type Logger, silentLogger } from '../log.ts';
 import { MatchParseError, parseMatch } from '../parser/parse-match.ts';
 import type { PatchVerdict } from '../patches.ts';
@@ -76,6 +80,15 @@ const MAX_LISTING_RETRY_MS = 6 * HOUR;
 export interface SchedulerOptions {
   /** Ladder refresh period (default 1 h). */
   ladderIntervalMs: number;
+  /**
+   * Master players added to the tracked set (top of the Master tier by LP first) each time the
+   * queues are nearly empty (default 500). Challenger and Grandmaster are always tracked.
+   */
+  masterStep: number;
+  /** "Nearly empty": no listing waiting and at most this many PENDING matches (default 50). */
+  expandBelowPendingMatches: number;
+  /** How often the ladder loop checks whether it can track more Master players (default 1 min). */
+  expansionCheckMs: number;
   /**
    * First listing of a player goes back at most this far (default 14 days). It normally stops
    * sooner, at the start of the latest patch (the first older-patch match seen).
@@ -105,12 +118,13 @@ export interface SchedulerOptions {
   /** A match deferred this many times by transient errors becomes FAILED (default 10). */
   maxTransientErrors: number;
   concurrency: { listing: number; match: number; daily: number; enrichment: number };
-  /** Master players tracked besides Challenger + Grandmaster: the top N by LP (default 5000). */
-  masterPlayers: number;
 }
 
 export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   ladderIntervalMs: HOUR,
+  masterStep: 500,
+  expandBelowPendingMatches: 50,
+  expansionCheckMs: 60_000,
   firstListingMaxMs: 14 * DAY,
   listingOverlapMs: HOUR,
   listingRetryMs: 5 * 60_000,
@@ -122,7 +136,6 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   maxTransientBackoffMs: 5 * 60_000,
   maxTransientErrors: 10,
   concurrency: { listing: 2, match: 3, daily: 1, enrichment: 2 },
-  masterPlayers: DEFAULT_MASTER_PLAYERS,
 };
 
 /** What the worker needs to know about patches (only the latest is collected). */
@@ -155,6 +168,9 @@ const UNKNOWN_MAX_ATTEMPTS = 5;
 
 export interface PlatformProgress {
   platform: Platform;
+  /** Master players tracked, and in the whole Master tier (0 until the first ladder refresh). */
+  masterTracked: number;
+  masterTotal: number;
   playedToList: number;
   pendingMatches: number;
   enrichmentQueue: number;
@@ -185,10 +201,16 @@ export function toLadderEntries(list: LeagueListDto, tier: LadderTier): LadderEn
     }));
 }
 
-/** The `n` entries with the most LP (Riot lists a league in no particular order). */
-export function topByLp(entries: LadderEntryInput[], n: number): LadderEntryInput[] {
-  return [...entries].sort((a, b) => b.leaguePoints - a.leaguePoints).slice(0, n);
+/** Entries by LP, most first (Riot lists a league in no particular order). */
+export function byLp(entries: readonly LadderEntryInput[]): LadderEntryInput[] {
+  return [...entries].sort(
+    (a, b) =>
+      b.leaguePoints - a.leaguePoints || (a.puuid < b.puuid ? -1 : a.puuid > b.puuid ? 1 : 0),
+  );
 }
+
+/** Ladder position of a player not on the tracked ladder (listed after every tracked player). */
+const UNRANKED = Number.MAX_SAFE_INTEGER;
 
 export function toMasteries(list: readonly ChampionMasteryDto[]): MasteryInput[] {
   return list.map((m) => ({
@@ -221,8 +243,16 @@ export class PlatformWorker {
   private readonly opts: SchedulerOptions;
   private readonly requestCount: () => number;
 
-  /** Players to list (insertion order = FIFO). Durable copy: `players.listing_requested_at`. */
+  /** Players to list (best ladder position first). Durable copy: `players.listing_requested_at`. */
   private readonly played = new Set<string>();
+  /** Ladder position of each tracked player (0 = first Challenger), from the last refresh. */
+  private ladderRank = new Map<string, number>();
+  /** Master players tracked: grows by `masterStep` when the queues are nearly empty. */
+  private masterTracked = 0;
+  /** Players in the whole Master tier at the last ladder refresh (0 = not refreshed yet). */
+  private masterTotal = 0;
+  /** Whether the stored ladder was read (it gives `masterTracked` after a restart). */
+  private ladderLoaded = false;
   private readonly listingInFlight = new Set<string>();
   /** Failed listings: consecutive failures, and when the player may be listed again. */
   private readonly listingFailures = new Map<string, number>();
@@ -330,36 +360,91 @@ export class PlatformWorker {
   // -------------------------------------------------------------------------
 
   /**
-   * Fetches Challenger, Grandmaster and the top `masterPlayers` of Master, upserts them, marks who
-   * played. Returns how many played.
+   * Fetches Challenger, Grandmaster and Master, upserts Challenger, Grandmaster and the top
+   * `masterPlayers` of Master by LP (default: as many as tracked so far), marks who played.
+   * Returns how many played.
    */
-  async refreshLadder(signal?: AbortSignal): Promise<number> {
-    const masterPlayers = this.opts.masterPlayers;
+  async refreshLadder(signal?: AbortSignal, masterPlayers?: number): Promise<number> {
+    if (!this.ladderLoaded) await this.loadLadderOrder();
     const [challenger, grandmaster, master] = await Promise.all([
       this.riot.getLeague(this.platform, 'CHALLENGER', signal),
       this.riot.getLeague(this.platform, 'GRANDMASTER', signal),
-      masterPlayers > 0 ? this.riot.getLeague(this.platform, 'MASTER', signal) : null,
+      this.riot.getLeague(this.platform, 'MASTER', signal),
     ]);
+    const masters = byLp(toLadderEntries(master, 'MASTER'));
+    this.masterTotal = masters.length;
+    const tracked = masters.slice(0, Math.max(0, masterPlayers ?? this.masterTracked));
     const entries = [
-      ...toLadderEntries(challenger, 'CHALLENGER'),
-      ...toLadderEntries(grandmaster, 'GRANDMASTER'),
-      ...(master ? topByLp(toLadderEntries(master, 'MASTER'), masterPlayers) : []),
+      ...byLp(toLadderEntries(challenger, 'CHALLENGER')),
+      ...byLp(toLadderEntries(grandmaster, 'GRANDMASTER')),
+      ...tracked,
     ];
     if (entries.length === 0) {
       this.log.warn('empty ladder from Riot, not stored');
       return 0;
     }
     const result = await upsertLadder(this.db, this.platform, entries, new Date(this.clock.now()));
+    this.setLadderOrder(entries.map((e) => e.puuid));
+    this.masterTracked = tracked.length;
     for (const p of result.played) this.played.add(p);
     await this.loadPendingListings();
     this.log.info('ladder refreshed', {
       entries: entries.length,
+      masterTracked: this.masterTracked,
+      masterTotal: this.masterTotal,
       played: result.played.length,
       added: result.added.length,
       removed: result.removed,
       toList: this.played.size,
     });
     return result.played.length;
+  }
+
+  /** Ladder positions from a top-down list of puuids (a player listed twice keeps the first). */
+  private setLadderOrder(puuids: readonly string[]): void {
+    const rank = new Map<string, number>();
+    for (const p of puuids) if (!rank.has(p)) rank.set(p, rank.size);
+    this.ladderRank = rank;
+  }
+
+  private rankOf(puuid: string): number {
+    return this.ladderRank.get(puuid) ?? UNRANKED;
+  }
+
+  /** The tracked ladder as stored, before this process refreshes it (at startup). */
+  private async loadLadderOrder(): Promise<void> {
+    const rows = await ladderOrder(this.db, this.platform);
+    this.setLadderOrder(rows.map((r) => r.puuid));
+    this.masterTracked = rows.filter((r) => r.tier === 'MASTER').length;
+    this.ladderLoaded = true;
+  }
+
+  /**
+   * Whether to track `masterStep` more Master players now: some are not tracked yet, no listing is
+   * waiting (players cooling down after a failed listing don't count) and at most
+   * `expandBelowPendingMatches` matches are PENDING.
+   */
+  async canTrackMoreMasters(): Promise<boolean> {
+    if (this.masterTotal <= this.masterTracked || !this.patches.ready) return false;
+    if (this.listingInFlight.size > 0) return false;
+    const now = this.clock.now();
+    for (const p of this.played) {
+      const until = this.listingCooldown.get(p);
+      if (until === undefined || until <= now) return false;
+    }
+    const pending = await countPendingMatches(this.db, this.platform);
+    return pending <= this.opts.expandBelowPendingMatches;
+  }
+
+  /** Tracks the next `masterStep` Master players (by LP): refreshes the ladder with them. */
+  async trackMoreMasters(signal?: AbortSignal): Promise<void> {
+    const from = this.masterTracked;
+    await this.refreshLadder(signal, from + this.opts.masterStep);
+    this.log.info('tracking more Master players', {
+      from,
+      to: this.masterTracked,
+      masterTotal: this.masterTotal,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -389,20 +474,31 @@ export class PlatformWorker {
     }
   }
 
-  /** Next player to list: FIFO, skipping players being listed or cooling down after a failure. */
+  /**
+   * Next player to list: the best ladder position first (ties: the first one added), skipping
+   * players being listed or cooling down after a failure.
+   */
   private nextPlayedPlayer(): string | null {
     const now = this.clock.now();
+    let next: string | null = null;
+    let nextRank = Number.POSITIVE_INFINITY;
     for (const p of this.played) {
       // A player being listed stays in the set: they played again, so they are listed again.
       if (this.listingInFlight.has(p)) continue;
       const until = this.listingCooldown.get(p);
       if (until !== undefined && until > now) continue;
-      this.played.delete(p);
-      this.listingInFlight.add(p);
-      this.listingsStartedDuringLoad?.add(p);
-      return p;
+      const rank = this.rankOf(p);
+      if (rank < nextRank) {
+        next = p;
+        nextRank = rank;
+        if (rank === 0) break;
+      }
     }
-    return null;
+    if (next === null) return null;
+    this.played.delete(next);
+    this.listingInFlight.add(next);
+    this.listingsStartedDuringLoad?.add(next);
+    return next;
   }
 
   private listingDone(puuid: string, ok: boolean): void {
@@ -445,7 +541,7 @@ export class PlatformWorker {
       const own = ids.filter((id) => platformFromMatchId(id) === this.platform);
       const oldAt = own.findIndex((id) => this.isKnownOldPatch(gameIdOf(id)));
       const kept = oldAt >= 0 ? own.slice(0, oldAt) : own;
-      added += await enqueueMatchIds(this.db, this.platform, kept);
+      added += await enqueueMatchIds(this.db, this.platform, kept, this.rankOf(puuid));
       if (oldAt >= 0 || ids.length < 100) break;
     }
     // Clears the player's listing request, unless they played again since `now`.
@@ -707,6 +803,7 @@ export class PlatformWorker {
 
   /** Runs every loop until `signal` aborts; resolves once in-flight work has finished. */
   async start(signal: AbortSignal): Promise<void> {
+    await this.loadLadderOrder();
     await this.loadPendingListings();
     await this.openRun();
     const c = this.opts.concurrency;
@@ -780,6 +877,8 @@ export class PlatformWorker {
   async progress(): Promise<PlatformProgress> {
     return {
       platform: this.platform,
+      masterTracked: this.masterTracked,
+      masterTotal: this.masterTotal,
       playedToList: new Set([...this.played, ...this.listingInFlight]).size,
       pendingMatches: await countPendingMatches(this.db, this.platform),
       enrichmentQueue: await countEnrichmentQueue(this.db, this.platform),
@@ -787,20 +886,30 @@ export class PlatformWorker {
     };
   }
 
+  /**
+   * Refreshes the ladder every `ladderIntervalMs` (5 min after a failure) and, in between, checks
+   * every `expansionCheckMs` whether to track more Master players.
+   */
   private async ladderLoop(signal: AbortSignal): Promise<void> {
     let first = true;
+    let refreshAt = this.clock.now();
     while (!signal.aborted) {
-      let wait = this.opts.ladderIntervalMs;
       try {
         await this.waitForAuth(signal);
-        if (!first) await this.rotateRun();
-        first = false;
-        await this.refreshLadder(signal);
+        if (this.clock.now() >= refreshAt) {
+          if (!first) await this.rotateRun();
+          first = false;
+          refreshAt = this.clock.now() + this.opts.ladderIntervalMs;
+          await this.refreshLadder(signal);
+        } else if (await this.canTrackMoreMasters()) {
+          await this.trackMoreMasters(signal);
+        }
       } catch (err) {
         if (isAbortError(err)) break;
         this.recordError('ladder', err);
-        wait = Math.min(wait, 5 * 60_000);
+        refreshAt = Math.min(refreshAt, this.clock.now() + 5 * 60_000);
       }
+      const wait = Math.max(0, Math.min(this.opts.expansionCheckMs, refreshAt - this.clock.now()));
       if (!(await this.sleep(wait, signal))) break;
     }
   }

@@ -6,11 +6,7 @@ export interface WorkerConfig {
   databaseUrl: string;
   platforms: Platform[];
   logLevel: LogLevel;
-  /** Master players tracked besides Challenger + Grandmaster: the top N by LP (0 = none). */
-  masterPlayers: number;
 }
-
-export const DEFAULT_MASTER_PLAYERS = 5000;
 
 export class ConfigError extends Error {
   override name = 'ConfigError';
@@ -44,14 +40,8 @@ export function loadConfig(env: Record<string, string | undefined>): WorkerConfi
   if (isLogLevel(rawLevel)) logLevel = rawLevel;
   else problems.push(`LOG_LEVEL must be one of ${LOG_LEVELS.join(', ')} (got "${rawLevel}")`);
 
-  const rawMaster = env.MASTER_PLAYERS?.trim() ?? '';
-  const masterPlayers = rawMaster === '' ? DEFAULT_MASTER_PLAYERS : Number(rawMaster);
-  if (!Number.isSafeInteger(masterPlayers) || masterPlayers < 0) {
-    problems.push(`MASTER_PLAYERS must be a whole number ≥ 0 (got "${rawMaster}")`);
-  }
-
   if (problems.length > 0) {
     throw new ConfigError(`Invalid worker configuration:\n  - ${problems.join('\n  - ')}`);
   }
-  return { riotApiKey, databaseUrl, platforms, logLevel, masterPlayers };
+  return { riotApiKey, databaseUrl, platforms, logLevel };
 }
