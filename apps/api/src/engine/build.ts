@@ -82,6 +82,12 @@ export interface BuildData {
 
 const B = ENGINE_CONFIG.build;
 
+/**
+ * Tie-break of every ranking below: the stats rows come in no particular order, so equal scores
+ * must not depend on it (lowest choice key / item id first).
+ */
+const byKey = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
 interface Scored {
   row: ChoiceRow;
   delta: number;
@@ -105,13 +111,17 @@ export function bestChoice(
   }));
   const eligible = scored.filter((s) => s.row.games >= B.minChoiceGames);
   if (eligible.length === 0) {
-    return scored.sort((a, b) => b.row.games - a.row.games)[0] ?? null;
+    return (
+      scored.sort((a, b) => b.row.games - a.row.games || byKey(a.row.choice, b.row.choice))[0] ??
+      null
+    );
   }
   return (
     eligible.sort(
       (a, b) =>
         b.delta + B.popularityWeight * b.share - (a.delta + B.popularityWeight * a.share) ||
-        b.row.games - a.row.games,
+        b.row.games - a.row.games ||
+        byKey(a.row.choice, b.row.choice),
     )[0] ?? null
   );
 }
@@ -165,7 +175,12 @@ function adjustInContext(
   for (const r of ctx.rows) {
     if (r.kind !== kind || r.games < B.minContextGames || !allowed(r.choice)) continue;
     const d = contextDelta(ctx, kind, r.choice);
-    if (!best || d.delta > best.delta) best = { choice: r.choice, ...d };
+    if (
+      !best ||
+      d.delta > best.delta ||
+      (d.delta === best.delta && byKey(r.choice, best.choice) < 0)
+    )
+      best = { choice: r.choice, ...d };
   }
   const switched =
     best !== null && best.choice !== baseChoice && best.delta - base.delta >= B.switchMinGain;
@@ -485,7 +500,7 @@ function recommendSkills(
         skillMaxOrder(seq)?.join(',') === maxOrder.join(',')
       );
     })
-    .sort((a, b) => b.games - a.games)[0];
+    .sort((a, b) => b.games - a.games || byKey(a.choice, b.choice))[0];
   const sequence =
     seqRow !== undefined
       ? parseIntList(seqRow.choice)
@@ -581,7 +596,7 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
   const extra = itemRows
     .filter((r) => !coreIds.includes(Number(r.choice)) && !isBoots(Number(r.choice)))
     .filter((r) => (r.avgPos ?? 0) >= coreIds.length - 0.5)
-    .sort((a, b) => b.games - a.games);
+    .sort((a, b) => b.games - a.games || Number(a.choice) - Number(b.choice));
   for (const r of extra) {
     if (coreIds.length >= B.coreSize) break;
     coreIds.push(Number(r.choice));
@@ -649,7 +664,7 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
   // Early components.
   const early: RecommendedItem[] = byKind('early_item')
     .filter((r) => baseline.games > 0 && r.games / baseline.games >= B.earlyItemMinShare)
-    .sort((a, b) => (a.avgPos ?? 0) - (b.avgPos ?? 0))
+    .sort((a, b) => (a.avgPos ?? 0) - (b.avgPos ?? 0) || Number(a.choice) - Number(b.choice))
     .slice(0, B.maxEarlyItems)
     .map((r) => ({
       itemId: Number(r.choice),
@@ -697,7 +712,8 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
       if (rest.games <= 0) continue;
       const delta = shrink(winRate(r) - winRate(rest), r.games, B.shrinkK);
       if (delta <= 0 || delta - itemDelta(id) < B.swapMinGain) continue;
-      if (!best || delta > best.delta) best = { itemId: id, delta, games: r.games };
+      if (!best || delta > best.delta || (delta === best.delta && id < best.itemId))
+        best = { itemId: id, delta, games: r.games };
     }
     return best;
   };
@@ -713,34 +729,47 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
     });
   };
 
-  if (primaryMatchup) {
-    const swap = dataSwap(primaryMatchup);
-    if (swap) {
-      const replaces = weakestCore(primaryMatchup);
-      addSituational(swap.itemId, replaces, {
-        kind: 'matchup',
-        label: `${formatDelta(swap.delta)} ${primaryMatchup.label} when built (${formatGames(swap.games)})`,
-        delta: round(swap.delta),
-        games: swap.games,
-        ...(primaryMatchup.championIds ? { championIds: primaryMatchup.championIds } : {}),
-      });
-    }
-  }
-  for (const ctx of traitContexts) {
-    const trait = ctx.trait as CompTrait;
+  // One answer per context (lane opponent, active enemy traits), ranked before the cap: contexts
+  // with a data-backed swap by its delta (largest first), then the tag-rule ones in trait order.
+  // They are answered in that order, so an item answering several contexts goes to the one it
+  // helps most, and an item is only marked `taken` when it is returned.
+  const contexts = [...(primaryMatchup ? [primaryMatchup] : []), ...traitContexts];
+  const ranked = contexts
+    .map((ctx, order) => ({ ctx, order, delta: dataSwap(ctx)?.delta ?? null }))
+    .sort((a, b) => {
+      if (a.delta !== null && b.delta !== null) return b.delta - a.delta || a.order - b.order;
+      if (a.delta !== null || b.delta !== null) return a.delta !== null ? -1 : 1;
+      return a.order - b.order;
+    });
+  const full = () => situational.length >= B.maxSituational;
+  for (const { ctx } of ranked) {
     const swap = dataSwap(ctx);
     if (swap) {
+      if (full()) continue;
       const replaces = weakestCore(ctx);
-      addSituational(swap.itemId, replaces, {
-        kind: 'item_swap',
-        label: `${formatDelta(swap.delta)} ${ctx.label} when built${replaces !== null ? ` instead of ${names.item(replaces)}` : ''} (${formatGames(swap.games)})`,
-        delta: round(swap.delta),
-        games: swap.games,
-        trait,
-      });
+      if (ctx.kind === 'matchup') {
+        addSituational(swap.itemId, replaces, {
+          kind: 'matchup',
+          label: `${formatDelta(swap.delta)} ${ctx.label} when built (${formatGames(swap.games)})`,
+          delta: round(swap.delta),
+          games: swap.games,
+          ...(ctx.championIds ? { championIds: ctx.championIds } : {}),
+        });
+      } else {
+        addSituational(swap.itemId, replaces, {
+          kind: 'item_swap',
+          label: `${formatDelta(swap.delta)} ${ctx.label} when built${replaces !== null ? ` instead of ${names.item(replaces)}` : ''} (${formatGames(swap.games)})`,
+          delta: round(swap.delta),
+          games: swap.games,
+          trait: ctx.trait as CompTrait,
+        });
+      }
       continue;
     }
+    if (ctx.kind === 'matchup') continue;
+    const trait = ctx.trait as CompTrait;
     // Fallback: Data Dragon tag rules, restricted to items this champion+role actually builds.
+    // A core item that already answers the trait gets the reason even when the list is full.
     for (const rule of TAG_RULES) {
       if (rule.trait !== trait || (rule.damage && rule.damage !== damage)) continue;
       const inCore = core.find((c) => itemMatchesRule(c.itemId, data.items.get(c.itemId), rule));
@@ -755,11 +784,12 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
         });
         break;
       }
+      if (full()) break;
       const candidate = itemRows
         .map((r) => Number(r.choice))
         .filter((id) => !taken.has(id) && (itemRow.get(id)?.games ?? 0) >= B.tagRuleMinItemGames)
         .filter((id) => itemMatchesRule(id, data.items.get(id), rule))
-        .sort((a, b) => (itemRow.get(b)?.games ?? 0) - (itemRow.get(a)?.games ?? 0))[0];
+        .sort((a, b) => (itemRow.get(b)?.games ?? 0) - (itemRow.get(a)?.games ?? 0) || a - b)[0];
       if (candidate === undefined) continue;
       const replaces = weakestCore(null);
       addSituational(candidate, replaces, {
@@ -777,7 +807,7 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
     starting,
     early,
     core,
-    situational: situational.slice(0, B.maxSituational),
+    situational,
     ...(questUpgrade ? { questUpgrade } : {}),
   };
 }

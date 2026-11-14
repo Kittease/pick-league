@@ -166,6 +166,118 @@ describe('recommendBuild', () => {
     expect(swap?.reasons[0]?.label).toContain('vs heal-heavy teams when built instead of');
   });
 
+  describe('situational items', () => {
+    /** Enemies that are AD-heavy, high CC, heal-heavy, tanky and ranged at once. */
+    const enemies = [
+      { championId: 16, role: 'UTILITY' },
+      { championId: 19, role: 'JUNGLE' },
+    ];
+    const enemy = {
+      physicalShare: 0.7,
+      magicShare: 0.25,
+      ccPerMin: 1,
+      healingPerMin: 100,
+      tankinessPerMin: 2000,
+      isRanged: true,
+    };
+    const TRAITS = ['AD_HEAVY', 'HIGH_CC', 'HIGH_HEALING', 'TANKY', 'POKE_RANGED'] as const;
+    const traitData = (rows: ChoiceTraitRow[]): Partial<BuildData> => ({
+      championTraits: [traitsOf(CUR, 89), traitsOf(CUR, 16, enemy), traitsOf(CUR, 19, enemy)],
+      compTraits: TRAITS.map((trait) => ({
+        patch: CUR,
+        position: 'UTILITY' as const,
+        championId: 89,
+        side: 'enemy' as const,
+        trait,
+        games: 300,
+        wins: 150,
+      })),
+      choiceTraits: rows,
+    });
+    const t = (trait: ChoiceTraitRow['trait'], item: number, wins: number): ChoiceTraitRow => ({
+      trait,
+      kind: 'item',
+      choice: String(item),
+      games: 100,
+      wins,
+    });
+
+    test('ranked by data-backed delta before the cap, whatever the trait order', () => {
+      const b = recommendBuild(
+        req({ ...LEONA, enemies: [...enemies, { championId: 412, role: 'UTILITY' }] }),
+        data({
+          ...traitData([
+            t('AD_HEAVY', 9002, 60),
+            t('HIGH_CC', 9003, 62),
+            t('HIGH_HEALING', 9001, 75), // the strongest answer, late in the trait order
+            t('TANKY', 9004, 64),
+            t('POKE_RANGED', 9005, 66),
+          ]),
+          vs: [vs(CUR, 89, 412, 'UTILITY', 300, 150)],
+          choiceMatchups: [
+            {
+              opponentId: 412,
+              opponentPosition: 'UTILITY',
+              kind: 'item',
+              choice: '9006',
+              games: 100,
+              wins: 58,
+            },
+          ],
+        }),
+      );
+      const situational = b?.items.situational ?? [];
+      // Six data-backed answers, four kept: the largest deltas, best first.
+      expect(situational.map((s) => s.itemId)).toEqual([9001, 9005, 9004, 9003]);
+      expect(situational[0]?.reasons[0]).toMatchObject({
+        kind: 'item_swap',
+        trait: 'HIGH_HEALING',
+      });
+      const deltas = situational.map((s) => s.reasons[0]?.delta ?? 0);
+      expect(deltas).toEqual([...deltas].sort((x, y) => y - x));
+    });
+
+    test('an item answering several traits is listed once, for the trait it helps most', () => {
+      // 9002 is the best answer to AD_HEAVY (small delta) and to TANKY (large delta): TANKY ranks
+      // before AD_HEAVY, so it gets 9002 (in trait order AD_HEAVY took it first), and AD_HEAVY,
+      // ranked last, is past the cap.
+      const b = recommendBuild(
+        req({ ...LEONA, enemies }),
+        data(
+          traitData([
+            t('AD_HEAVY', 9002, 58),
+            t('HIGH_CC', 9003, 62),
+            t('HIGH_HEALING', 9001, 75),
+            t('TANKY', 9002, 70),
+            t('POKE_RANGED', 9005, 66),
+          ]),
+        ),
+      );
+      const ids = b?.items.situational.map((s) => s.itemId);
+      expect(ids).toEqual([9001, 9002, 9005, 9003]);
+      expect(new Set(ids).size).toBe(ids?.length ?? 0);
+      const tanky = b?.items.situational.find((s) => s.itemId === 9002);
+      expect(tanky?.reasons[0]).toMatchObject({ trait: 'TANKY' });
+    });
+
+    test('ties go to the lowest item id, whatever the row order', () => {
+      const rows = [t('HIGH_HEALING', 9020, 70), t('HIGH_HEALING', 9010, 70)];
+      for (const order of [rows, [...rows].reverse()]) {
+        const b = recommendBuild(req({ ...LEONA, enemies }), data(traitData(order)));
+        expect(b?.items.situational.map((s) => s.itemId)).toEqual([9010]);
+      }
+    });
+  });
+
+  test('base choices: equal records go to the lowest key, whatever the row order', () => {
+    const tied = [c('spells', '4,14', 500, 250), c('spells', '3,4', 500, 250)];
+    const rest = data().choices.filter((ch) => ch.kind !== 'spells');
+    for (const order of [tied, [...tied].reverse()]) {
+      const b = recommendBuild(req(LEONA), data({ choices: [...rest, ...order] }));
+      expect(b?.summonerSpells.spellIds).toEqual([4, 3]);
+    }
+  });
+
   test('tag rule fallback when the trait has no data', () => {
     const healers = {
       ...LEONA,
