@@ -35,6 +35,8 @@ export const ITEM_NAMES: Record<number, string> = {
   3111: "Mercury's Treads",
   3011: 'Chemtech Putrifier',
   3865: 'World Atlas',
+  3869: 'Celestial Opposition',
+  3876: 'Solstice Sleigh',
   2003: 'Health Potion',
   1001: 'Boots',
   3067: 'Kindlegem',

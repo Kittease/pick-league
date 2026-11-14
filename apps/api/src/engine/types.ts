@@ -85,7 +85,9 @@ export type ChoiceKind =
   | 'skill_max'
   | 'skill_seq'
   | 'item'
-  | 'early_item';
+  | 'early_item'
+  /** Support quest upgrade picked when the support item's quest completes. */
+  | 'quest_item';
 
 /** stats_choices */
 export interface ChoiceRow extends GamesWins {

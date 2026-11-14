@@ -213,6 +213,56 @@ describe('recommendBuild', () => {
     });
   });
 
+  test('support quest upgrade: most successful one, with its reasons', () => {
+    const quest = [c('quest_item', '3869', 600, 330), c('quest_item', '3876', 350, 160)];
+    const b = recommendBuild(req(LEONA), data({ choices: [...data().choices, ...quest] }));
+    expect(b?.items.questUpgrade?.itemId).toBe(3869);
+    expect(b?.items.questUpgrade?.reasons).toEqual([
+      {
+        kind: 'base',
+        label:
+          'Most successful quest upgrade (Celestial Opposition): 55.0% win rate, picked in 60.0% of games (600 games)',
+        delta: expect.any(Number),
+        games: 600,
+      },
+    ]);
+    expect(b?.items.questUpgrade?.reasons[0]?.delta).toBeGreaterThan(0);
+    // Not in the other item lists.
+    const listed = [...(b?.items.starting ?? []), ...(b?.items.core ?? [])].map((i) => i.itemId);
+    expect(listed).not.toContain(3869);
+  });
+
+  test('support quest upgrade adapts to the lane opponent', () => {
+    const m = (choice: string, games: number, wins: number): ChoiceMatchupRow => ({
+      opponentId: 412,
+      opponentPosition: 'UTILITY',
+      kind: 'quest_item',
+      choice,
+      games,
+      wins,
+    });
+    const quest = [c('quest_item', '3869', 600, 330), c('quest_item', '3876', 350, 160)];
+    const b = recommendBuild(
+      req({ ...LEONA, enemies: [{ championId: 412, role: 'UTILITY' }] }),
+      data({
+        choices: [...data().choices, ...quest],
+        vs: [vs(CUR, 89, 412, 'UTILITY', 300, 150)],
+        choiceMatchups: [m('3869', 200, 80), m('3876', 100, 70)],
+      }),
+    );
+    expect(b?.items.questUpgrade?.itemId).toBe(3876);
+    const reason = b?.items.questUpgrade?.reasons[0];
+    expect(reason).toMatchObject({ kind: 'matchup', games: 100, championIds: [412] });
+    expect(reason?.label).toMatch(/^\+\d+\.\d% vs Thresh with Solstice Sleigh \(100 games\)$/);
+  });
+
+  test("no quest upgrade when few of the role's games had one", () => {
+    expect(recommendBuild(req(LEONA), data())?.items.questUpgrade).toBeUndefined();
+    const stray = [c('quest_item', '3869', 20, 15)];
+    const b = recommendBuild(req(LEONA), data({ choices: [...data().choices, ...stray] }));
+    expect(b?.items.questUpgrade).toBeUndefined();
+  });
+
   test('returns null without data', () => {
     expect(
       recommendBuild(req(LEONA), data({ baseline: { games: 0, wins: 0 }, choices: [] })),

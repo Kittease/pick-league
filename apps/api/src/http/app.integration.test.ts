@@ -225,6 +225,23 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(b.items.situational.map((s) => s.replacesItemId)).not.toContain(3033);
   });
 
+  test('build: support quest upgrade from the end-of-game inventory, supports only', async () => {
+    const res = await post('/recommendations/build', { championId: 89, role: 'UTILITY' });
+    const b = (await res.json()) as BuildResponse;
+    // Leona (engage) ends with Celestial Opposition in 7 synthetic matches out of 8.
+    expect(b.items.questUpgrade?.itemId).toBe(3869);
+    const base = b.items.questUpgrade?.reasons.find((r) => r.kind === 'base');
+    expect(base?.games).toBeGreaterThan(b.games / 2);
+    expect(base?.label).toStartWith('Most successful quest upgrade (Celestial Opposition)');
+    const listed = [...b.items.starting, ...b.items.early, ...b.items.core].map((i) => i.itemId);
+    expect(listed).not.toContain(3869);
+
+    const enchanter = await post('/recommendations/build', { championId: 117, role: 'UTILITY' });
+    expect(((await enchanter.json()) as BuildResponse).items.questUpgrade?.itemId).toBe(3876);
+    const adc = await post('/recommendations/build', { championId: 222, role: 'BOTTOM' });
+    expect(((await adc.json()) as BuildResponse).items.questUpgrade).toBeUndefined();
+  });
+
   test('build: unknown champion → 404, no games in role → 503', async () => {
     const unknown = await post('/recommendations/build', { championId: 9999, role: 'TOP' });
     expect(unknown.status).toBe(404);

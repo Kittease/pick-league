@@ -76,6 +76,11 @@ export const ENGINE_CONFIG = {
     /** An early component is listed if bought by at least this share of players. */
     earlyItemMinShare: 0.3,
     maxEarlyItems: 4,
+    /**
+     * The support quest upgrade is recommended when at least this share of the champion+role's
+     * games ended with one (supports; keeps a stray off-role quest out of other roles' builds).
+     */
+    questItemMinShare: 0.5,
     /** Tag rules only suggest items this champion+role built at least this many times. */
     tagRuleMinItemGames: 5,
     /** Minimum games of a full skill sequence to use it instead of a synthesised one. */

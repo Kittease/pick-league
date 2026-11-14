@@ -167,6 +167,22 @@ const ITEM_DEFS: ItemDef[] = [
   { id: 1056, name: "Doran's Ring", gold: 400, tags: ['SpellDamage', 'Mana', 'Lane'] },
   { id: 1054, name: "Doran's Shield", gold: 450, tags: ['Health', 'HealthRegen', 'Lane'] },
   { id: 3865, name: 'World Atlas', gold: 400, tags: ['GoldPer', 'Lane'] },
+  // Support quest: Bounty of Worlds turns into the upgrade the player picks (end inventory only).
+  { id: 3867, name: 'Bounty of Worlds', gold: 400, tags: ['GoldPer', 'Lane'] },
+  {
+    id: 3869,
+    name: 'Celestial Opposition',
+    gold: 400,
+    tags: ['Health', 'GoldPer', 'Lane'],
+    from: [3867],
+  },
+  {
+    id: 3876,
+    name: 'Solstice Sleigh',
+    gold: 400,
+    tags: ['Health', 'GoldPer', 'Lane'],
+    from: [3867],
+  },
   { id: 1101, name: 'Scorchclaw Pup', gold: 450, tags: ['Jungle'] },
   // components
   { id: 1001, name: 'Boots', gold: 300, tags: ['Boots'], boots: true },
@@ -1058,7 +1074,18 @@ export function generateMatches(options: GenerateOptions): ParsedMatch[] {
         const trueShare = 0.05;
         const phys = Math.round(dmg * k.physical);
         const magic = Math.round(dmg * k.magic);
-        const finalItems = [...l.core.slice(0, 5), l.boots, 3340];
+        // Supports end with a quest upgrade, 7 times out of 8 Celestial Opposition (engage) or
+        // Solstice Sleigh (enchanters); deterministic so the other draws are unchanged.
+        const quest =
+          POSITIONS[i] !== 'UTILITY'
+            ? null
+            : (l.champ.archetype === 'engage') === ((n + participantId) % 8 !== 0)
+              ? 3869
+              : 3876;
+        const finalItems =
+          quest === null
+            ? [...l.core.slice(0, 5), l.boots, 3340]
+            : [quest, ...l.core.slice(0, 4), l.boots, 3340];
         participants.push({
           participantId,
           puuid: `synthetic-puuid-${id}-${participantId}`,

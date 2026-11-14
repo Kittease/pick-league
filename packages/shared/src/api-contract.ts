@@ -355,6 +355,11 @@ export interface ItemsRecommendation {
   core: RecommendedItem[];
   /** Adaptations to this game's enemies/allies. */
   situational: RecommendedItem[];
+  /**
+   * Supports: upgrade to pick when the support item's quest completes (e.g. Celestial
+   * Opposition), adapted to the lane opponent and enemy composition. Absent for other roles.
+   */
+  questUpgrade?: RecommendedItem;
 }
 
 export interface RunesRecommendation {

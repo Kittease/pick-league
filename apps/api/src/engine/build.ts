@@ -619,6 +619,33 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
     core.splice(slot, 0, { itemId: Number(bootsKey), reasons });
   }
 
+  // Support quest upgrade, adjusted for the lane opponent and enemy traits like boots.
+  const questRows = byKind('quest_item');
+  const questGames = questRows.reduce((s, r) => s + r.games, 0);
+  const questBase =
+    baseline.games > 0 && questGames / baseline.games >= B.questItemMinShare
+      ? bestChoice(questRows, baseline)
+      : null;
+  let questUpgrade: RecommendedItem | undefined;
+  if (questBase) {
+    const reasons: Reason[] = [
+      ...baseReason(
+        questBase,
+        `Most successful quest upgrade (${names.item(Number(questBase.row.choice))})`,
+      ),
+    ];
+    const sw = bestSwitch(
+      [...(primaryMatchup ? [primaryMatchup] : []), ...traitContexts],
+      'quest_item',
+      questBase.row.choice,
+    );
+    if (sw.winner) {
+      const r = contextReason(sw.winner, names.item(Number(sw.winner.choice)));
+      if (r) reasons.unshift(r);
+    }
+    questUpgrade = { itemId: Number(sw.choice), reasons };
+  }
+
   // Early components.
   const early: RecommendedItem[] = byKind('early_item')
     .filter((r) => baseline.games > 0 && r.games / baseline.games >= B.earlyItemMinShare)
@@ -751,5 +778,6 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
     early,
     core,
     situational: situational.slice(0, B.maxSituational),
+    ...(questUpgrade ? { questUpgrade } : {}),
   };
 }
