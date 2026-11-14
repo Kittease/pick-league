@@ -151,6 +151,13 @@ export const PLANTED = {
   runeMatchup: { championId: 89, opponentId: 412, keystone: 8439, logit: 0.7 },
   /** Braum (201) is rarely picked on the current patch (the previous one is added). */
   rareOnCurrent: 201,
+  /**
+   * Leona (89) bullies Soraka (16) in lane: per minute, extra gold / XP / CS in Leona's timeline
+   * frames when Soraka is the enemy support (frames only: the win model is unchanged).
+   */
+  lane: { championId: 89, opponentId: 16, goldPerMin: 45, xpPerMin: 30, csPerMin: 0.8 },
+  /** Every `shortFramesEvery`-th match has frames up to minute 13 only (no 15-minute frame). */
+  shortFramesEvery: 20,
 } as const;
 
 interface ItemDef {
@@ -899,6 +906,60 @@ function pairNoise(a: number, b: number): number {
   return (x - Math.floor(x) - 0.5) * 0.3;
 }
 
+/** Deterministic per-match noise in [-0.5, 0.5) (no RNG draw: the other draws stay unchanged). */
+function frameNoise(n: number, participantId: number, salt: number): number {
+  const x = Math.sin(n * 0.7311 + participantId * 3.917 + salt * 11.13) * 43758.5453;
+  return x - Math.floor(x) - 0.5;
+}
+
+/** Per-minute income of each role (gold, XP, CS), before the lane edge. */
+const ROLE_INCOME: Record<Position, { gold: number; xp: number; cs: number }> = {
+  TOP: { gold: 390, xp: 460, cs: 7.4 },
+  JUNGLE: { gold: 370, xp: 430, cs: 5.6 },
+  MIDDLE: { gold: 400, xp: 470, cs: 7.8 },
+  BOTTOM: { gold: 410, xp: 380, cs: 8.2 },
+  UTILITY: { gold: 260, xp: 330, cs: 1.2 },
+};
+
+interface Frames {
+  goldByMinute: number[];
+  xpByMinute: number[];
+  csByMinute: number[];
+}
+
+/**
+ * Timeline frames (index 0 = minute 0) of a player vs its lane opponent (same position): role
+ * income, a deterministic matchup edge (antisymmetric, so lane differences are non-zero and
+ * reproducible), per-match noise and the planted lane bully (`PLANTED.lane`).
+ */
+function timelineFrames(
+  n: number,
+  participantId: number,
+  role: Position,
+  own: SynthChampion,
+  opp: SynthChampion,
+  count: number,
+): Frames {
+  const income = ROLE_INCOME[role];
+  const edge =
+    pairNoise(own.id, opp.id) - pairNoise(opp.id, own.id) + (own.strength - opp.strength);
+  const planted =
+    own.id === PLANTED.lane.championId && opp.id === PLANTED.lane.opponentId ? PLANTED.lane : null;
+  const gold = income.gold + edge * 100 + frameNoise(n, participantId, 1) * 40;
+  const xp = income.xp + edge * 80 + frameNoise(n, participantId, 2) * 30;
+  const cs = income.cs + edge * 0.8 + frameNoise(n, participantId, 3) * 0.6;
+  const perMinute = {
+    gold: gold + (planted?.goldPerMin ?? 0),
+    xp: xp + (planted?.xpPerMin ?? 0),
+    cs: cs + (planted?.csPerMin ?? 0),
+  };
+  return {
+    goldByMinute: Array.from({ length: count }, (_, m) => Math.round(500 + m * perMinute.gold)),
+    xpByMinute: Array.from({ length: count }, (_, m) => Math.round(m * perMinute.xp)),
+    csByMinute: Array.from({ length: count }, (_, m) => Math.round(m * perMinute.cs)),
+  };
+}
+
 interface Loadout {
   champ: SynthChampion;
   kit: ArchetypeKit;
@@ -1072,6 +1133,8 @@ export function generateMatches(options: GenerateOptions): ParsedMatch[] {
     const isRemake = rng() < 0.01;
     const durationS = isRemake ? 210 : Math.round(between(rng, 1400, 2300));
     const minutes = Math.floor(durationS / 60) + 1;
+    // Some timelines stop before 15 minutes (frames 0..13): no 15-minute lane difference.
+    const frameCount = (n + 1) % PLANTED.shortFramesEvery === 0 ? Math.min(minutes, 14) : minutes;
     const id = `${prefix}_${n + 1}`;
 
     const participants: ParsedParticipant[] = [];
@@ -1141,15 +1204,20 @@ export function generateMatches(options: GenerateOptions): ParsedMatch[] {
           wardsPlaced: 10,
           wardsKilled: 3,
           controlWardsBought: 2,
-          goldByMinute: Array.from({ length: minutes }, (_, m) => 500 + m * 400),
-          xpByMinute: Array.from({ length: minutes }, (_, m) => m * 450),
-          csByMinute: Array.from({ length: minutes }, (_, m) => m * 7),
-          levelByMinute: Array.from({ length: minutes }, (_, m) =>
+          ...timelineFrames(
+            n,
+            participantId,
+            POSITIONS[i] as Position,
+            l.champ,
+            ((ti === 0 ? red : blue)[i] as Loadout).champ,
+            frameCount,
+          ),
+          levelByMinute: Array.from({ length: frameCount }, (_, m) =>
             Math.min(18, 1 + Math.floor(m / 2)),
           ),
-          damageToChampionsByMinute: Array.from({ length: minutes }, (_, m) => m * 500),
-          positionXByMinute: Array.from({ length: minutes }, () => 7000),
-          positionYByMinute: Array.from({ length: minutes }, () => 7000),
+          damageToChampionsByMinute: Array.from({ length: frameCount }, (_, m) => m * 500),
+          positionXByMinute: Array.from({ length: frameCount }, () => 7000),
+          positionYByMinute: Array.from({ length: frameCount }, () => 7000),
         });
         if (!isRemake) {
           itemEv.push(...itemEvents(rng, participantId, l, durationS));
