@@ -19,7 +19,15 @@ import {
   SearchIcon,
   XIcon,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -34,9 +42,16 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { compact, confidenceLabel, patchesText, percent, ROLE_LABEL } from '@/lib/format';
+import {
+  type EscapeAction,
+  type SearchFocus,
+  shortcutLabel,
+  type TierListLayer,
+} from '@/lib/shortcuts';
 import { cn } from '@/lib/utils';
 import type { ApiResult, AppState, Settings } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
+import { IS_MAC } from '../hooks/use-shortcuts';
 import { BuildDetails } from './build-panel';
 import { ChampionIcon } from './game-icon';
 import { Notice } from './notice';
@@ -421,6 +436,7 @@ function DetailPanel({
           variant="ghost"
           onClick={onClose}
           aria-label="Close details"
+          title="Close details (Esc)"
           className="ml-auto"
         >
           <XIcon />
@@ -504,7 +520,7 @@ function GenericBuild({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
-        <Button size="sm" variant="ghost" onClick={onBack}>
+        <Button size="sm" variant="ghost" onClick={onBack} title="Back to the tier list (Esc)">
           <ArrowLeftIcon data-icon="inline-start" />
           Tier list
         </Button>
@@ -551,15 +567,30 @@ function sortValue(e: TierListEntry, key: SortKey, name: string): number | strin
   return key === 'name' ? name : e[key];
 }
 
+/** What the app's keyboard shortcuts drive in the tier list. */
+export interface TierListHandle {
+  /** What Escape would close here. */
+  escapeState(): { search: SearchFocus; tierList: TierListLayer };
+  /** Runs an Escape step (`escapeAction`) that belongs to the tier list. */
+  escape(action: Exclude<EscapeAction, 'show-tier-list'>): void;
+  /** Focuses the search field and selects its text (once the tier list is visible). */
+  focusSearch(): void;
+}
+
+const SEARCH_PLACEHOLDER = `Search champion (${shortcutLabel('k', IS_MAC)})`;
+
 export function TierListPage({
   state,
   lookup,
   onBusyChange,
+  handleRef,
 }: {
   state: AppState;
   lookup: StaticLookup | null;
   /** True while the user is looking at a champion (details or build open). */
   onBusyChange?: (busy: boolean) => void;
+  /** Filled with what the keyboard shortcuts drive. */
+  handleRef?: RefObject<TierListHandle | null>;
 }) {
   const [role, setRole] = useState<Position>(state.settings.fallbackRole);
   const [search, setSearch] = useState('');
@@ -605,6 +636,45 @@ export function TierListPage({
   const selected = data?.entries.find((e) => e.championId === selectedId) ?? null;
 
   const narrow = selected !== null;
+
+  // Ctrl+K: the field may not be focusable yet (tier list hidden behind champion select, or the
+  // build page shown); it is then focused after the render that shows it.
+  const searchRef = useRef<HTMLInputElement>(null);
+  const pendingFocus = useRef(false);
+  const focusPending = useCallback(() => {
+    const input = searchRef.current;
+    if (!pendingFocus.current || !input) return;
+    input.focus();
+    if (document.activeElement !== input) return;
+    pendingFocus.current = false;
+    input.select();
+  }, []);
+  useEffect(focusPending);
+
+  const layer: TierListLayer = buildOf !== null ? 'build' : narrow ? 'details' : 'list';
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      escapeState: () => {
+        const input = searchRef.current;
+        const focused = input !== null && document.activeElement === input;
+        const search: SearchFocus = !focused ? 'none' : input.value ? 'filled' : 'empty';
+        return { search, tierList: layer };
+      },
+      escape: (action) => {
+        if (action === 'clear-search') setSearch('');
+        else if (action === 'blur-search') searchRef.current?.blur();
+        else if (action === 'close-build') setBuildOf(null);
+        else setSelectedId(null);
+      },
+      focusSearch: () => {
+        pendingFocus.current = true;
+        setBuildOf(null);
+        focusPending();
+      },
+    }),
+    [layer, focusPending],
+  );
 
   if (buildOf !== null) {
     return (
@@ -658,12 +728,14 @@ export function TierListPage({
           <span className="flex items-center gap-2">
             <SearchIcon className="size-3.5 text-muted-foreground" />
             <Input
+              ref={searchRef}
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search champion"
+              placeholder={SEARCH_PLACEHOLDER}
               aria-label="Search champion"
-              className="h-8 w-40 text-xs md:text-xs"
+              aria-keyshortcuts={IS_MAC ? 'Meta+K Meta+F' : 'Control+K Control+F'}
+              className="h-8 w-48 text-xs md:text-xs"
             />
           </span>
           {owned && (
