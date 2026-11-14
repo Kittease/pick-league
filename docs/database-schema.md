@@ -244,7 +244,7 @@ CREATE TABLE participants (
   rune_secondary_tree smallint NOT NULL,
   runes           smallint[] NOT NULL,       -- 6: keystone, 3 primary, 2 secondary (in order)
   stat_shards     smallint[] NOT NULL,       -- 3: offense, flex, defense
-  final_items     integer[]  NOT NULL,       -- 7: item0..item6 (6 = trinket), 0 = empty
+  final_items     integer[]  NOT NULL,       -- 7: item0..item6 (6 = trinket), 0 = empty; the only record of the support quest upgrade (see stats_quest_items)
 
   -- end-of-game stats
   champ_level     smallint NOT NULL,
@@ -341,6 +341,12 @@ CREATE TABLE objective_events (
 );
 
 ```
+
+## Stats views (owned by the API)
+
+Materialized views over the tables above, defined in `packages/db/migrations/0002_stats_views.sql` and later migrations and refreshed by the API (`STATS_REFRESH_ORDER` in `apps/api/src/stats/refresh.ts`). `stats_participant_choices` lists every build/rune/spell/skill choice of a participant as `(kind, choice, pos)`; `stats_choices`, `stats_choice_matchups` and `stats_choice_traits` aggregate it per champion + role, vs a lane opponent and vs an enemy composition trait.
+
+**Support quest upgrade** (`0007_support_quest_items.sql`, kind `quest_item`). The support item (World Atlas) is granted for free and upgrades itself through the quest: World Atlas → Runic Compass → Bounty of Worlds → the upgrade the player picks (Celestial Opposition, Dream Maker, Zaz'Zak's Realmspike, Solstice Sleigh, Bloodsong). The timeline only has `ITEM_DESTROYED` events for the first three; the picked upgrade almost never comes as `ITEM_PURCHASED`, and at 400 gold it is not a completed item. `stats_quest_items` (intermediate, one row per participant who had one) reads it from `final_items`, else from its last purchase event (sold before the end). Upgrades are recognised from Data Dragon, not by id: non-consumable, non-completed items tagged `GoldPer` that are built from an item and build into nothing.
 
 ## Worker state
 

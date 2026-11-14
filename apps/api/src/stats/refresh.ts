@@ -17,6 +17,8 @@ export const STATS_REFRESH_ORDER: readonly {
   { view: 'stats_team_comp', concurrent: false, analyze: true },
   { view: 'stats_comp_thresholds', concurrent: true },
   { view: 'stats_participants', concurrent: false, analyze: true },
+  // Support quest upgrades (0007_support_quest_items.sql), read by stats_participant_choices.
+  { view: 'stats_quest_items', concurrent: false, analyze: true },
   { view: 'stats_champion_roles', concurrent: true },
   { view: 'stats_champion_vs', concurrent: true },
   { view: 'stats_champion_with', concurrent: true },
