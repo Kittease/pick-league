@@ -27,6 +27,9 @@ export const STATS_REFRESH_ORDER: readonly {
   { view: 'stats_choices', concurrent: true },
   { view: 'stats_choice_matchups', concurrent: true },
   { view: 'stats_choice_traits', concurrent: true },
+  // Item choices with a duo partner / an ally composition trait (0012_choice_ally_contexts.sql).
+  { view: 'stats_choice_duos', concurrent: true },
+  { view: 'stats_choice_ally_traits', concurrent: true },
   // Lane-phase gold/XP/CS differences from the timeline frames (0010_lane_phase.sql).
   { view: 'stats_champion_lane_phase', concurrent: true },
   // Tier list ban rates (0003_stats_bans.sql).
