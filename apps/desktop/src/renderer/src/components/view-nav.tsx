@@ -7,7 +7,8 @@ export type View = 'select' | 'tierlist';
 /**
  * Current view: the tier list out of champion select, champion select as soon as it starts —
  * unless the user is looking at a champion in the tier list (`setBusy(true)`): then the nav
- * only shows a live dot and the user switches when ready. Back to the tier list when it ends.
+ * only shows a live dot and the user switches when ready. Back to the tier list when it ends
+ * (after the game it led to).
  */
 export function useAutoView(inSelect: boolean) {
   const [view, setView] = useState<View>(inSelect ? 'select' : 'tierlist');
@@ -35,11 +36,13 @@ export function ViewNav({
   view,
   onChange,
   liveSelect,
+  inGame,
 }: {
   view: View;
   onChange: (view: View) => void;
-  /** Champion select is running: a dot on its item. */
+  /** Champion select is running (or its game): a dot on its item. */
   liveSelect: boolean;
+  inGame: boolean;
 }) {
   return (
     <nav aria-label="Views" className="flex w-14 shrink-0 flex-col border-r border-border py-1">
@@ -60,7 +63,7 @@ export function ViewNav({
             <span className="leading-tight">{label}</span>
             {v === 'select' && liveSelect && (
               <span
-                title="Champion select in progress"
+                title={inGame ? 'Game in progress' : 'Champion select in progress'}
                 className="absolute top-2 right-2.5 size-1.5 animate-pulse rounded-full bg-up"
               />
             )}

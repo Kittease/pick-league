@@ -266,6 +266,13 @@ function SkillOrder({ build }: { build: BuildResponse }) {
 
 function ApplyBar({ state }: { state: AppState }) {
   const { apply, buildTarget, champSelect, settings } = state;
+  if (state.inGame) {
+    return (
+      <span className="max-w-[340px] text-right text-[11px] leading-tight text-muted-foreground">
+        Build as it was when champion select ended · shown until the game is over
+      </span>
+    );
+  }
   const applying = apply.state === 'applying';
   const canApply =
     state.lcu.state === 'connected' && champSelect !== null && state.build.status === 'ok';
@@ -342,7 +349,7 @@ export function BuildPanel({ state, lookup }: { state: AppState; lookup: StaticL
                 buildTarget.preview ? 'text-muted-foreground' : 'text-primary',
               )}
             >
-              {buildTarget.preview ? 'preview' : 'locked in'}
+              {buildTarget.preview ? 'preview' : state.inGame ? 'in game' : 'locked in'}
             </span>
           </span>
           {data && (

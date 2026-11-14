@@ -76,17 +76,25 @@ export function ChampSelectBoard({
   view,
   lookup,
   mastery,
+  inGame,
 }: {
   view: ChampSelectView;
   lookup: StaticLookup | null;
   mastery: AppState['mastery'];
+  /** Champion select is over: the teams of the game in progress. */
+  inGame: boolean;
 }) {
   const mine = [...view.allies, view.me].sort((a, b) => a.cellId - b.cellId);
   return (
     <aside className="flex w-[248px] shrink-0 flex-col gap-4 overflow-y-auto border-r border-border p-3">
       <div className="flex items-baseline justify-between px-1">
-        <span className="text-[10px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-          {PHASE_LABEL[view.phase] ?? view.phase}
+        <span
+          className={cn(
+            'text-[10px] font-semibold tracking-[0.18em] uppercase',
+            inGame ? 'text-primary' : 'text-muted-foreground',
+          )}
+        >
+          {inGame ? 'In game' : (PHASE_LABEL[view.phase] ?? view.phase)}
         </span>
         <span className="text-[11px]">
           <span className="text-muted-foreground">You play </span>

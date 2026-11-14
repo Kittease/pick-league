@@ -61,20 +61,24 @@ function ChampSelect({ state, lookup }: { state: AppState; lookup: StaticLookup 
   }, [target]);
 
   if (!view) return null;
+  // In game only the build is left: no picks, nothing to apply.
+  const inGame = state.inGame;
   return (
     <div className="flex min-h-0 flex-1">
-      <ChampSelectBoard view={view} lookup={lookup} mastery={state.mastery} />
+      <ChampSelectBoard view={view} lookup={lookup} mastery={state.mastery} inGame={inGame} />
       <main className="flex min-w-0 flex-1 flex-col">
-        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="gap-0 px-3 pt-2">
-          <TabsList variant="line">
-            <TabsTrigger value="picks">Picks</TabsTrigger>
-            <TabsTrigger value="build">
-              Build
-              {target && !target.preview && <span className="size-1.5 rounded-full bg-primary" />}
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-        {tab === 'picks' ? (
+        {!inGame && (
+          <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="gap-0 px-3 pt-2">
+            <TabsList variant="line">
+              <TabsTrigger value="picks">Picks</TabsTrigger>
+              <TabsTrigger value="build">
+                Build
+                {target && !target.preview && <span className="size-1.5 rounded-full bg-primary" />}
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        )}
+        {tab === 'picks' && !inGame ? (
           <PicksPanel state={state} lookup={lookup} />
         ) : (
           <BuildPanel state={state} lookup={lookup} />
@@ -108,7 +112,12 @@ export function App() {
       <div className="flex h-full flex-col bg-background text-foreground">
         <StatusBar state={state} />
         <div className="flex min-h-0 flex-1">
-          <ViewNav view={view} onChange={setView} liveSelect={state.champSelect !== null} />
+          <ViewNav
+            view={view}
+            onChange={setView}
+            liveSelect={state.champSelect !== null}
+            inGame={state.inGame}
+          />
           {/* Kept mounted so role, filters and selection survive a trip to champ select. */}
           <div className={view === 'tierlist' ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}>
             <TierListPage state={state} lookup={lookup} onBusyChange={setBusy} />
