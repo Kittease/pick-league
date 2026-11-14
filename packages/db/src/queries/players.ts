@@ -14,7 +14,9 @@ import type {
  * Entries of this platform missing from `entries` are removed (players dropped off the ladder;
  * their `players` row is kept). Never call it with a partial ladder.
  *
- * Returns who "played": new on the ladder, or wins+losses changed since the previous call.
+ * Returns who "played": new on the ladder, or wins+losses changed since the previous call. Their
+ * `listing_requested_at` is set to `now` (durable: survives a worker restart until
+ * `finishListing` clears it).
  */
 export async function upsertLadder(
   q: Queryable,
@@ -43,6 +45,7 @@ export async function upsertLadder(
     }
 
     if (unique.length > 0) {
+      const playedSet = new Set(played);
       await tx`
         INSERT INTO players ${tx(
           unique.map((e) => ({
@@ -54,6 +57,7 @@ export async function upsertLadder(
             solo_wins: e.wins,
             solo_losses: e.losses,
             rank_refreshed_at: now,
+            listing_requested_at: playedSet.has(e.puuid) ? now : null,
           })),
         )}
         ON CONFLICT (puuid) DO UPDATE SET
@@ -62,7 +66,8 @@ export async function upsertLadder(
           solo_lp = EXCLUDED.solo_lp,
           solo_wins = EXCLUDED.solo_wins,
           solo_losses = EXCLUDED.solo_losses,
-          rank_refreshed_at = EXCLUDED.rank_refreshed_at`;
+          rank_refreshed_at = EXCLUDED.rank_refreshed_at,
+          listing_requested_at = COALESCE(EXCLUDED.listing_requested_at, players.listing_requested_at)`;
 
       await tx`
         INSERT INTO ladder_entries ${tx(
@@ -108,6 +113,43 @@ export async function setMatchesSyncedUntil(
   until: Date,
 ): Promise<void> {
   await q`UPDATE players SET matches_synced_until = ${until} WHERE puuid = ${puuid}`;
+}
+
+/**
+ * A match-id listing that started at `startedAt` finished: sets `matches_synced_until` and clears
+ * the listing request, unless a newer one arrived after the listing started (the player played
+ * again meanwhile: listed again).
+ */
+export async function finishListing(
+  q: Queryable,
+  puuid: string,
+  syncedUntil: Date,
+  startedAt: Date,
+): Promise<void> {
+  await q`
+    UPDATE players SET
+      matches_synced_until = ${syncedUntil},
+      listing_requested_at = CASE WHEN listing_requested_at <= ${startedAt}
+        THEN NULL ELSE listing_requested_at END
+    WHERE puuid = ${puuid}`;
+}
+
+/**
+ * Tracked (ladder) players of a platform with a pending listing request, oldest request first
+ * (requests survive restarts: see `upsertLadder`).
+ */
+export async function playersWithListingRequested(
+  q: Queryable,
+  platform: Platform,
+  limit = 10_000,
+): Promise<string[]> {
+  const rows = await q<{ puuid: string }[]>`
+    SELECT p.puuid FROM players p
+    JOIN ladder_entries le USING (puuid)
+    WHERE le.platform = ${platform} AND p.listing_requested_at IS NOT NULL
+    ORDER BY p.listing_requested_at, p.puuid
+    LIMIT ${limit}`;
+  return rows.map((r) => r.puuid);
 }
 
 /** Stores the Riot ID from account-v1. */

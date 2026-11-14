@@ -251,3 +251,15 @@ export interface WorkerRunStats {
   matchesAdded: number;
   error?: string | null;
 }
+
+/** A `worker_status` row: health of one platform loop. */
+export interface WorkerStatus {
+  platform: Platform;
+  /** Updated at least once a minute while the platform's loop runs. */
+  heartbeatAt: Date;
+  /** Riot rejects the API key (401/403) since then; null once a request succeeds again. */
+  authRejectedSince: Date | null;
+  /** Last non-abort error, 'kind: message' (at most 500 characters). */
+  lastError: string | null;
+  lastErrorAt: Date | null;
+}

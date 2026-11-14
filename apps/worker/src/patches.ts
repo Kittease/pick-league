@@ -3,7 +3,13 @@
  * hourly (or sooner when a match from an unknown newer patch shows up), the 2 newest patches get
  * their static data ingested if missing, and older patches are deleted (cascading to matches).
  */
-import { type Db, deleteOldPatches, listPatches, upsertPatchStaticData } from '@pick-league/db';
+import {
+  type Db,
+  deleteOldPatches,
+  listPatches,
+  purgeOrphanPlayers,
+  upsertPatchStaticData,
+} from '@pick-league/db';
 import { comparePatches, type DdragonClient, type PatchId } from '@pick-league/shared';
 import { type Clock, isAbortError, systemClock } from './clock.ts';
 import { errorMessage, type Logger, silentLogger } from './log.ts';
@@ -114,8 +120,9 @@ export class PatchTracker {
       });
     }
     const cleanup = await deleteOldPatches(this.db, KEPT_PATCHES);
-    if (cleanup.deletedPatches.length > 0 || cleanup.deletedPlayers > 0) {
-      this.log.info('old patches deleted', { ...cleanup });
+    if (cleanup.deletedPatches.length > 0) {
+      const deletedPlayers = await purgeOrphanPlayers(this.db);
+      this.log.info('old patches deleted', { ...cleanup, deletedPlayers });
     }
     const latest = versions[0]?.patch ?? null;
     const previous = versions[1]?.patch ?? null;

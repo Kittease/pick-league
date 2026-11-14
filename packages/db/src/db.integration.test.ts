@@ -3,27 +3,38 @@ import type { Db } from './client.ts';
 import {
   claimEnrichment,
   claimPendingMatches,
+  clearWorkerAuthRejected,
   completeEnrichment,
   countEnrichmentQueue,
   deferMatch,
+  deferMatchAfterError,
   deleteOldPatches,
   enqueueEnrichment,
   enqueueMatchIds,
   failEnrichment,
+  finishListing,
   finishWorkerRun,
   getLatestPatch,
   getMatchesSyncedUntil,
   insertParsedMatch,
   listMigrationFiles,
   listPatches,
+  listWorkerStatus,
   markMatchDone,
   markMatchFailed,
   markMatchSkipped,
+  markWorkerAuthRejected,
   migrate,
+  pickProbeMatch,
   playersNeedingDailyRefresh,
+  playersWithListingRequested,
+  purgeOrphanPlayers,
+  recordWorkerError,
   replaceMasteries,
   setMatchesSyncedUntil,
+  skipPendingMatchesUpTo,
   startWorkerRun,
+  touchWorkerStatus,
   updatePlayerRank,
   updatePlayerRiotId,
   upsertLadder,
@@ -128,6 +139,32 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       await setMatchesSyncedUntil(db, a, until);
       expect(await getMatchesSyncedUntil(db, a)).toEqual(until);
     });
+
+    test('listing requests are stored, kept until a later listing finishes, then cleared', async () => {
+      const [a, b, c] = [fakePuuid(1), fakePuuid(2), fakePuuid(3)] as [string, string, string];
+      const entry = (puuid: string, wins: number) => ({
+        puuid,
+        tier: 'CHALLENGER' as const,
+        leaguePoints: 1,
+        wins,
+        losses: 1,
+      });
+      const t = (min: number) => new Date(Date.UTC(2026, 10, 13, 12, min));
+      await upsertLadder(db, 'EUW1', [entry(a, 1), entry(b, 1)], t(0));
+      expect(await playersWithListingRequested(db, 'EUW1')).toEqual([a, b]);
+
+      // a's listing started after the request: cleared.
+      await finishListing(db, a, t(1), t(2));
+      expect(await getMatchesSyncedUntil(db, a)).toEqual(t(1));
+      // b played again while its listing (started at 5) ran: the newer request is kept.
+      await upsertLadder(db, 'EUW1', [entry(a, 1), entry(b, 2), entry(c, 1)], t(10));
+      await finishListing(db, b, t(4), t(5));
+      expect(await playersWithListingRequested(db, 'EUW1')).toEqual([b, c]);
+      // An unchanged ladder neither adds nor drops requests; other platforms are separate.
+      await upsertLadder(db, 'EUW1', [entry(a, 1), entry(b, 2), entry(c, 1)], t(20));
+      expect(await playersWithListingRequested(db, 'EUW1')).toEqual([b, c]);
+      expect(await playersWithListingRequested(db, 'KR')).toEqual([]);
+    });
   });
 
   describe('match fetch queue', () => {
@@ -150,6 +187,54 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       expect(await markMatchFailed(db, 'EUW1_3', 'boom', 5)).toBe('FAILED');
       expect(await claimPendingMatches(db, 'EUW1', 10)).toEqual([]);
       expect(await claimPendingMatches(db, 'KR', 10)).toHaveLength(1);
+      // Rows no longer PENDING are left alone.
+      expect(await markMatchSkipped(db, 'EUW1_2')).toBe(false);
+      await markMatchFailed(db, 'EUW1_1', 'late failure');
+      const [done] = await db`SELECT status FROM match_fetch_queue WHERE match_id = 'EUW1_1'`;
+      expect(done?.status).toBe('DONE');
+    });
+
+    test('transient errors defer without counting attempts, up to a cap', async () => {
+      await enqueueMatchIds(db, 'EUW1', ['EUW1_1', 'EUW1_2']);
+      for (let i = 0; i < 2; i++) {
+        expect(await deferMatchAfterError(db, 'EUW1_1', 'http 503', 3)).toBe('PENDING');
+      }
+      const [row] = await db`
+        SELECT attempts, transient_errors, last_error FROM match_fetch_queue WHERE match_id = 'EUW1_1'`;
+      expect(row).toEqual({ attempts: 0, transient_errors: 2, last_error: 'http 503' });
+      // Moved behind EUW1_2.
+      expect((await claimPendingMatches(db, 'EUW1', 10)).map((c) => c.matchId)).toEqual([
+        'EUW1_2',
+        'EUW1_1',
+      ]);
+      expect(await deferMatchAfterError(db, 'EUW1_1', 'http 503', 3)).toBe('FAILED');
+    });
+
+    test('bulk skip by game id, and probes by game id within a range', async () => {
+      const ids = [10, 20, 30, 40, 50].map((n) => `EUW1_${n}`);
+      await enqueueMatchIds(db, 'EUW1', [...ids, 'EUW1_x']);
+      await enqueueMatchIds(db, 'KR', ['KR_5']);
+      const probe = (
+        above: number,
+        below: number | null,
+        pick: 'highest' | 'median',
+        exclude: string[] = [],
+      ) =>
+        pickProbeMatch(db, 'EUW1', { aboveGameId: above, belowGameId: below, pick, exclude }).then(
+          (m) => m?.matchId ?? null,
+        );
+      expect(await probe(0, null, 'highest')).toBe('EUW1_50');
+      expect(await probe(0, null, 'median')).toBe('EUW1_30');
+      expect(await probe(10, 40, 'median')).toBe('EUW1_30');
+      expect(await probe(10, 40, 'highest')).toBe('EUW1_30');
+      expect(await probe(0, null, 'highest', ['EUW1_50'])).toBe('EUW1_40');
+      expect(await probe(40, 50, 'median')).toBeNull();
+
+      expect(await skipPendingMatchesUpTo(db, 'EUW1', 30)).toBe(3);
+      const pending = await db<{ match_id: string }[]>`
+        SELECT match_id FROM match_fetch_queue WHERE status = 'PENDING' ORDER BY match_id`;
+      expect(pending.map((r) => r.match_id)).toEqual(['EUW1_40', 'EUW1_50', 'EUW1_x', 'KR_5']);
+      expect(await probe(0, null, 'median')).toBe('EUW1_50');
     });
   });
 
@@ -341,12 +426,45 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
 
       const res = await deleteOldPatches(db, 2);
       expect(res.deletedPatches).toEqual(['15.20']);
-      expect(res.deletedPlayers).toBe(9);
       expect(res.purgedQueueRows).toBe(1);
       expect((await listPatches(db)).map((p) => p.id)).toEqual(['15.22', '15.21']);
       expect((await db`SELECT id FROM matches`).map((r) => r.id)).toEqual(['EUW1_NEW']);
       expect((await db`SELECT 1 FROM item_events WHERE match_id = 'EUW1_OLD'`).length).toBe(0);
+      expect(await deleteOldPatches(db, 2)).toEqual({ deletedPatches: [], purgedQueueRows: 0 });
+
+      expect(await purgeOrphanPlayers(db, { batchSize: 4 })).toBe(9);
       expect((await db`SELECT 1 FROM players`).length).toBe(11);
+      expect(await purgeOrphanPlayers(db)).toBe(0);
+    });
+
+    test('orphan purge skips players an in-flight match insert is writing', async () => {
+      await upsertPatchStaticData(db, staticPatch('15.22'));
+      const orphans = Array.from({ length: 12 }, (_, i) => fakePuuid(200 + i));
+      await insertParsedMatch(db, parsedMatch('EUW1_GONE', '15.22', orphans.slice(0, 10)));
+      await insertParsedMatch(db, parsedMatch('EUW1_GONE2', '15.22', orphans.slice(2, 12)));
+      await db`DELETE FROM matches`;
+
+      // A match insert reusing 10 of the orphans is in flight (its transaction holds their rows).
+      let release = () => {};
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      let inserted = () => {};
+      const insertedYet = new Promise<void>((r) => {
+        inserted = r;
+      });
+      const insert = db.begin(async (tx) => {
+        await insertParsedMatch(tx, parsedMatch('EUW1_NEW', '15.22', orphans.slice(0, 10)));
+        inserted();
+        await gate;
+      });
+      await insertedYet;
+      // Does not wait for the insert, and leaves its players alone.
+      expect(await purgeOrphanPlayers(db, { batchSize: 1 })).toBe(2);
+      release();
+      await insert;
+      expect((await db`SELECT 1 FROM players`).length).toBe(10);
+      expect((await db`SELECT 1 FROM participants`).length).toBe(10);
     });
 
     test('worker runs', async () => {
@@ -357,6 +475,29 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       expect(row?.requests_made).toBe(42);
       expect(row?.matches_added).toBe(7);
       expect(row?.finished_at).toBeInstanceOf(Date);
+    });
+
+    test('worker status: heartbeat, auth rejection, last error', async () => {
+      const t = (min: number) => new Date(Date.UTC(2026, 10, 13, 12, min));
+      await touchWorkerStatus(db, 'KR', t(0));
+      await markWorkerAuthRejected(db, 'KR', t(1));
+      await markWorkerAuthRejected(db, 'KR', t(2));
+      await recordWorkerError(db, 'KR', `ladder: ${'x'.repeat(600)}`, t(3));
+      await touchWorkerStatus(db, 'EUW1', t(4));
+      let [kr, euw] = await listWorkerStatus(db);
+      expect(kr).toMatchObject({ platform: 'KR', heartbeatAt: t(3), authRejectedSince: t(1) });
+      expect(kr?.lastError).toHaveLength(500);
+      expect(kr?.lastErrorAt).toEqual(t(3));
+      expect(euw).toEqual({
+        platform: 'EUW1',
+        heartbeatAt: t(4),
+        authRejectedSince: null,
+        lastError: null,
+        lastErrorAt: null,
+      });
+      await clearWorkerAuthRejected(db, 'KR');
+      [kr] = await listWorkerStatus(db);
+      expect(kr?.authRejectedSince).toBeNull();
     });
   });
 });

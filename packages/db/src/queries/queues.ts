@@ -60,11 +60,75 @@ export async function markMatchDone(q: Queryable, matchId: string): Promise<void
     WHERE match_id = ${matchId}`;
 }
 
-/** The match belongs to a patch older than the previous one. */
-export async function markMatchSkipped(q: Queryable, matchId: string): Promise<void> {
-  await q`
+/**
+ * The match belongs to a patch older than the latest one (not collected). Returns false when the
+ * row was no longer PENDING (e.g. already skipped in bulk by `skipPendingMatchesUpTo`).
+ */
+export async function markMatchSkipped(q: Queryable, matchId: string): Promise<boolean> {
+  const res = await q`
     UPDATE match_fetch_queue SET status = 'SKIPPED_OLD_PATCH', updated_at = now()
-    WHERE match_id = ${matchId}`;
+    WHERE match_id = ${matchId} AND status = 'PENDING'`;
+  return res.count > 0;
+}
+
+/** Numeric part of a queued match id ('EUW1_7234567890' → 7234567890), NULL if not numeric. */
+const gameIdExpr = (q: Queryable) =>
+  q`(CASE WHEN split_part(match_id, '_', 2) ~ '^[0-9]{1,15}$'
+          THEN split_part(match_id, '_', 2)::bigint END)`;
+
+/**
+ * Marks every PENDING match of a platform whose game id is at most `maxGameId` as
+ * SKIPPED_OLD_PATCH, in one statement (game ids grow with time on a platform, so they are all
+ * older than a match already known to be from an older patch). Returns how many were skipped.
+ */
+export async function skipPendingMatchesUpTo(
+  q: Queryable,
+  platform: Platform,
+  maxGameId: number,
+): Promise<number> {
+  const res = await q`
+    UPDATE match_fetch_queue SET status = 'SKIPPED_OLD_PATCH', updated_at = now()
+    WHERE platform = ${platform} AND status = 'PENDING' AND ${gameIdExpr(q)} <= ${maxGameId}::bigint`;
+  return res.count;
+}
+
+export interface ProbeQuery {
+  /** Only ids strictly above this game id. */
+  aboveGameId: number;
+  /** Only ids strictly below this game id (null = no upper bound). */
+  belowGameId: number | null;
+  /** Match ids not to return (in flight, deferred). */
+  exclude: readonly string[];
+  /** 'highest' game id, or the 'median' one of the range. */
+  pick: 'highest' | 'median';
+}
+
+/**
+ * One PENDING match of a platform chosen by game id within a range (not claimed): used to find
+ * where the latest patch starts in the backlog with few requests. Null when the range is empty.
+ */
+export async function pickProbeMatch(
+  q: Queryable,
+  platform: Platform,
+  probe: ProbeQuery,
+): Promise<QueuedMatch | null> {
+  const order = probe.pick === 'highest' ? q`gid DESC` : q`gid`;
+  const offset = probe.pick === 'highest' ? q`0` : q`(SELECT count(*) FROM candidates) / 2`;
+  const [row] = await q<{ match_id: string; platform: Platform; attempts: number }[]>`
+    WITH candidates AS (
+      SELECT match_id, platform, attempts, gid FROM (
+        SELECT match_id, platform, attempts, ${gameIdExpr(q)} AS gid
+        FROM match_fetch_queue
+        WHERE platform = ${platform} AND status = 'PENDING'
+          AND NOT (match_id = ANY(${[...probe.exclude]}::text[]))
+      ) s
+      WHERE gid > ${probe.aboveGameId}::bigint
+        AND (${probe.belowGameId}::bigint IS NULL OR gid < ${probe.belowGameId}::bigint)
+    )
+    SELECT match_id, platform, attempts FROM candidates
+    ORDER BY ${order}, match_id
+    OFFSET ${offset} LIMIT 1`;
+  return row ? { matchId: row.match_id, platform: row.platform, attempts: row.attempts } : null;
 }
 
 /**
@@ -85,7 +149,7 @@ export async function markMatchFailed(
       status = CASE WHEN attempts + 1 >= ${maxAttempts} THEN 'FAILED'::fetch_status ELSE 'PENDING'::fetch_status END,
       discovered_at = now(),
       updated_at = now()
-    WHERE match_id = ${matchId}
+    WHERE match_id = ${matchId} AND status = 'PENDING'
     RETURNING status`;
   return row?.status ?? 'FAILED';
 }
@@ -97,7 +161,30 @@ export async function markMatchFailed(
 export async function deferMatch(q: Queryable, matchId: string, note: string): Promise<void> {
   await q`
     UPDATE match_fetch_queue SET discovered_at = now(), updated_at = now(), last_error = ${note}
-    WHERE match_id = ${matchId}`;
+    WHERE match_id = ${matchId} AND status = 'PENDING'`;
+}
+
+/**
+ * A transient error (Riot 429/5xx, network, database connection) hit this match: it stays
+ * PENDING and moves to the back of the queue without counting an attempt, unless it already had
+ * `maxTransientErrors` (default 10) of them (safety cap: then FAILED). Returns the resulting status.
+ */
+export async function deferMatchAfterError(
+  q: Queryable,
+  matchId: string,
+  error: string,
+  maxTransientErrors = 10,
+): Promise<'PENDING' | 'FAILED'> {
+  const [row] = await q<{ status: 'PENDING' | 'FAILED' }[]>`
+    UPDATE match_fetch_queue SET
+      transient_errors = LEAST(transient_errors + 1, 32767),
+      last_error = ${error.slice(0, 2000)},
+      status = CASE WHEN transient_errors + 1 >= ${maxTransientErrors} THEN 'FAILED'::fetch_status ELSE 'PENDING'::fetch_status END,
+      discovered_at = now(),
+      updated_at = now()
+    WHERE match_id = ${matchId} AND status = 'PENDING'
+    RETURNING status`;
+  return row?.status ?? 'FAILED';
 }
 
 export async function countPendingMatches(q: Queryable, platform: Platform): Promise<number> {

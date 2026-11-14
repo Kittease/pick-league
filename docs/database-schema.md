@@ -31,6 +31,7 @@ player_enrichment_queue               (low-priority mastery/rank fetches for non
 
 match_fetch_queue                     (worker backlog, survives restarts)
 worker_runs                           (monitoring)
+worker_status                         (health of each platform loop)
 ```
 
 ## Enums
@@ -154,10 +155,16 @@ CREATE TABLE players (
   rank_refreshed_at     timestamptz,
   masteries_refreshed_at timestamptz,
   matches_synced_until  timestamptz,         -- tracked players only: newest match already listed → `startTime` for match ids
+  listing_requested_at  timestamptz,         -- tracked players only: "played" (ladder wins+losses changed), match ids not listed yet (0009)
   last_seen_in_match_at timestamptz,         -- used by cleanup and by the low-priority refresh rule
   created_at            timestamptz NOT NULL DEFAULT now()
 );
--- Cleanup: players that are neither tracked nor present in a kept match are deleted with the old patch.
+-- Cleanup: players that are neither tracked nor present in a kept match are deleted after an old
+-- patch is deleted (in small batches, skipping rows a match insert is writing).
+-- listing_requested_at survives worker restarts; it is cleared when a listing that started after
+-- it finishes (a newer request that arrives during the listing is kept).
+CREATE INDEX players_listing_requested_idx ON players (listing_requested_at)
+  WHERE listing_requested_at IS NOT NULL;
 
 -- Current Challenger/GM state. One league-v4 call per tier per platform refreshes it;
 -- a change in wins+losses since the previous run means the player played → fetch their match ids.
@@ -357,13 +364,16 @@ CREATE TABLE match_fetch_queue (
   match_id      text PRIMARY KEY,
   platform      platform     NOT NULL,
   status        fetch_status NOT NULL DEFAULT 'PENDING',
-  attempts      smallint     NOT NULL DEFAULT 0,
+  attempts      smallint     NOT NULL DEFAULT 0,  -- deterministic errors (404, parse, other 4xx: FAILED at 2) and unknown ones (FAILED at 5)
+  transient_errors smallint  NOT NULL DEFAULT 0,  -- Riot 429/5xx, network, DB connection: deferred without an attempt, FAILED at 10 (0009)
   last_error    text,
   discovered_at timestamptz  NOT NULL DEFAULT now(),
   updated_at    timestamptz  NOT NULL DEFAULT now()
 );
 CREATE INDEX ON match_fetch_queue (platform, discovered_at) WHERE status = 'PENDING';
 -- DONE / SKIPPED_OLD_PATCH rows are kept as a "seen" set and purged with their patch.
+-- Once a match turns out to be from an older patch, every PENDING row of that platform with a
+-- lower or equal game id is marked SKIPPED_OLD_PATCH in one statement.
 
 -- Lowest-priority work: mastery + rank for non-ladder players.
 -- Only consumed when the higher-priority queues leave rate-limit budget unused.
@@ -385,6 +395,16 @@ CREATE TABLE worker_runs (
   players_polled integer    NOT NULL DEFAULT 0,
   matches_added integer     NOT NULL DEFAULT 0,
   error         text
+);
+
+-- One row per platform loop, upserted by the worker (0009). Read by the API / desktop to show
+-- whether collection is alive and whether the Riot key is rejected.
+CREATE TABLE worker_status (
+  platform            platform    PRIMARY KEY,
+  heartbeat_at        timestamptz NOT NULL,  -- updated at least once a minute while that platform's loop runs
+  auth_rejected_since timestamptz,           -- set when Riot rejects the key (401/403); cleared on the next successful Riot response
+  last_error          text,                  -- last non-abort error (kind: message), truncated to 500 chars
+  last_error_at       timestamptz
 );
 ```
 
