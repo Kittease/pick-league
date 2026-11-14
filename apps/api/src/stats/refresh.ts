@@ -185,6 +185,10 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
         RETURNING id`;
       try {
         await conn.unsafe(`SET work_mem = '${(options.workMem ?? '256MB').replace(/'/g, '')}'`);
+        // No parallel workers: their hash tables live in /dev/shm (64 MB in Docker by default), so
+        // with this work_mem the big joins failed with "could not resize shared memory segment"
+        // past ~65k matches. Serial plans spill to disk instead, and use a third of the memory.
+        await conn.unsafe('SET max_parallel_workers_per_gather = 0');
         // Fresh planner statistics: the views join large tables whose size changes a lot.
         await conn.unsafe('ANALYZE matches, participants, item_events, skill_events');
         for (const step of options.views ?? STATS_REFRESH_ORDER) {
@@ -208,6 +212,7 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
         throw new StatsRefreshError(Object.keys(views), err);
       } finally {
         await conn.unsafe('RESET work_mem');
+        await conn.unsafe('RESET max_parallel_workers_per_gather');
       }
     } finally {
       await conn`SELECT pg_advisory_unlock(${STATS_REFRESH_LOCK_KEY})`;
