@@ -10,23 +10,87 @@ import type {
   HealthResponse,
   PatchesResponse,
   PicksResponse,
+  Position,
   StaticDataResponse,
   TierListChampionResponse,
   TierListEntry,
   TierListResponse,
 } from '@pick-league/shared';
-import { DUO_ROLES, LANE_ROLES } from '../engine/index.ts';
+import { DUO_ROLES, ENGINE_CONFIG, LANE_ROLES } from '../engine/index.ts';
 import { silentLogger } from '../logger.ts';
 import { refreshStats } from '../stats/refresh.ts';
 import * as repo from '../stats/repository.ts';
 import { API_TEST_DATABASE_URL, resetApiTestDb, seedSyntheticPatch } from '../testing/seed.ts';
-import { PLANTED } from '../testing/synthetic.ts';
+import { type GenerateOptions, generateMatches, PLANTED } from '../testing/synthetic.ts';
 import { createApp } from './app.ts';
 import { TtlCache } from './cache.ts';
 import { TokenBucketLimiter } from './rate-limit.ts';
 
 const CUR = '15.22';
 const PREV = '15.21';
+const SEEDS: Record<string, GenerateOptions> = {
+  [PREV]: { patch: PREV, count: 800, seed: 11 },
+  [CUR]: { patch: CUR, count: 3000, seed: 12, pickWeights: { [PLANTED.rareOnCurrent]: 0.05 } },
+};
+
+type FrameKey = 'goldByMinute' | 'xpByMinute' | 'csByMinute';
+
+/**
+ * Lane-phase averages recomputed in TypeScript from the generated frames (independent of the
+ * SQL view): own lane minus the opponent's (bot lane 2v2) at 10 and 15 min, non-remakes only.
+ */
+function expectedLane(
+  patches: readonly string[],
+  championId: number,
+  position: Position,
+  enemyId: number,
+  enemyPosition: Position,
+) {
+  const bot = (p: Position | null) => p === 'BOTTOM' || p === 'UTILITY';
+  const inLane = (p: Position | null) => (bot(position) ? bot(p) : p === position);
+  const acc = { games: 0, gold10: 0, xp10: 0, cs10: 0, games15: 0, gold15: 0 };
+  for (const patch of patches) {
+    for (const m of generateMatches(SEEDS[patch] as GenerateOptions)) {
+      if (m.match.isRemake) continue;
+      const own = m.participants.find(
+        (p) => p.championId === championId && p.position === position,
+      );
+      const opp = m.participants.find(
+        (p) => p.championId === enemyId && p.position === enemyPosition && p.teamId !== own?.teamId,
+      );
+      if (!own || !opp) continue;
+      const total = (teamId: number, key: FrameKey, minute: number) =>
+        m.participants
+          .filter((p) => p.teamId === teamId && inLane(p.position))
+          .reduce((s, p) => s + (p[key][minute] ?? Number.NaN), 0);
+      const diff = (key: FrameKey, minute: number) =>
+        total(own.teamId, key, minute) - total(opp.teamId, key, minute);
+      if (Number.isNaN(diff('goldByMinute', 10))) continue;
+      acc.games++;
+      acc.gold10 += diff('goldByMinute', 10);
+      acc.xp10 += diff('xpByMinute', 10);
+      acc.cs10 += diff('csByMinute', 10);
+      if (!Number.isNaN(diff('goldByMinute', 15))) {
+        acc.games15++;
+        acc.gold15 += diff('goldByMinute', 15);
+      }
+    }
+  }
+  return {
+    games: acc.games,
+    gold10: acc.gold10 / acc.games,
+    xp10: acc.xp10 / acc.games,
+    cs10: acc.cs10 / acc.games,
+    games15: acc.games15,
+    gold15: acc.gold15 / acc.games15,
+  };
+}
+
+/** `x * n / (n + k)` with the lane-phase prior, as the API rounds it. */
+const shrunkLane = (x: number, n: number, digits = 0) => {
+  const f = 10 ** digits;
+  return Math.round(((x * n) / (n + ENGINE_CONFIG.lanePhase.shrinkK)) * f) / f;
+};
 
 describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
   let db: Db;
@@ -36,13 +100,8 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
   beforeAll(async () => {
     await resetApiTestDb();
     db = createDb(API_TEST_DATABASE_URL as string, { max: 8 });
-    await seedSyntheticPatch(db, { patch: PREV, count: 800, seed: 11 });
-    await seedSyntheticPatch(db, {
-      patch: CUR,
-      count: 3000,
-      seed: 12,
-      pickWeights: { [PLANTED.rareOnCurrent]: 0.05 },
-    });
+    await seedSyntheticPatch(db, SEEDS[PREV] as GenerateOptions);
+    await seedSyntheticPatch(db, SEEDS[CUR] as GenerateOptions);
     // Synthetic players have no rank: spread them over the tiers for the tier list rank filter.
     await db`
       UPDATE players SET solo_tier = (ARRAY[
@@ -603,6 +662,131 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect((await get('/tierlist/champion?role=UTILITY&championId=111&patch=9.9')).status).toBe(
       404,
     );
+  });
+
+  test('lane phase view: 2v2 bot lane and 1v1 averages from the timeline frames', async () => {
+    const { championId, opponentId } = PLANTED.lane;
+    const of = async (id: number, position: Position, enemyId: number, enemyPosition: Position) =>
+      (await repo.loadLanePhaseOfChampion(db, [CUR], position, id, [enemyId])).find(
+        (r) => r.enemyPosition === enemyPosition,
+      );
+    // Bot lane 2v2, with the planted lane bully.
+    const leona = await of(championId, 'UTILITY', opponentId, 'UTILITY');
+    const exp = expectedLane([CUR], championId, 'UTILITY', opponentId, 'UTILITY');
+    expect(exp.games).toBeGreaterThan(50);
+    expect(leona?.games).toBe(exp.games);
+    expect(leona?.goldDiff10).toBeCloseTo(exp.gold10, 6);
+    expect(leona?.xpDiff10).toBeCloseTo(exp.xp10, 6);
+    expect(leona?.csDiff10).toBeCloseTo(exp.cs10, 6);
+    expect(leona?.games15).toBe(exp.games15);
+    expect(leona?.goldDiff15).toBeCloseTo(exp.gold15, 6);
+    // Short timelines count at 10 min only.
+    expect(exp.games15).toBeLessThan(exp.games);
+    expect(leona?.goldDiff10).toBeGreaterThan(250);
+    // The same lanes seen from the other side.
+    const soraka = await of(opponentId, 'UTILITY', championId, 'UTILITY');
+    expect(soraka?.games).toBe(leona?.games);
+    expect(soraka?.goldDiff10).toBeCloseTo(-(leona?.goldDiff10 ?? 0), 6);
+    // The enemy ADC is a bot lane opponent too (the same 2v2 difference, another condition).
+    const vsAdc = await of(championId, 'UTILITY', 222, 'BOTTOM');
+    const expAdc = expectedLane([CUR], championId, 'UTILITY', 222, 'BOTTOM');
+    expect(vsAdc?.games).toBe(expAdc.games);
+    expect(vsAdc?.goldDiff10).toBeCloseTo(expAdc.gold10, 6);
+    // 1v1 top lane.
+    const darius = await of(122, 'TOP', 86, 'TOP');
+    const expTop = expectedLane([CUR], 122, 'TOP', 86, 'TOP');
+    expect(darius?.games).toBe(expTop.games);
+    expect(darius?.goldDiff10).toBeCloseTo(expTop.gold10, 6);
+    expect(darius?.csDiff10).toBeCloseTo(expTop.cs10, 6);
+    // Lane opponents only.
+    const top = await repo.loadLanePhaseOfChampion(db, [CUR], 'TOP', 122);
+    expect(top.length).toBeGreaterThan(0);
+    expect(top.every((r) => r.enemyPosition === 'TOP')).toBe(true);
+    // The picks loader reads the same rows.
+    const byEnemy = await repo.loadLanePhaseByEnemies(db, [CUR], 'UTILITY', [opponentId]);
+    expect(
+      byEnemy.find((r) => r.championId === championId && r.enemyPosition === 'UTILITY'),
+    ).toEqual(leona);
+  });
+
+  test('lane phase in picks, build and the tier list champion detail', async () => {
+    const { championId, opponentId } = PLANTED.lane;
+    const res = await post('/recommendations/picks', {
+      role: 'UTILITY',
+      enemies: [opponentId],
+      limit: 100,
+    });
+    const picks = (await res.json()) as PicksResponse;
+    const leona = picks.candidates.find((c) => c.championId === championId);
+    const kinds = leona?.reasons.map((r) => r.kind) ?? [];
+    const lp = leona?.reasons[kinds.indexOf('matchup') + 1];
+    const exp = expectedLane(
+      leona?.patchesUsed ?? [],
+      championId,
+      'UTILITY',
+      opponentId,
+      'UTILITY',
+    );
+    expect(lp).toMatchObject({
+      kind: 'lane_phase',
+      delta: 0,
+      games: exp.games,
+      championIds: [opponentId],
+    });
+    expect(lp?.lane).toEqual({
+      minute: 10,
+      gold: shrunkLane(exp.gold10, exp.games),
+      xp: shrunkLane(exp.xp10, exp.games),
+      cs: shrunkLane(exp.cs10, exp.games, 1),
+      duo: true,
+      games: exp.games,
+    });
+    expect(lp?.label).toMatch(
+      /^Lane at 10 min vs Soraka: \+[\d,]+ gold, .+ \(bot lane 2v2, likely support, [\d,]+ matchups\)$/,
+    );
+    const withLane = picks.candidates.filter((c) => c.reasons.some((r) => r.kind === 'lane_phase'));
+    expect(withLane.length).toBeGreaterThan(3);
+
+    const build = (await (
+      await post('/recommendations/build', {
+        championId: opponentId,
+        role: 'UTILITY',
+        enemies: [{ championId, role: 'UTILITY' }],
+      })
+    ).json()) as BuildResponse;
+    expect(build.lanePhase?.map((r) => r.lane?.minute)).toEqual([10, 15]);
+    const [at10, at15] = build.lanePhase ?? [];
+    expect(at10?.label).toContain('vs Leona');
+    expect(at10?.lane?.gold).toBeLessThan(0);
+    expect(at15?.lane?.gold).toBeLessThan(0);
+    expect(at15?.games).toBeLessThan(at10?.games ?? 0);
+    const alone = await post('/recommendations/build', { championId: opponentId, role: 'UTILITY' });
+    expect((await alone.json()) as BuildResponse).not.toHaveProperty('lanePhase');
+
+    const url = `/tierlist/champion?role=UTILITY&championId=${opponentId}`;
+    const detail = (await (await get(url)).json()) as TierListChampionResponse;
+    const vsLeona = detail.matchups.find(
+      (m) => m.championId === championId && m.role === 'UTILITY',
+    );
+    const expDetail = expectedLane(
+      detail.patchesUsed,
+      opponentId,
+      'UTILITY',
+      championId,
+      'UTILITY',
+    );
+    expect(vsLeona?.lane).toEqual({
+      minute: 10,
+      gold: shrunkLane(expDetail.gold10, expDetail.games),
+      xp: shrunkLane(expDetail.xp10, expDetail.games),
+      cs: shrunkLane(expDetail.cs10, expDetail.games, 1),
+      duo: true,
+      games: expDetail.games,
+    });
+    expect(detail.matchups.filter((m) => m.lane).length).toBeGreaterThan(3);
+    const filtered = (await (await get(`${url}&platform=KR`)).json()) as TierListChampionResponse;
+    expect(filtered.matchups.length).toBeGreaterThan(0);
+    expect(filtered.matchups.some((m) => m.lane)).toBe(false);
   });
 
   test('stats refresh is skipped when matches did not change', async () => {

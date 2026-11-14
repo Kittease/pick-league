@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { buildRequestSchema } from '@pick-league/shared';
 import { type BuildData, recommendBuild } from './build.ts';
-import { items, names, role, thresholds, traitsOf, vs } from './fixtures.ts';
+import { items, lane, names, role, thresholds, traitsOf, vs } from './fixtures.ts';
 import type { ChoiceKind, ChoiceMatchupRow, ChoiceRow, ChoiceTraitRow } from './types.ts';
 
 const CUR = '15.22';
@@ -379,5 +379,65 @@ describe('recommendBuild', () => {
     expect(
       recommendBuild(req(LEONA), data({ baseline: { games: 0, wins: 0 }, choices: [] })),
     ).toBeNull();
+  });
+
+  test('lane phase vs the lane opponent at 10 and 15 min', () => {
+    const lanePhase = [
+      lane(
+        CUR,
+        89,
+        412,
+        'UTILITY',
+        380,
+        { gold: 400, xp: 200, cs: 2 },
+        {
+          games: 380,
+          gold: 800,
+          xp: 400,
+          cs: 4,
+        },
+      ),
+      lane(CUR, 89, 222, 'BOTTOM', 380, { gold: -900, xp: 0, cs: 0 }), // not the primary opponent
+    ];
+    const b = recommendBuild(
+      req({
+        ...LEONA,
+        enemies: [
+          { championId: 222, role: 'BOTTOM' },
+          { championId: 412, role: 'UTILITY' },
+        ],
+      }),
+      data({ lanePhase }),
+    );
+    expect(b?.lanePhase).toEqual([
+      {
+        kind: 'lane_phase',
+        label: 'Lane at 10 min vs Thresh: +380 gold, +1.9 CS, +190 XP (bot lane 2v2, 380 matchups)',
+        delta: 0,
+        games: 380,
+        championIds: [412],
+        lane: { minute: 10, gold: 380, xp: 190, cs: 1.9, duo: true, games: 380 },
+      },
+      {
+        kind: 'lane_phase',
+        label: 'Lane at 15 min vs Thresh: +760 gold, +3.8 CS, +380 XP (bot lane 2v2, 380 matchups)',
+        delta: 0,
+        games: 380,
+        championIds: [412],
+        lane: { minute: 15, gold: 760, xp: 380, cs: 3.8, duo: true, games: 380 },
+      },
+    ]);
+    // Guessed role: said so. No lane opponent, or no rows: no field.
+    const guessed = recommendBuild(
+      req({ ...LEONA, enemies: [{ championId: 412, role: null }] }),
+      data({ lanePhase }),
+    );
+    expect(guessed?.lanePhase?.[0]?.label).toContain(
+      '(bot lane 2v2, likely support, 380 matchups)',
+    );
+    expect(recommendBuild(req(LEONA), data({ lanePhase }))).not.toHaveProperty('lanePhase');
+    expect(
+      recommendBuild(req({ ...LEONA, enemies: [{ championId: 412, role: 'UTILITY' }] }), data()),
+    ).not.toHaveProperty('lanePhase');
   });
 });

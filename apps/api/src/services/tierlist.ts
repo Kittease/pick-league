@@ -84,16 +84,19 @@ export async function tierListChampion(
   const segment = tierListSegment(filters);
   // The filtered views only hold lane opponents and duo partners: no synergies under filters.
   // Role baselines of every champion (the role must have data), relations of this one only.
-  const [roleStats, vs, withRows] = segment
+  // Lane phase is unfiltered only: no lane numbers under filters.
+  const [roleStats, vs, withRows, lanePhase] = segment
     ? await Promise.all([
         repo.loadSegmentRoleStats(q, ctx.patches, role, segment),
         repo.loadSegmentVsForRole(q, ctx.patches, role, LANE_ROLES[role], segment, championId),
         repo.loadSegmentWithForRole(q, ctx.patches, role, DUO_ROLES[role], segment, championId),
+        [],
       ])
     : await Promise.all([
         repo.loadRoleStats(q, ctx.patches),
         repo.loadLaneVsOfChampion(q, ctx.patches, role, championId, LANE_ROLES[role]),
         repo.loadAlliesOfChampion(q, ctx.patches, role, championId),
+        repo.loadLanePhaseOfChampion(q, ctx.patches, role, championId),
       ]);
   const inRole = roleStats.filter((r) => r.position === role);
   if (inRole.length === 0) throw new ApiError('NO_DATA', `No stats for role ${role} yet`);
@@ -106,6 +109,7 @@ export async function tierListChampion(
     roleStats,
     vs,
     with: withRows,
+    lanePhase,
   });
   return { ...detail, filters, synergies: segment ? null : detail.synergies };
 }

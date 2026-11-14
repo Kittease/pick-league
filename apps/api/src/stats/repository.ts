@@ -21,6 +21,7 @@ import type {
   CompThresholdRow,
   CompTraitRow,
   ItemInfo,
+  LanePhaseRow,
   NameLookup,
   RoleStatRow,
   VsRow,
@@ -339,6 +340,77 @@ export async function loadVsForChampion(
     games: r.games,
     wins: r.wins,
   }));
+}
+
+interface LanePhaseDbRow {
+  patch: string;
+  position: Position;
+  champion_id: number;
+  enemy_position: Position;
+  enemy_id: number;
+  games: number;
+  gold_diff_10: number;
+  xp_diff_10: number;
+  cs_diff_10: number;
+  games_15: number;
+  gold_diff_15: number | null;
+  xp_diff_15: number | null;
+  cs_diff_15: number | null;
+}
+
+const toLanePhaseRow = (r: LanePhaseDbRow): LanePhaseRow => ({
+  patch: r.patch,
+  position: r.position,
+  championId: r.champion_id,
+  enemyPosition: r.enemy_position,
+  enemyId: r.enemy_id,
+  games: r.games,
+  goldDiff10: r.gold_diff_10,
+  xpDiff10: r.xp_diff_10,
+  csDiff10: r.cs_diff_10,
+  games15: r.games_15,
+  goldDiff15: r.gold_diff_15,
+  xpDiff15: r.xp_diff_15,
+  csDiff15: r.cs_diff_15,
+});
+
+/**
+ * Lane-phase rows (stats_champion_lane_phase, per patch) of every champion in `position` vs
+ * the given enemies (picks: candidates vs the lane opponent). Unique index prefix
+ * (patch, position, enemy_id).
+ */
+export async function loadLanePhaseByEnemies(
+  q: Queryable,
+  patches: PatchId[],
+  position: Position,
+  enemyIdsIn: number[],
+): Promise<LanePhaseRow[]> {
+  const enemyIds = storedChampionIds(enemyIdsIn);
+  if (enemyIds.length === 0) return [];
+  const rows = await q<LanePhaseDbRow[]>`
+    SELECT * FROM stats_champion_lane_phase
+    WHERE patch IN ${q(patches)} AND position = ${position} AND enemy_id IN ${q(enemyIds)}`;
+  return rows.map(toLanePhaseRow);
+}
+
+/**
+ * Lane-phase rows (per patch) of one champion in `position`, vs every lane opponent or only
+ * `enemyIds` (build). Index stats_champion_lane_phase_champion (patch, champion_id, position).
+ */
+export async function loadLanePhaseOfChampion(
+  q: Queryable,
+  patches: PatchId[],
+  position: Position,
+  championId: number,
+  enemyIdsIn?: number[],
+): Promise<LanePhaseRow[]> {
+  const enemyIds = enemyIdsIn && storedChampionIds(enemyIdsIn);
+  if (!isStoredChampionId(championId) || enemyIds?.length === 0) return [];
+  const rows = await q<LanePhaseDbRow[]>`
+    SELECT * FROM stats_champion_lane_phase
+    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
+      ${enemyIds ? q`AND enemy_id IN ${q(enemyIds)}` : q``}`;
+  return rows.map(toLanePhaseRow);
 }
 
 export async function loadItems(q: Queryable, patch: PatchId): Promise<Map<number, ItemInfo>> {

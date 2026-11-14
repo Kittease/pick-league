@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { ENGINE_CONFIG } from './config.ts';
-import { role, vs, withAlly } from './fixtures.ts';
+import { lane, role, vs, withAlly } from './fixtures.ts';
 import { buildTierListChampion, type TierListChampionData } from './tierlist-champion.ts';
 
 const CUR = '15.22';
@@ -150,5 +150,40 @@ describe('buildTierListChampion', () => {
     expect(d.matchups).toEqual([]);
     expect(d.duos).toEqual([]);
     expect(d.synergies).toEqual([]);
+  });
+
+  test('matchups carry the lane phase at 10 min on the patches used, when the sample allows', () => {
+    const keep = (n: number) => n / (n + ENGINE_CONFIG.lanePhase.shrinkK);
+    const d = buildTierListChampion(
+      'UTILITY',
+      40, // Janna: both patches combined
+      data({
+        vs: [
+          vs(CUR, 40, 111, 'UTILITY', 30, 12, 'UTILITY'),
+          vs(PREV, 40, 111, 'UTILITY', 70, 28, 'UTILITY'),
+          vs(CUR, 40, 222, 'BOTTOM', 50, 25, 'UTILITY'),
+          vs(CUR, 40, 412, 'UTILITY', 50, 25, 'UTILITY'),
+        ],
+        lanePhase: [
+          lane(CUR, 40, 111, 'UTILITY', 30, { gold: -500, xp: -200, cs: -4 }),
+          lane(PREV, 40, 111, 'UTILITY', 70, { gold: -300, xp: -100, cs: -2 }),
+          lane(CUR, 40, 222, 'UTILITY', 50, { gold: 900, xp: 0, cs: 0 }), // Jinx as support: not this row
+          lane(CUR, 40, 412, 'UTILITY', 10, { gold: 900, xp: 0, cs: 0 }), // too few
+        ],
+      }),
+    );
+    const byId = new Map(d.matchups.map((m) => [m.championId, m]));
+    // (−500 × 30 − 300 × 70) / 100 = −360.
+    expect(byId.get(111)?.lane).toEqual({
+      minute: 10,
+      gold: Math.round(-360 * keep(100)),
+      xp: Math.round(-130 * keep(100)),
+      cs: Math.round(-2.6 * keep(100) * 10) / 10,
+      duo: true,
+      games: 100,
+    });
+    expect(byId.get(222)).not.toHaveProperty('lane');
+    expect(byId.get(412)).not.toHaveProperty('lane');
+    expect(d.duos.every((r) => r.lane === undefined)).toBe(true);
   });
 });

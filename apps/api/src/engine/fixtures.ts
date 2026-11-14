@@ -4,6 +4,7 @@ import type {
   ChampionTraitRow,
   CompThresholdRow,
   ItemInfo,
+  LanePhaseRow,
   NameLookup,
   RoleStatRow,
   VsRow,
@@ -131,4 +132,30 @@ export const thresholds = (patch: string): CompThresholdRow => ({
   tankinessPerMin: 1500,
   ranged: 0.6,
   melee: 0.6,
+});
+
+/** Lane-phase row: averages at 10 min, and at 15 min over `games15` matchups (default all). */
+export const lane = (
+  patch: string,
+  championId: number,
+  enemyId: number,
+  enemyPosition: Position,
+  games: number,
+  at10: { gold: number; xp: number; cs: number },
+  at15: { games: number; gold: number; xp: number; cs: number } | null = null,
+  position: Position = 'UTILITY',
+): LanePhaseRow => ({
+  patch,
+  position,
+  championId,
+  enemyPosition,
+  enemyId,
+  games,
+  goldDiff10: at10.gold,
+  xpDiff10: at10.xp,
+  csDiff10: at10.cs,
+  games15: at15?.games ?? 0,
+  goldDiff15: at15?.gold ?? null,
+  xpDiff15: at15?.xp ?? null,
+  csDiff15: at15?.cs ?? null,
 });

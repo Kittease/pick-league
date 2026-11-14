@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { picksRequestSchema } from '@pick-league/shared';
-import { names, role, thresholds, traitsOf, vs, withAlly } from './fixtures.ts';
+import { lane, names, role, thresholds, traitsOf, vs, withAlly } from './fixtures.ts';
 import { type PicksData, recommendPicks } from './picks.ts';
 import type { CompTraitRow } from './types.ts';
 
@@ -160,5 +160,39 @@ describe('recommendPicks', () => {
       expect(c.confidence).toBeLessThan(1);
       expect(c.reasons.some((r) => r.kind === 'base')).toBe(true);
     }
+  });
+
+  test('lane phase vs the lane opponent next to its matchup, without changing the score', () => {
+    const body = req({ role: 'UTILITY', enemies: [40, 64] });
+    const without = recommendPicks(body, data({ vs: [vs(CUR, 111, 40, 'UTILITY', 1000, 560)] }));
+    const result = recommendPicks(
+      body,
+      data({
+        vs: [vs(CUR, 111, 40, 'UTILITY', 1000, 560)],
+        lanePhase: [
+          lane(CUR, 111, 40, 'UTILITY', 200, { gold: 440, xp: 330, cs: 2.2 }),
+          lane(PREV, 111, 40, 'UTILITY', 900, { gold: -900, xp: 0, cs: 0 }), // patch not used
+          lane(CUR, 117, 40, 'UTILITY', 10, { gold: 900, xp: 0, cs: 0 }), // too few matchups
+          lane(CUR, 111, 40, 'BOTTOM', 500, { gold: 900, xp: 0, cs: 0 }), // Janna as ADC
+        ],
+      }),
+    );
+    expect(result.candidates.map((c) => [c.championId, c.score, c.confidence])).toEqual(
+      without.candidates.map((c) => [c.championId, c.score, c.confidence]),
+    );
+    const naut = result.candidates.find((c) => c.championId === 111);
+    const kinds = naut?.reasons.map((r) => r.kind);
+    expect(kinds?.indexOf('lane_phase')).toBe((kinds?.indexOf('matchup') ?? -2) + 1);
+    const keep = 200 / 220;
+    expect(naut?.reasons.find((r) => r.kind === 'lane_phase')).toEqual({
+      kind: 'lane_phase',
+      label: `Lane at 10 min vs Janna: +${Math.round(440 * keep)} gold, +2 CS, +${Math.round(330 * keep)} XP (bot lane 2v2, likely support, 200 matchups)`,
+      delta: 0,
+      games: 200,
+      championIds: [40],
+      lane: { minute: 10, gold: 400, xp: 300, cs: 2, duo: true, games: 200 },
+    });
+    const lulu = result.candidates.find((c) => c.championId === 117);
+    expect(lulu?.reasons.some((r) => r.kind === 'lane_phase')).toBe(false);
   });
 });

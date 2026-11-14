@@ -88,6 +88,11 @@ export const REASON_KINDS = [
   'popularity',
   /** Previous patch data added to the current one because the current has too few games. */
   'patch_fallback',
+  /**
+   * How the lane phase goes vs the lane opponent (gold / XP / CS difference at 10 or 15 min, see
+   * `Reason.lane`). It explains, it does not score: delta = 0, games = matchups behind it.
+   */
+  'lane_phase',
 ] as const;
 export type ReasonKind = (typeof REASON_KINDS)[number];
 
@@ -102,6 +107,25 @@ export const COMP_TRAITS = [
   'MELEE_HEAVY',
 ] as const;
 export type CompTrait = (typeof COMP_TRAITS)[number];
+
+/**
+ * Average lane-phase difference vs a lane opponent at one minute, from the timeline frames:
+ * own minus opponent, shrunk toward 0 by sample size (`x * n / (n + k)`, like the deltas).
+ * Bot lane (BOTTOM / UTILITY) is 2v2: the player + duo partner vs both enemy bot laners.
+ */
+export interface LanePhaseDiff {
+  minute: 10 | 15;
+  /** Total gold difference (e.g. -420). */
+  gold: number;
+  /** Experience difference. */
+  xp: number;
+  /** Creep score (lane + jungle minions) difference, one decimal. */
+  cs: number;
+  /** True for the bot lane 2v2 difference. */
+  duo: boolean;
+  /** Matchups with frames at that minute behind the averages. */
+  games: number;
+}
 
 export interface Reason {
   kind: ReasonKind;
@@ -119,6 +143,8 @@ export interface Reason {
   replacesItemId?: number;
   /** vs_comp / with_comp / tag_rule: the trait that triggered the reason. */
   trait?: CompTrait;
+  /** lane_phase: the numbers behind the label, so the UI can format them. */
+  lane?: LanePhaseDiff;
 }
 
 // ---------------------------------------------------------------------------
@@ -453,6 +479,12 @@ export interface BuildResponse {
   runes: RunesRecommendation;
   summonerSpells: SummonerSpellsRecommendation;
   skillOrder: SkillOrderRecommendation;
+  /**
+   * How the lane phase goes for this champion vs the lane opponent (the one the build adapts
+   * to, guessed when enemy roles are unknown): `lane_phase` reasons at 10 min, then 15 min, each
+   * only with enough matchups. Absent when there is no lane opponent or too few matchups.
+   */
+  lanePhase?: Reason[];
 }
 
 // ---------------------------------------------------------------------------
@@ -519,6 +551,11 @@ export interface TierListRelation {
   winRate: number;
   /** Games (matchups) the champion played vs / with this one. */
   games: number;
+  /**
+   * Matchups only: lane-phase difference at 10 min vs this opponent. Omitted with server/rank
+   * filters (unfiltered data only) or when the sample is too small.
+   */
+  lane?: LanePhaseDiff;
 }
 
 export interface TierListEntry {

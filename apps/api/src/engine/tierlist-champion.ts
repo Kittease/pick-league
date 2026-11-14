@@ -10,9 +10,10 @@ import type {
   TierListRelation,
 } from '@pick-league/shared';
 import { DUO_ROLES, ENGINE_CONFIG, LANE_ROLES } from './config.ts';
+import { lanePhaseDiff, lanePhaseRowsOf } from './lane-phase.ts';
 import { round, shrink, sumByKey, winRate } from './math.ts';
 import { championBaseline, rowsByPatchAndChampion } from './tierlist.ts';
-import type { GamesWins, RoleStatRow, VsRow, WithRow } from './types.ts';
+import type { GamesWins, LanePhaseRow, RoleStatRow, VsRow, WithRow } from './types.ts';
 
 export interface TierListChampionData {
   currentPatch: PatchId;
@@ -23,6 +24,11 @@ export interface TierListChampionData {
   vs: readonly VsRow[];
   /** stats_champion_with of the champion in the role, every ally role. */
   with: readonly WithRow[];
+  /**
+   * stats_champion_lane_phase of the champion in the role, per patch: adds `lane` (10 min) to
+   * the matchups. Omitted (or empty) with server/rank filters: lane phase is unfiltered only.
+   */
+  lanePhase?: readonly LanePhaseRow[];
 }
 
 /** The response without its filters; synergies always computed (the service drops them when filtered). */
@@ -90,7 +96,14 @@ export function buildTierListChampion(
     patchesUsed: patches,
     games: base.games,
     winRate: round(baseWr),
-    matchups: relations(vs, patches, baseWr, K.matchup, enemy.id, enemy.role),
+    matchups: relations(vs, patches, baseWr, K.matchup, enemy.id, enemy.role).map((m) => {
+      const lane = lanePhaseDiff(
+        lanePhaseRowsOf(data.lanePhase ?? [], championId, m.championId, m.role),
+        patches,
+        10,
+      );
+      return lane ? { ...m, lane } : m;
+    }),
     duos: relations(allies.filter(isDuo), patches, baseWr, K.duo, ally.id, ally.role),
     synergies: relations(
       allies.filter((r) => !isDuo(r) && r.allyPosition !== role),

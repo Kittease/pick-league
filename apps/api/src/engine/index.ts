@@ -1,5 +1,12 @@
 export { type BuildData, bestChoice, parseRunePage, recommendBuild } from './build.ts';
 export * from './config.ts';
+export {
+  formatLanePhase,
+  isDuoLane,
+  lanePhaseDiff,
+  lanePhaseReason,
+  lanePhaseRowsOf,
+} from './lane-phase.ts';
 export * from './math.ts';
 export { type PicksData, recommendPicks, sideTraits } from './picks.ts';
 export * from './roles.ts';

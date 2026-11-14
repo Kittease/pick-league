@@ -115,6 +115,20 @@ export const ENGINE_CONFIG = {
     minRelationGames: 5,
   },
 
+  /**
+   * Lane phase (`lane_phase` reasons, tier list matchups): average gold / XP / CS differences vs
+   * the lane opponent at 10 and 15 min (bot lane 2v2), from stats_champion_lane_phase. They
+   * explain and never score. Each average is shrunk toward 0 like the deltas, `x * n / (n + k)`.
+   * A matchup's lane gold difference at 10 min varies by ~±700 gold from match to match while
+   * matchups differ by a few hundred on average, so far fewer matchups are needed than for a
+   * win rate (k = 120): with k = 20, 20 matchups keep half of the average, 180 keep 90 %.
+   */
+  lanePhase: {
+    shrinkK: 20,
+    /** Shown only from this many matchups with frames at that minute. */
+    minGames: 20,
+  },
+
   /** Picks confidence: weighted mean of n / (n + k) of each scored component. */
   confidenceK: {
     base: 200,

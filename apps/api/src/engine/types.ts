@@ -112,6 +112,29 @@ export interface ChoiceTraitRow extends GamesWins {
   choice: string;
 }
 
+/**
+ * stats_champion_lane_phase (0010_lane_phase.sql): average lane-phase differences (own − lane
+ * opponent; bot lane 2v2) at 10 and 15 min, per patch.
+ */
+export interface LanePhaseRow {
+  patch: PatchId;
+  position: Position;
+  championId: number;
+  enemyPosition: Position;
+  enemyId: number;
+  /** Matchups with frames at 10 min. */
+  games: number;
+  goldDiff10: number;
+  xpDiff10: number;
+  csDiff10: number;
+  /** Matchups with frames at 15 min (≤ games). */
+  games15: number;
+  /** Null when `games15` is 0. */
+  goldDiff15: number | null;
+  xpDiff15: number | null;
+  csDiff15: number | null;
+}
+
 /** Static item info the build engine needs. */
 export interface ItemInfo {
   id: number;

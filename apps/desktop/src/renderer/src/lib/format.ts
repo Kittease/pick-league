@@ -49,6 +49,7 @@ export const REASON_KIND_LABEL: Record<ReasonKind, string> = {
   tag_rule: 'Item rule',
   popularity: 'Popularity',
   patch_fallback: 'Previous patch added',
+  lane_phase: 'Lane phase',
 };
 
 /** Sample-size confidence used to fade thin evidence: 0 games → 0.25, ≥ 1000 → 1. */

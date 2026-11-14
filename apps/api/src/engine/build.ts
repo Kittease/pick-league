@@ -25,6 +25,7 @@ import {
   type TagRule,
   TRAIT_LABELS,
 } from './config.ts';
+import { lanePhaseDiff, lanePhaseReason, lanePhaseRowsOf } from './lane-phase.ts';
 import {
   formatDelta,
   formatGames,
@@ -49,6 +50,7 @@ import type {
   CompTraitRow,
   GamesWins,
   ItemInfo,
+  LanePhaseRow,
   NameLookup,
   RoleStatRow,
   VsRow,
@@ -77,6 +79,11 @@ export interface BuildData {
   championTraits: readonly ChampionTraitRow[];
   thresholds: readonly CompThresholdRow[];
   items: ReadonlyMap<number, ItemInfo>;
+  /**
+   * stats_champion_lane_phase of champion + role vs the request's lane opponents, per patch
+   * (optional: no `lanePhase` without it).
+   */
+  lanePhase?: readonly LanePhaseRow[];
   names: NameLookup;
 }
 
@@ -298,6 +305,8 @@ export function recommendBuild(req: BuildRequest, data: BuildData): BuildRespons
     fallback,
   });
 
+  const lanePhase = recommendLanePhase(req, data, laneOpponents[0]);
+
   return {
     championId: req.championId,
     role,
@@ -308,7 +317,33 @@ export function recommendBuild(req: BuildRequest, data: BuildData): BuildRespons
     runes,
     summonerSpells,
     skillOrder,
+    ...(lanePhase.length > 0 ? { lanePhase } : {}),
   };
+}
+
+/** Lane phase vs the primary lane opponent (the one the build adapts to): 10 then 15 min. */
+function recommendLanePhase(
+  req: BuildRequest,
+  data: BuildData,
+  opponent: RoleGuess | undefined,
+): Reason[] {
+  if (!opponent || !data.lanePhase) return [];
+  const rows = lanePhaseRowsOf(data.lanePhase, req.championId, opponent.championId, opponent.role);
+  const note = opponent.known ? undefined : `likely ${ROLE_LABELS[opponent.role]}`;
+  return ([10, 15] as const).flatMap((minute) => {
+    const diff = lanePhaseDiff(rows, data.patch.patches, minute);
+    return diff
+      ? [
+          lanePhaseReason(
+            diff,
+            req.role,
+            opponent.championId,
+            data.names.champion(opponent.championId),
+            note,
+          ),
+        ]
+      : [];
+  });
 }
 
 function matchupContext(o: RoleGuess, data: BuildData, names: NameLookup): Context {

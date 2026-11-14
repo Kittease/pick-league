@@ -47,7 +47,7 @@ export async function picks(q: Queryable, req: PicksRequest): Promise<PicksRespo
   const ctx = await patchContext(q, req.patch);
   const enemyIds = req.enemies.filter((e): e is number => e !== null);
   const allyIds = req.allies.flatMap((a) => (a.championId !== null ? [a.championId] : []));
-  const [roleStats, vs, withRows, compTraits, championTraits, thresholds, names] =
+  const [roleStats, vs, withRows, compTraits, championTraits, thresholds, lanePhase, names] =
     await Promise.all([
       repo.loadRoleStats(q, ctx.patches),
       repo.loadVsByEnemies(q, ctx.patches, req.role, enemyIds),
@@ -55,6 +55,7 @@ export async function picks(q: Queryable, req: PicksRequest): Promise<PicksRespo
       repo.loadCompTraits(q, ctx.patches, req.role),
       repo.loadChampionTraits(q, ctx.patches, [...enemyIds, ...allyIds]),
       repo.loadThresholds(q, ctx.patches),
+      repo.loadLanePhaseByEnemies(q, ctx.patches, req.role, enemyIds),
       repo.loadNames(q, ctx.patches),
     ]);
   if (!roleStats.some((r) => r.position === req.role)) {
@@ -69,6 +70,7 @@ export async function picks(q: Queryable, req: PicksRequest): Promise<PicksRespo
     compTraits,
     championTraits,
     thresholds,
+    lanePhase,
     names,
   });
 }
@@ -108,13 +110,14 @@ export async function build(q: Queryable, req: BuildRequest): Promise<BuildRespo
     currentPatch: ctx.current,
     previousPatch: ctx.previous,
   });
-  const [choices, choiceMatchups, choiceTraits, compTraitRows, vs, items, names] =
+  const [choices, choiceMatchups, choiceTraits, compTraitRows, vs, lanePhase, items, names] =
     await Promise.all([
       repo.loadChoices(q, patches, req.championId, req.role),
       repo.loadChoiceMatchups(q, patches, req.championId, req.role, opponentIds),
       repo.loadChoiceTraits(q, patches, req.championId, req.role, enemyTraits),
       repo.loadCompTraits(q, patches, req.role, req.championId, 'enemy'),
       repo.loadVsForChampion(q, patches, req.championId, req.role, opponentIds),
+      repo.loadLanePhaseOfChampion(q, patches, req.role, req.championId, opponentIds),
       repo.loadItems(q, ctx.current),
       repo.loadNames(q, ctx.patches),
     ]);
@@ -133,6 +136,7 @@ export async function build(q: Queryable, req: BuildRequest): Promise<BuildRespo
     championTraits,
     thresholds,
     items,
+    lanePhase,
     names,
   });
   if (!result)

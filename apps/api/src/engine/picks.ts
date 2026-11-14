@@ -13,6 +13,7 @@ import type {
   Reason,
 } from '@pick-league/shared';
 import { DUO_ROLES, ENGINE_CONFIG, LANE_ROLES, ROLE_LABELS, TRAIT_LABELS } from './config.ts';
+import { lanePhaseDiff, lanePhaseReason, lanePhaseRowsOf } from './lane-phase.ts';
 import {
   choosePatches,
   formatDelta,
@@ -33,6 +34,7 @@ import type {
   CompThresholdRow,
   CompTraitRow,
   GamesWins,
+  LanePhaseRow,
   NameLookup,
   RoleStatRow,
   VsRow,
@@ -53,6 +55,11 @@ export interface PicksData {
   /** stats_champion_traits of the request's allies and enemies. */
   championTraits: readonly ChampionTraitRow[];
   thresholds: readonly CompThresholdRow[];
+  /**
+   * stats_champion_lane_phase with position = request role and enemy in the request's enemies
+   * (optional: no lane_phase reasons without it).
+   */
+  lanePhase?: readonly LanePhaseRow[];
   names: NameLookup;
 }
 
@@ -72,6 +79,8 @@ interface Component {
 const KIND_ORDER: Record<Reason['kind'], number> = {
   patch_fallback: 0,
   matchup: 1,
+  // Same rank as matchup: placed right after the lane matchup it explains (see `order`).
+  lane_phase: 1,
   duo: 2,
   vs_comp: 3,
   with_comp: 4,
@@ -122,6 +131,11 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
     playRates,
   );
   const allyRoles = assignRoles(knownAllies, playRates, [role]);
+  // The lane opponent the lane phase is shown for: the enemy in the same role, else (bot lane)
+  // the other enemy bot laner.
+  const laneOpponent =
+    enemyRoles.find((e) => e.role === role) ??
+    enemyRoles.find((e) => LANE_ROLES[role].includes(e.role));
   const enemyTraits = sideTraits(knownEnemies, data);
   const allyTraits = sideTraits(
     knownAllies.map((a) => a.championId),
@@ -230,6 +244,33 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
       });
     }
 
+    // Lane phase vs the lane opponent: explains, never scores (weight 0).
+    if (laneOpponent && data.lanePhase) {
+      const rows = lanePhaseRowsOf(
+        data.lanePhase,
+        championId,
+        laneOpponent.championId,
+        laneOpponent.role,
+      );
+      const diff = lanePhaseDiff(rows, pc.patches, 10);
+      if (diff) {
+        components.push({
+          reason: lanePhaseReason(
+            diff,
+            role,
+            laneOpponent.championId,
+            names.champion(laneOpponent.championId),
+            laneOpponent.known ? undefined : `likely ${ROLE_LABELS[laneOpponent.role]}`,
+          ),
+          contribution: 0,
+          weight: 0,
+          confidence: 0,
+          // Right after its matchup reason (order 0 = same role, 1 = other bot laner).
+          order: (laneOpponent.role === role ? 0 : 1) + 0.5,
+        });
+      }
+    }
+
     // Allies: duo partner(s), then others pairwise.
     for (const ally of allyRoles) {
       const isDuo = DUO_ROLES[role].includes(ally.role);
@@ -301,6 +342,7 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
       .filter(
         (c) =>
           c.reason.kind === 'matchup' ||
+          c.reason.kind === 'lane_phase' ||
           c.reason.kind === 'duo' ||
           c.reason.kind === 'base' ||
           Math.abs(c.reason.delta) >= ENGINE_CONFIG.picks.minReasonDelta,
