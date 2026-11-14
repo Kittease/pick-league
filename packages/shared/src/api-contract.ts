@@ -151,8 +151,45 @@ export interface StatsStatusResponse {
   matchesIncluded: number;
   /** Matches stored now. */
   matchesStored: number;
-  /** `max(0, matchesStored - matchesIncluded)`: games a refresh would add. */
+  /** `max(0, matchesStored - matchesIncluded)`: matches a refresh would add. */
   pendingMatches: number;
+  /** Whether the worker is still collecting matches (from its `worker_status` rows). */
+  collection: CollectionStatus;
+}
+
+export const COLLECTION_STATES = [
+  /** The worker heartbeats and Riot accepts the key. */
+  'collecting',
+  /** Riot rejects the API key (401/403) on at least one platform: collection stopped. */
+  'key_rejected',
+  /** No platform loop heartbeated for `COLLECTION_STALL_MS`: the worker is not running. */
+  'stalled',
+  /** No `worker_status` row (worker never ran, or predates it). */
+  'unknown',
+] as const;
+export type CollectionState = (typeof COLLECTION_STATES)[number];
+
+/** Without a heartbeat for this long on every platform, collection counts as stalled. */
+export const COLLECTION_STALL_MS = 3 * 60_000;
+
+/** Health of one platform loop of the worker. */
+export interface PlatformCollectionStatus {
+  platform: Platform;
+  /** Last heartbeat (every 30 s while the platform's loop runs). */
+  heartbeatAt: string;
+  /** Riot rejects the API key since then; null while it is accepted. */
+  authRejectedSince: string | null;
+  /** Last error of the loop ('kind: message'), kept after recovery. */
+  lastError: string | null;
+  lastErrorAt: string | null;
+  /** Newest stored match of that platform (`max(matches.fetched_at)`); null when none. */
+  lastMatchStoredAt: string | null;
+}
+
+export interface CollectionStatus {
+  state: CollectionState;
+  /** One entry per platform the worker has run, sorted by platform. */
+  platforms: PlatformCollectionStatus[];
 }
 
 export const STATS_REFRESH_SKIP_REASONS = [

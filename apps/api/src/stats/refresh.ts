@@ -6,6 +6,7 @@
  */
 import type { Db, Queryable } from '@pick-league/db';
 import type { StatsRefreshResponse, StatsStatusResponse } from '@pick-league/shared';
+import { readCollectionStatus } from './collection.ts';
 
 /** Refresh order (dependencies first). `concurrent` = read by requests. */
 export const STATS_REFRESH_ORDER: readonly {
@@ -278,7 +279,8 @@ export class StatsRefresher {
   }
 
   async status(): Promise<StatsStatusResponse> {
-    const s = await readStatsRefreshState(this.options.statusDb ?? this.db);
+    const q = this.options.statusDb ?? this.db;
+    const [s, collection] = await Promise.all([readStatsRefreshState(q), readCollectionStatus(q)]);
     const included = s.lastOk?.matchCount ?? 0;
     return {
       refreshing: this.running !== null || s.locked,
@@ -287,6 +289,7 @@ export class StatsRefresher {
       matchesIncluded: included,
       matchesStored: s.matchesStored,
       pendingMatches: Math.max(0, s.matchesStored - included),
+      collection,
     };
   }
 
