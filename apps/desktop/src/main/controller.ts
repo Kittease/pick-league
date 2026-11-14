@@ -588,9 +588,18 @@ export class Controller {
       return;
     }
     const key = requestKey(request);
-    if (key === this.buildKey) return;
-    this.buildKey = key;
     const buildTarget = { championId: targetId, preview: lockedId === null };
+    if (key === this.buildKey) {
+      // Same request, e.g. the previewed champion just got locked in: the build (loaded or on
+      // its way) is the right one, only its target changed.
+      const shown = this.state.buildTarget;
+      if (shown?.championId !== targetId || shown.preview !== buildTarget.preview) {
+        this.patch({ buildTarget });
+      }
+      this.maybeAutoApply();
+      return;
+    }
+    this.buildKey = key;
     const previous = dataOf(this.state.build);
     const keep = previous?.championId === targetId ? previous : null;
     this.patch({ build: { status: 'loading', data: keep }, buildTarget });

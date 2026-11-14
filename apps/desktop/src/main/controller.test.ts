@@ -47,8 +47,18 @@ function buildFor(req: BuildRequestInput): BuildResponse {
   };
 }
 
-function setup() {
-  const calls = { picks: 0, build: 0, spells: 0 };
+let current: Controller | null = null;
+afterEach(() => {
+  current?.stop();
+  current = null;
+});
+
+/**
+ * Controller wired to an in-memory API and a stand-in League client: tests push client events
+ * (`lcu.session`, `lcu.phase`, `lcu.disconnect`…) and count the calls it receives.
+ */
+function setup(options: { lcu?: Partial<LcuApi> } = {}) {
+  const calls = { picks: 0, build: 0, spells: 0, applies: 0 };
   const api: ApiClient = {
     baseUrl: 'http://api.test',
     health: async () => ({ ok: true, db: true, latestPatch: '15.22', matchCount: 10 }),
@@ -73,7 +83,10 @@ function setup() {
     getOwnedChampions: async () => [],
     getMastery: async () => [],
     getCurrentSummoner: async () => FAKE_SUMMONER,
-    getPerkPages: async () => [],
+    getPerkPages: async () => {
+      calls.applies++;
+      return [];
+    },
     getPerkInventory: async () => ({ ownedPageCount: 2 }),
     createPerkPage: async (page) => ({ ...page, id: 99, isEditable: true, isDeletable: true }),
     replacePerkPage: async () => undefined,
@@ -81,6 +94,7 @@ function setup() {
     patchMySelection: async () => {
       calls.spells++;
     },
+    ...options.lcu,
   };
   let listener: LcuListener | null = null;
   const source: LcuSource = {
@@ -98,25 +112,31 @@ function setup() {
     saveSettings: async () => undefined,
     log: () => undefined,
   });
+  current = controller;
   controller.start();
   const lcuEvents = {
     session: (s: LcuChampSelectSession | null) => listener?.onSession(s),
     phase: (p: LcuGameflowPhase | null) => listener?.onPhase(p),
+    /** What the real source reports when the client closes. */
+    disconnect: () => {
+      listener?.onSession(null);
+      listener?.onPhase(null);
+      listener?.onStatus({ state: 'searching', message: 'League client disconnected' });
+    },
+    /** Reconnected client, then its current phase (no champion select). */
+    reconnect: (phase: LcuGameflowPhase) => {
+      listener?.onStatus({ state: 'connected', api: lcu });
+      listener?.onPhase(phase);
+      listener?.onSession(null);
+    },
   };
   const state = (): AppState => controller.getState();
   return { controller, calls, lcu: lcuEvents, state };
 }
 
-let current: Controller | null = null;
-afterEach(() => {
-  current?.stop();
-  current = null;
-});
-
 describe('controller: champion select → game', () => {
   test('keeps the locked build through the game without refetching or applying again', async () => {
     const { controller, calls, lcu, state } = setup();
-    current = controller;
     lcu.phase('ChampSelect');
     lcu.session(champSelectSession());
     await settle();
@@ -153,8 +173,7 @@ describe('controller: champion select → game', () => {
   });
 
   test('a dodge drops the champion select as soon as the client leaves it', async () => {
-    const { controller, lcu, state } = setup();
-    current = controller;
+    const { lcu, state } = setup();
     lcu.phase('ChampSelect');
     lcu.session(champSelectSession());
     await settle();
@@ -166,8 +185,7 @@ describe('controller: champion select → game', () => {
   });
 
   test('started in game: reads the teams from the client, fetches the build, applies nothing', async () => {
-    const { controller, calls, lcu, state } = setup();
-    current = controller;
+    const { calls, lcu, state } = setup();
     lcu.phase('InProgress');
     lcu.session(null);
     await settle();
@@ -177,6 +195,34 @@ describe('controller: champion select → game', () => {
       build: { status: 'ok', data: { championId: LOCKED_CHAMPION } },
       apply: { state: 'idle' },
     });
-    expect(calls).toEqual({ picks: 0, build: 1, spells: 0 });
+    expect(calls).toEqual({ picks: 0, build: 1, spells: 0, applies: 0 });
+  });
+});
+
+describe('controller: auto-apply', () => {
+  test('previewing a champion, then locking it in, applies its build once', async () => {
+    const { controller, calls, lcu, state } = setup();
+    lcu.phase('ChampSelect');
+    lcu.session(champSelectSession({ championId: LOCKED_CHAMPION, locked: false }));
+    controller.previewBuild(LOCKED_CHAMPION);
+    await settle();
+    expect(state()).toMatchObject({
+      build: { status: 'ok', data: { championId: LOCKED_CHAMPION } },
+      buildTarget: { championId: LOCKED_CHAMPION, preview: true },
+      apply: { state: 'idle' },
+    });
+
+    lcu.session(champSelectSession({ championId: LOCKED_CHAMPION, locked: true }));
+    await settle();
+    expect(state()).toMatchObject({
+      buildTarget: { championId: LOCKED_CHAMPION, preview: false },
+      apply: { state: 'done', auto: true, championId: LOCKED_CHAMPION },
+    });
+    // Same request: the previewed build is reused, and applied exactly once.
+    expect(calls.build).toBe(1);
+    expect(calls.applies).toBe(1);
+    lcu.session(champSelectSession({ championId: LOCKED_CHAMPION, locked: true }));
+    await settle();
+    expect(calls.applies).toBe(1);
   });
 });
