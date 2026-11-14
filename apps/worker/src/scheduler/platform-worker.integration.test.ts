@@ -620,6 +620,7 @@ d('PlatformWorker (Postgres)', () => {
       options: {
         idleMs: 10,
         transientBackoffMs: 1_000,
+        heartbeatMs: 60_000,
         maxTransientBackoffMs: 3_000,
         concurrency: { listing: 0, match: 1, daily: 0, enrichment: 0 },
       },
