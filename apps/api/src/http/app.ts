@@ -2,6 +2,8 @@ import type { Db } from '@pick-league/db';
 import {
   API_ROUTES,
   buildRequestSchema,
+  LIVE_PLAYERS_ROUTE,
+  livePlayersRequestSchema,
   MAX_REQUEST_BODY_BYTES,
   picksRequestSchema,
   TIER_LIST_CHAMPION_ROUTE,
@@ -15,6 +17,7 @@ import { cors } from 'hono/cors';
 import type { z } from 'zod';
 import { ApiError } from '../errors.ts';
 import type { Logger } from '../logger.ts';
+import * as live from '../services/live.ts';
 import * as meta from '../services/meta.ts';
 import * as reco from '../services/recommendations.ts';
 import * as tiers from '../services/tierlist.ts';
@@ -151,6 +154,13 @@ export function createApp(deps: AppDeps): Hono<Env> {
     return cached(c, `tierlist-champion|${JSON.stringify(query)}`, () =>
       tiers.tierListChampion(db, query),
     );
+  });
+
+  // Live game lookups: never cached (the desktop repeats it while the worker fills the answer).
+  // Writes lookup requests only, and only for platforms the worker runs.
+  app.post(LIVE_PLAYERS_ROUTE, async (c) => {
+    const req = await parseBody(c, livePlayersRequestSchema);
+    return c.json(await live.livePlayers(db, req));
   });
 
   if (deps.stats) {

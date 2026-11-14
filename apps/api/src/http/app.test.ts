@@ -53,6 +53,36 @@ describe('request limits', () => {
     expect(await errorCode(res)).toBe('PAYLOAD_TOO_LARGE');
   });
 
+  test('POST /live/players is validated before any database access', async () => {
+    const player = (n: number) => ({
+      puuid: `fake-live-puuid-${n}`,
+      championId: 412,
+      position: null,
+      team: 'ally',
+    });
+    for (const body of [
+      { platform: 'EUW1', players: [] },
+      { platform: 'EUW1', players: Array.from({ length: 11 }, (_, i) => player(i)) },
+      { platform: 'EUW1', players: [player(1), player(1)] },
+      { platform: 'OC1', players: [player(1)] },
+      'not json',
+    ]) {
+      const res = await app.request('/live/players', {
+        method: 'POST',
+        body: typeof body === 'string' ? body : JSON.stringify(body),
+        headers: { 'content-type': 'application/json' },
+      });
+      expect(res.status).toBe(400);
+      expect(await errorCode(res)).toBe('BAD_REQUEST');
+    }
+    const tooBig = await app.request('/live/players', {
+      method: 'POST',
+      body: big,
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(tooBig.status).toBe(413);
+  });
+
   test('availableChampionIds is capped', async () => {
     const ids = Array.from({ length: MAX_AVAILABLE_CHAMPION_IDS + 1 }, (_, i) => i + 1);
     const res = await app.request('/recommendations/picks', {

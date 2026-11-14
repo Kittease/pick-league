@@ -3,11 +3,21 @@
  * Needs DATABASE_URL_TEST (bun run db:test:up); uses its own database `pickleague_api_test`.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { createDb, type Db } from '@pick-league/db';
+import {
+  claimLiveLookups,
+  createDb,
+  type Db,
+  finishLiveLookup,
+  storeLiveMastery,
+  storeLiveRank,
+  storeLiveRecent,
+  touchWorkerStatus,
+} from '@pick-league/db';
 import type {
   ApiErrorResponse,
   BuildResponse,
   HealthResponse,
+  LivePlayersResponse,
   PatchesResponse,
   PicksResponse,
   Position,
@@ -856,5 +866,84 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
   test('stats refresh is skipped when matches did not change', async () => {
     const r = await refreshStats(db);
     expect(r.reason).toBe('unchanged');
+  });
+
+  test('POST /live/players: queued for the worker, answered as it fills in, never cached', async () => {
+    const players = [
+      { puuid: 'fake-live-puuid-1', championId: 412, position: 'UTILITY', team: 'ally' },
+      { puuid: 'fake-live-puuid-2', championId: 89, position: 'TOP', team: 'enemy' },
+    ];
+    // No worker loop for this platform: nothing is queued.
+    let res = await post('/live/players', { platform: 'NA1', players });
+    expect(res.status).toBe(200);
+    let body = (await res.json()) as LivePlayersResponse;
+    expect(body).toMatchObject({ platform: 'NA1', worker: 'unsupported', done: true });
+    expect(body.players.map((p) => p.status)).toEqual(['unsupported', 'unsupported']);
+    expect((await db`SELECT 1 FROM live_player_profiles`).length).toBe(0);
+
+    await touchWorkerStatus(db, 'EUW1');
+    res = await post('/live/players', { platform: 'EUW1', players });
+    body = (await res.json()) as LivePlayersResponse;
+    expect(body).toMatchObject({ platform: 'EUW1', worker: 'ok', done: false });
+    expect(body.players).toEqual([
+      {
+        index: 0,
+        team: 'ally',
+        championId: 412,
+        position: 'UTILITY',
+        status: 'pending',
+        rankLoaded: false,
+        rank: null,
+        mastery: null,
+        recent: null,
+      },
+      expect.objectContaining({ index: 1, team: 'enemy', status: 'pending' }),
+    ]);
+    expect(JSON.stringify(body)).not.toContain('fake-live-puuid');
+
+    // The worker stores the first player's rank: the next answer has it (no response cache).
+    const [job] = await claimLiveLookups(db, 'EUW1', 1);
+    expect(job?.puuid).toBe('fake-live-puuid-1');
+    await storeLiveRank(db, 'fake-live-puuid-1', job?.requestSeq ?? 0, {
+      tier: 'GOLD',
+      division: 1,
+      lp: 12,
+      wins: 6,
+      losses: 4,
+    });
+    await storeLiveMastery(db, 'fake-live-puuid-1', 412, { level: 3, points: 9000 });
+    await storeLiveRecent(db, 'fake-live-puuid-1', job?.requestSeq ?? 0, [
+      {
+        matchId: 'EUW1_1',
+        championId: 412,
+        position: 'UTILITY',
+        win: true,
+        remake: false,
+        endedAt: '2026-11-13T12:00:00.000Z',
+      },
+    ]);
+    await finishLiveLookup(db, 'fake-live-puuid-1');
+    body = (await (
+      await post('/live/players', { platform: 'EUW1', players })
+    ).json()) as LivePlayersResponse;
+    expect(body.done).toBe(false);
+    expect(body.players[0]).toMatchObject({
+      status: 'ready',
+      rank: { tier: 'GOLD', division: 1, lp: 12, winRate: 0.6 },
+      mastery: { level: 3, points: 9000 },
+      recent: { matches: 1, wins: 1, championMatches: 1, championWins: 1, mainRole: 'UTILITY' },
+    });
+    // Asking again did not queue the pending player twice.
+    expect(
+      (await db`SELECT request_seq FROM live_player_profiles ORDER BY puuid`).map(
+        (r) => r.request_seq,
+      ),
+    ).toEqual([1, 1]);
+
+    const bad = await post('/live/players', {
+      platform: 'EUW1',
+      players: [players[0], players[0]],
+    });
+    expect(bad.status).toBe(400);
   });
 });
