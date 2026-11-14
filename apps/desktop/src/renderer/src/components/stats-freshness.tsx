@@ -1,8 +1,9 @@
-import { RefreshCwIcon } from 'lucide-react';
+import { RefreshCwIcon, TriangleAlertIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { type CollectionWarning, collectionWarning } from '@/lib/collection';
 import { compact, timeAgo } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../../../core/app-state.ts';
@@ -28,8 +29,69 @@ async function requestRefresh() {
     });
 }
 
-/** Header item: how fresh the API's stats are + a button to include the newest games. */
+/** Collection stopped (rejected Riot key, worker down), when the API is up and says so. */
+function warningOf(state: AppState): CollectionWarning | null {
+  if (state.api.state !== 'ok') return null;
+  return collectionWarning(state.stats.status?.collection);
+}
+
+function stoppedAgo(warning: CollectionWarning, now: number): string | null {
+  return warning.since ? `stopped ${timeAgo(warning.since, now)}` : null;
+}
+
+function WarningText({ warning }: { warning: CollectionWarning }) {
+  return (
+    <>
+      <span className="font-semibold">{warning.title}</span>{' '}
+      <span className="text-foreground/80">
+        {warning.fix.text} <span className="num">{warning.fix.command}</span>.
+      </span>
+    </>
+  );
+}
+
+/** Full-width line under the header while collection is stopped (nothing otherwise). */
+export function CollectionBanner({ state }: { state: AppState }) {
+  const warning = warningOf(state);
+  const now = useNow(30_000);
+  if (!warning) return null;
+  const ago = stoppedAgo(warning, now);
+  return (
+    <div
+      role="alert"
+      className="flex shrink-0 items-center gap-2 border-b border-down/40 bg-down/10 px-4 py-1.5 text-xs text-down"
+    >
+      <TriangleAlertIcon className="size-3.5 shrink-0" />
+      <span className="min-w-0 truncate">
+        <WarningText warning={warning} />
+      </span>
+      {ago && <span className="ml-auto shrink-0 text-muted-foreground">Collection {ago}</span>}
+    </div>
+  );
+}
+
+/** Header badge: collection stopped, and since when. */
+function CollectionBadge({ warning, now }: { warning: CollectionWarning; now: number }) {
+  const ago = stoppedAgo(warning, now);
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={<span className="flex shrink-0 items-center gap-1 font-semibold text-down" />}
+      >
+        <TriangleAlertIcon className="size-3.5" />
+        {warning.label}
+        {ago && <span className="hidden font-normal lg:inline">· {ago}</span>}
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-sm whitespace-normal">
+        <WarningText warning={warning} />
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Header item: how fresh the API's stats are + a button to include the newest matches. */
 export function StatsFreshness({ state }: { state: AppState }) {
+  const warning = warningOf(state);
   const { status, refreshing, lastManual } = state.stats;
   const now = useNow(30_000);
 
@@ -91,6 +153,7 @@ export function StatsFreshness({ state }: { state: AppState }) {
         </TooltipTrigger>
         <TooltipContent side="bottom">{tip}</TooltipContent>
       </Tooltip>
+      {warning && <CollectionBadge warning={warning} now={now} />}
     </span>
   );
 }
