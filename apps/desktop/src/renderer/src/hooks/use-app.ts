@@ -29,6 +29,8 @@ export function useAppState(): AppState | null {
 export interface StaticLookup {
   version: string;
   patch: string;
+  /** Every champion, sorted by name. */
+  champions: readonly StaticChampionDto[];
   champion(id: number | null | undefined): StaticChampionDto | undefined;
   item(id: number | null | undefined): StaticItemDto | undefined;
   rune(id: number): StaticRuneDto | undefined;
@@ -48,6 +50,7 @@ function lookup(data: StaticDataResponse): StaticLookup {
   return {
     version: data.ddragonVersion,
     patch: data.patch,
+    champions: [...data.champions].sort((a, b) => a.name.localeCompare(b.name)),
     champion: (id) => (id ? champions.get(id) : undefined),
     item: (id) => (id ? items.get(id) : undefined),
     rune: (id) => runes.get(id),

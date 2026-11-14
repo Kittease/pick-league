@@ -1,4 +1,4 @@
-import { ListOrderedIcon, SwordsIcon } from 'lucide-react';
+import { LayoutGridIcon, ListOrderedIcon, SwordsIcon } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { autoView, type View } from '@/lib/views';
@@ -9,8 +9,8 @@ export type { View };
  * Current view, moved by the app only when a champion select starts or ends (see `autoView`):
  * champion select as soon as one starts — unless the user is looking at a champion in the tier
  * list (`setBusy(true)`): then the nav only shows a live dot and the user switches when ready —
- * and back to the tier list when it ends (after the game it led to). Leaving it in between (nav,
- * Escape) is not undone.
+ * and back to the tier list when it ends (after the game it led to), unless the draft planner is
+ * shown. Leaving it in between (nav, Escape) is not undone.
  */
 export function useAutoView(inSelect: boolean) {
   const [view, setView] = useState<View>(inSelect ? 'select' : 'tierlist');
@@ -30,9 +30,10 @@ export function useAutoView(inSelect: boolean) {
 const ITEMS: { view: View; label: string; Icon: typeof SwordsIcon }[] = [
   { view: 'select', label: 'Champ select', Icon: SwordsIcon },
   { view: 'tierlist', label: 'Tier list', Icon: ListOrderedIcon },
+  { view: 'draft', label: 'Draft', Icon: LayoutGridIcon },
 ];
 
-/** Slim left rail switching between the champion select view and the tier list. */
+/** Slim left rail switching between the champion select view, the tier list and the draft planner. */
 export function ViewNav({
   view,
   onChange,

@@ -6,13 +6,14 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import type { AppState } from '../../core/app-state.ts';
 import { BuildPanel } from './components/build-panel';
 import { ChampSelectBoard } from './components/champ-select-board';
+import { type DraftHandle, DraftPlanner } from './components/draft-planner';
 import { PicksPanel } from './components/picks-panel';
 import { StatusBar } from './components/status-bar';
 import { type TierListHandle, TierListPage } from './components/tier-list';
 import { useAutoView, ViewNav } from './components/view-nav';
 import { type StaticLookup, useAppState, useStatic } from './hooks/use-app';
 import { useShortcuts } from './hooks/use-shortcuts';
-import { escapeAction } from './lib/shortcuts';
+import { draftEscapeAction, escapeAction } from './lib/shortcuts';
 
 type Tab = 'picks' | 'build';
 
@@ -96,11 +97,25 @@ export function App() {
   const { view, setView, setBusy } = useAutoView(Boolean(state?.champSelect));
 
   // Escape steps back (search text, build page, details, champion select → tier list); Ctrl/Cmd+K
-  // or F jumps to the tier list search. See `escapeAction` for the order.
+  // or F jumps to the tier list search. See `escapeAction` for the order. The draft planner
+  // keeps both to itself (`draftEscapeAction`, its own search).
   const tierList = useRef<TierListHandle>(null);
+  const draft = useRef<DraftHandle>(null);
   useShortcuts((shortcut) => {
     const list = tierList.current;
     if (!state || !list) return false;
+    if (view === 'draft') {
+      const planner = draft.current;
+      if (!planner) return false;
+      if (shortcut === 'focus-search') {
+        planner.focusSearch();
+        return true;
+      }
+      const action = draftEscapeAction(planner.escapeState());
+      if (action === null) return false;
+      planner.escape(action);
+      return true;
+    }
     if (shortcut === 'focus-search') {
       setView('tierlist');
       list.focusSearch();
@@ -146,6 +161,10 @@ export function App() {
               onBusyChange={setBusy}
               handleRef={tierList}
             />
+          </div>
+          {/* Kept mounted too: the draft survives a trip to the other views. */}
+          <div className={view === 'draft' ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}>
+            <DraftPlanner state={state} lookup={lookup} handleRef={draft} />
           </div>
           {view === 'select' && (
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
