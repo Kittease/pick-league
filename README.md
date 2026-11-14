@@ -162,6 +162,13 @@ These commands read `DATABASE_URL` (and the other settings) from the root `.env`
 | `GET /tierlist?role=UTILITY&patch=latest&platform=ALL&rank=MASTER` | tier list of a role: tiers, win/pick/ban rates, confidence. Optional filters (echoed as `filters`): `platform` = `ALL` (default), `KR`, `EUW1`, `NA1`, `VN2`; `rank` = `MASTER` (Master+, default: every player), `GRANDMASTER` (Grandmaster+), `CHALLENGER` (Challenger only), on each counted player's current solo rank |
 | `GET /tierlist/champion?role=UTILITY&championId=111&patch=latest` | one champion of the tier list: every lane matchup, duo partner and other ally (synergy) with 5+ matchups, best first, with shrunk win-rate delta, win rate and sample size. Same `platform`/`rank` filters; `synergies` is `null` when filtered |
 
+Errors are `{ error: { code, message, details? } }`: `400 BAD_REQUEST` (invalid body or query),
+`404 NOT_FOUND` (unknown route, patch or champion: the requested `championId` of a build or of
+`/tierlist/champion`, including ids beyond the stored champion id range), `413 PAYLOAD_TOO_LARGE`
+(POST body over 64 KB), `429 RATE_LIMITED`, `503 NO_DATA`. Champion ids inside lists (`allies`,
+`enemies`, `bans`, `availableChampionIds`) that match no champion are ignored, never an error;
+`availableChampionIds` holds at most 1000 ids.
+
 Request/response types are in `packages/shared/src/api-contract.ts`. Every reason carries the
 win-rate delta (after shrinkage) and its sample size; `patchesUsed` lists the patches combined (the previous one is added when the
 current patch has fewer than 150 games of the champion in the role).
