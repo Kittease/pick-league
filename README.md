@@ -80,11 +80,13 @@ bun run dev:desktop      # opens the app; start League whenever you like
 - **Tier list** (left rail, shown whenever you are not in champion select): best picks per lane
   with tier (S–D), win/pick/ban rates, confidence and your mastery; filter by server (all, KR,
   EUW, NA, VN), by rank (Master+, Grandmaster+, Challenger only — players' current rank), by
-  name or owned champions; click a champion for its best/worst lane matchups, duos and synergies
-  (other allies; not available with server/rank filters), each with "Show all", and a generic
-  build. The
+  name or owned champions; click a champion to open its details next to a compact table: best
+  and worst lane matchups, duos and synergies (other allies; not available with server/rank
+  filters) side by side — stacked when the window is narrow — each with "Show all", and a
+  generic build. The
   app switches to champion select by itself when one starts (unless you are reading a
-  champion's details).
+  champion's details); once you go back to the tier list it stays there until the next
+  champion select.
 
 **API address.** By default the app talks to `http://localhost:3000` (the Docker stack on the
 same computer). If the stack runs on a server, open Settings (gear icon) and set
@@ -108,6 +110,12 @@ its header (double-click it to maximize) and use the minimize / maximize / close
 right end. **Zoom** (80–200%, handy on a large second screen) is in Settings; Ctrl + / Ctrl − /
 Ctrl 0 and Ctrl + mouse wheel change it too, and it is remembered. macOS keeps its native title bar. In dev, `PICKLEAGUE_FORCE_FRAMELESS=1` applies the
 Windows window setup on any OS; Ctrl/Cmd+R reloads and F12 opens the devtools.
+
+**Keyboard.** Ctrl+K or Ctrl+F (Cmd on macOS) jumps to the tier list's champion search and
+selects its text. Escape steps back, one step per press: in the search field it clears the text,
+then leaves the field; then it closes the generic build page, then the champion's details; from
+the champion select view it goes back to the tier list. While a menu, a select or Settings is
+open, Escape only closes that.
 
 **Installers.** `bun run --filter @pick-league/desktop package` builds an installer for the
 current OS into `apps/desktop/dist/` (unsigned).
