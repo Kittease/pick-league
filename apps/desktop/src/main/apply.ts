@@ -2,7 +2,7 @@
 
 import type { BuildResponse } from '@pick-league/shared';
 import { planRunePageWrite, RUNE_PAGE_NAME, runePageInput } from '../core/rune-page.ts';
-import { FLASH_SPELL_ID, spellsPatch } from '../core/spells.ts';
+import { FLASH_SPELL_ID, type FlashKey, spellsPatch } from '../core/spells.ts';
 import type { LcuApi } from './lcu/api.ts';
 
 export interface ApplyResult {
@@ -18,6 +18,7 @@ export async function applyBuild(
   api: LcuApi,
   build: BuildResponse,
   currentSpells: [number, number],
+  flashKey: FlashKey,
 ): Promise<ApplyResult> {
   const messages: string[] = [];
   let state: ApplyResult['state'] = 'done';
@@ -45,7 +46,7 @@ export async function applyBuild(
 
   // Summoner spells
   try {
-    const patch = spellsPatch(build.summonerSpells.spellIds, currentSpells);
+    const patch = spellsPatch(build.summonerSpells.spellIds, currentSpells, flashKey);
     if (!patch) {
       messages.push('Summoner spells already set');
     } else {

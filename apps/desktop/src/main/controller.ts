@@ -555,7 +555,7 @@ export class Controller {
       return;
     }
     this.patch({ apply: { state: 'applying', messages: [], auto, championId, at: null } });
-    const result = await applyBuild(api, build, view.mySpells);
+    const result = await applyBuild(api, build, view.mySpells, this.state.settings.flashKey);
     this.deps.log(`apply (${auto ? 'auto' : 'manual'}): ${result.messages.join(' | ')}`);
     this.patch({ apply: { ...result, auto, championId, at: new Date().toISOString() } });
   }

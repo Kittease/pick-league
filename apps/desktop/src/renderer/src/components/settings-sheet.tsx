@@ -16,6 +16,7 @@ import { Switch } from '@/components/ui/switch';
 import { ROLE_LABEL } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState, Settings } from '../../../core/app-state.ts';
+import { FLASH_KEYS } from '../../../core/spells.ts';
 import { ZOOM_LEVELS } from '../../../core/zoom.ts';
 
 function update(patch: Partial<Settings>) {
@@ -96,7 +97,7 @@ export function SettingsSheet({ state }: { state: AppState }) {
           <Row
             id="auto-apply"
             title="Apply runes and spells on lock-in"
-            hint="Writes a “PickLeague” rune page and sets your summoner spells (Flash stays on your key). Never touches your other pages."
+            hint="Writes a “PickLeague” rune page and sets your summoner spells (Flash on the key chosen below). Never touches your other pages."
           >
             <Switch
               id="auto-apply"
@@ -104,6 +105,28 @@ export function SettingsSheet({ state }: { state: AppState }) {
               onCheckedChange={(v) => update({ autoApply: v })}
             />
           </Row>
+
+          <div className="flex items-start justify-between gap-6 border-b border-border py-4">
+            <div className="flex flex-col gap-1">
+              <Label>Flash key</Label>
+              <p className="text-xs text-muted-foreground">
+                Where Flash goes when spells are applied.
+              </p>
+            </div>
+            <div className="flex gap-1">
+              {FLASH_KEYS.map((k) => (
+                <Button
+                  key={k}
+                  size="xs"
+                  variant={settings.flashKey === k ? 'secondary' : 'ghost'}
+                  className={cn('num', settings.flashKey === k && 'text-foreground')}
+                  onClick={() => update({ flashKey: k })}
+                >
+                  {k}
+                </Button>
+              ))}
+            </div>
+          </div>
 
           <Row
             id="owned-only"

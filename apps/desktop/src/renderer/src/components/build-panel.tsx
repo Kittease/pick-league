@@ -11,7 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { compact, confidenceLabel, patchesText, percent, SKILL_KEY } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../../../core/app-state.ts';
-import { arrangeSpells } from '../../../core/spells.ts';
+import { arrangeSpells, type FlashKey } from '../../../core/spells.ts';
 import type { StaticLookup } from '../hooks/use-app';
 import { ChampionIcon, GameIcon } from './game-icon';
 import { Notice } from './notice';
@@ -179,13 +179,16 @@ function Spells({
   build,
   lookup,
   mySpells,
+  flashKey,
 }: {
   build: BuildResponse;
   lookup: StaticLookup | null;
   mySpells: [number, number] | null;
+  flashKey: FlashKey;
 }) {
   const s = build.summonerSpells;
-  const ordered = mySpells ? arrangeSpells(s.spellIds, mySpells) : s.spellIds;
+  // Same D/F order as applying them (no current spells outside champion select).
+  const ordered = arrangeSpells(s.spellIds, mySpells ?? [0, 0], flashKey);
   return (
     <section>
       <SectionTitle meta={`${percent(s.winRate)} wr · ${compact(s.games)} games`}>
@@ -377,6 +380,7 @@ export function BuildPanel({ state, lookup }: { state: AppState; lookup: StaticL
             build={data}
             lookup={lookup}
             mySpells={state.champSelect?.mySpells ?? null}
+            flashKey={state.settings.flashKey}
           />
         )}
       </div>
@@ -389,10 +393,12 @@ export function BuildDetails({
   build,
   lookup,
   mySpells,
+  flashKey,
 }: {
   build: BuildResponse;
   lookup: StaticLookup | null;
   mySpells: [number, number] | null;
+  flashKey: FlashKey;
 }) {
   return (
     <div className="flex flex-col gap-6 p-4">
@@ -415,7 +421,7 @@ export function BuildDetails({
       <div className="grid grid-cols-2 gap-6">
         <Runes build={build} lookup={lookup} />
         <div className="flex flex-col gap-6">
-          <Spells build={build} lookup={lookup} mySpells={mySpells} />
+          <Spells build={build} lookup={lookup} mySpells={mySpells} flashKey={flashKey} />
           <SkillOrder build={build} />
         </div>
       </div>

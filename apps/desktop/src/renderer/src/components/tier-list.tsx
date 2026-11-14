@@ -31,7 +31,7 @@ import {
   ROLE_LABEL,
 } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import type { ApiResult, AppState } from '../../../core/app-state.ts';
+import type { ApiResult, AppState, Settings } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
 import { BuildDetails } from './build-panel';
 import { ChampionIcon } from './game-icon';
@@ -447,11 +447,13 @@ function GenericBuild({
   mastery,
   onBack,
   refreshKey,
+  flashKey,
 }: {
   championId: number;
   role: Position;
   lookup: StaticLookup | null;
   mastery: AppState['mastery'];
+  flashKey: Settings['flashKey'];
   onBack: () => void;
   /** Changes when the API's stats were refreshed: re-fetch the build. */
   refreshKey: string;
@@ -516,7 +518,7 @@ function GenericBuild({
             ))}
           </div>
         )}
-        {data && <BuildDetails build={data} lookup={lookup} mySpells={null} />}
+        {data && <BuildDetails build={data} lookup={lookup} mySpells={null} flashKey={flashKey} />}
       </div>
     </div>
   );
@@ -589,6 +591,7 @@ export function TierListPage({
         mastery={state.mastery}
         onBack={() => setBuildOf(null)}
         refreshKey={apiKey}
+        flashKey={state.settings.flashKey}
       />
     );
   }

@@ -13,6 +13,7 @@ import type {
   TierListResponse,
 } from '@pick-league/shared';
 import type { ChampSelectView } from './champ-select.ts';
+import type { FlashKey } from './spells.ts';
 
 export interface Settings {
   /** PickLeague API base URL, e.g. http://localhost:3000 or http://<vps-ip>:3000. */
@@ -27,6 +28,8 @@ export interface Settings {
   ownedOnly: boolean;
   /** Zoom factor of the whole UI (1 = 100%), one of ZOOM_LEVELS. */
   zoom: number;
+  /** Key Flash goes on when summoner spells are applied. */
+  flashKey: FlashKey;
 }
 
 export interface LcuStatus {

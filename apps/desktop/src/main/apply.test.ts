@@ -70,22 +70,31 @@ const userPage = (id: number): LcuPerkPage => ({
 });
 
 describe('applyBuild', () => {
-  test('creates the PickLeague page and keeps Flash on F', async () => {
+  test('creates the PickLeague page and puts Flash on F', async () => {
     const { api, calls } = fakeLcu([userPage(1)], 2);
-    const result = await applyBuild(api, build, [14, 4]);
+    const result = await applyBuild(api, build, [14, 4], 'F');
     expect(result.state).toBe('done');
     expect(calls).toEqual(['create PickLeague', 'current 99', 'spells 3,4']);
+    expect(result.messages).toContain('Summoner spells set (Flash on F)');
   });
 
-  test('replaces an existing PickLeague page', async () => {
+  test('moves Flash to D when D is chosen', async () => {
+    const { api, calls } = fakeLcu([userPage(1)], 2);
+    const result = await applyBuild(api, build, [14, 4], 'D');
+    expect(calls).toEqual(['create PickLeague', 'current 99', 'spells 4,3']);
+    expect(result.messages).toContain('Summoner spells set (Flash on D)');
+  });
+
+  test('leaves the spells alone when Flash is already on the chosen key', async () => {
     const { api, calls } = fakeLcu([userPage(1), { ...userPage(2), name: 'PickLeague' }], 2);
-    await applyBuild(api, build, [4, 3]);
+    const result = await applyBuild(api, build, [4, 3], 'D');
     expect(calls).toEqual(['replace 2 PickLeague', 'current 2']);
+    expect(result.messages).toContain('Summoner spells already set');
   });
 
   test('never deletes user pages: warns when no slot is free, still sets spells', async () => {
     const { api, calls } = fakeLcu([userPage(1), userPage(2)], 2);
-    const result = await applyBuild(api, build, [14, 4]);
+    const result = await applyBuild(api, build, [14, 4], 'F');
     expect(result.state).toBe('warning');
     expect(calls).toEqual(['spells 3,4']);
   });

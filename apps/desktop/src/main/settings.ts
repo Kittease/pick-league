@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { API_DEFAULT_URL, isPosition } from '@pick-league/shared';
 import type { Settings } from '../core/app-state.ts';
+import { isFlashKey } from '../core/spells.ts';
 import { DEFAULT_ZOOM, nearestZoom } from '../core/zoom.ts';
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -11,6 +12,7 @@ export const DEFAULT_SETTINGS: Settings = {
   fallbackRole: 'UTILITY',
   ownedOnly: true,
   zoom: DEFAULT_ZOOM,
+  flashKey: 'F',
 };
 
 /** Keeps known keys with the right type; anything else falls back to the defaults. */
@@ -29,6 +31,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     ownedOnly: bool('ownedOnly'),
     fallbackRole: isPosition(r.fallbackRole) ? r.fallbackRole : DEFAULT_SETTINGS.fallbackRole,
     zoom: nearestZoom(r.zoom),
+    flashKey: isFlashKey(r.flashKey) ? r.flashKey : DEFAULT_SETTINGS.flashKey,
   };
 }
 
