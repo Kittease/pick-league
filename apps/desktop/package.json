@@ -9,12 +9,10 @@
   "scripts": {
     "electron:install": "install-electron",
     "dev": "install-electron && electron-vite dev",
-    "dev:mock": "install-electron && PICKLEAGUE_MOCK_LCU=1 electron-vite dev",
     "build": "electron-vite build",
     "start": "install-electron && electron-vite preview",
     "package": "electron-vite build && electron-builder --config electron-builder.yml",
     "package:dir": "electron-vite build && electron-builder --config electron-builder.yml --dir",
-    "fake-api": "bun run scripts/fake-api.ts",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.json",
     "test": "bun test"
   },

@@ -7,12 +7,10 @@ import { staticResponseFromDdragon } from '../core/static-from-ddragon.ts';
 import { DEFAULT_ZOOM, stepZoom, zoomShortcut } from '../core/zoom.ts';
 import { createApiClient } from './api-client.ts';
 import { Controller } from './controller.ts';
-import { createMockLcuSource } from './lcu/mock.ts';
 import { createRealLcuSource } from './lcu/real.ts';
 import { loadSettings, sanitizeSettings, saveSettings } from './settings.ts';
 
 app.setName('PickLeague');
-const forcedMock = process.env.PICKLEAGUE_MOCK_LCU === '1';
 const log = (message: string) => console.log(`[pickleague] ${message}`);
 
 /**
@@ -135,7 +133,7 @@ function createWindow(controller: Controller): BrowserWindow {
 
 /**
  * Dev only: PICKLEAGUE_CAPTURE_DIR=<dir> saves a PNG of the window every 5 s, so the UI can be
- * checked without screen-recording permissions (used with the mock LCU + fake API).
+ * checked without screen-recording permissions.
  */
 function startDevCaptures(win: BrowserWindow): void {
   const dir = process.env.PICKLEAGUE_CAPTURE_DIR;
@@ -158,16 +156,14 @@ async function main(): Promise<void> {
   await app.whenReady();
   const settingsPath = join(app.getPath('userData'), 'settings.json');
   const saved = await loadSettings(settingsPath);
-  // PICKLEAGUE_API_URL overrides the saved address for this run (dev / fake API).
+  // PICKLEAGUE_API_URL overrides the saved address for this run (dev).
   const envApiUrl = process.env.PICKLEAGUE_API_URL;
   const settings = envApiUrl ? sanitizeSettings({ ...saved, apiUrl: envApiUrl }) : saved;
   const ddragon = createDdragonClient();
 
   const controller = new Controller({
     settings,
-    forcedMock,
-    createSource: (kind) =>
-      kind === 'mock' ? createMockLcuSource({ log }) : createRealLcuSource(),
+    createSource: () => createRealLcuSource(),
     createApi: (url) => createApiClient(url),
     async loadDdragonStatic() {
       const [latest] = await ddragon.getLatestPatchVersions(1);

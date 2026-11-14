@@ -8,7 +8,6 @@ import { DEFAULT_ZOOM, nearestZoom } from '../core/zoom.ts';
 export const DEFAULT_SETTINGS: Settings = {
   apiUrl: API_DEFAULT_URL,
   autoApply: true,
-  mockLcu: false,
   fallbackRole: 'UTILITY',
   ownedOnly: true,
   zoom: DEFAULT_ZOOM,
@@ -27,7 +26,6 @@ export function sanitizeSettings(raw: unknown): Settings {
   return {
     apiUrl,
     autoApply: bool('autoApply'),
-    mockLcu: bool('mockLcu'),
     ownedOnly: bool('ownedOnly'),
     fallbackRole: isPosition(r.fallbackRole) ? r.fallbackRole : DEFAULT_SETTINGS.fallbackRole,
     zoom: nearestZoom(r.zoom),

@@ -54,8 +54,7 @@ const LEAVING_TIMEOUT_MS = 3_000;
 
 export interface ControllerDeps {
   settings: Settings;
-  forcedMock: boolean;
-  createSource(kind: 'real' | 'mock'): LcuSource;
+  createSource(): LcuSource;
   createApi(baseUrl: string): ApiClient;
   /** Static data straight from Data Dragon, used when the API is unreachable. */
   loadDdragonStatic(): Promise<StaticDataResponse>;
@@ -115,8 +114,7 @@ export class Controller {
     this.api = deps.createApi(deps.settings.apiUrl);
     this.state = {
       settings: deps.settings,
-      forced: { mockLcu: deps.forcedMock },
-      lcu: { state: 'searching', mock: false, account: null, message: null },
+      lcu: { state: 'searching', account: null, message: null },
       api: {
         state: 'checking',
         url: this.api.baseUrl,
@@ -193,7 +191,6 @@ export class Controller {
       void this.pollStats();
       this.refetch();
     }
-    if (next.mockLcu !== prev.mockLcu && !this.state.forced.mockLcu) this.startSource();
     if (next.fallbackRole !== prev.fallbackRole || next.ownedOnly !== prev.ownedOnly) {
       if (this.lobby.stage === 'select') this.showSelect(false);
     }
@@ -267,37 +264,25 @@ export class Controller {
   // ---------------------------------------------------------------------------
 
   private startSource(): void {
-    this.source?.stop();
-    this.lcuApi = null;
-    this.dispatch({ type: 'reset' });
-    const kind = this.state.forced.mockLcu || this.state.settings.mockLcu ? 'mock' : 'real';
-    this.patch({
-      lcu: { state: 'searching', mock: kind === 'mock', account: null, message: null },
-    });
-    const source = this.deps.createSource(kind);
+    if (this.source) return;
+    const source = this.deps.createSource();
     this.source = source;
     source.start({
-      onStatus: (status) => {
-        if (this.source === source) this.onLcuStatus(status, kind === 'mock');
-      },
-      onSession: (session) => {
-        if (this.source === source) this.dispatch({ type: 'session', session });
-      },
-      onPhase: (phase) => {
-        if (this.source === source) this.dispatch({ type: 'phase', phase });
-      },
+      onStatus: (status) => this.onLcuStatus(status),
+      onSession: (session) => this.dispatch({ type: 'session', session }),
+      onPhase: (phase) => this.dispatch({ type: 'phase', phase }),
     });
   }
 
-  private onLcuStatus(status: LcuConnectionStatus, mock: boolean): void {
+  private onLcuStatus(status: LcuConnectionStatus): void {
     if (status.state === 'searching') {
       this.lcuApi = null;
-      this.patch({ lcu: { state: 'searching', mock, account: null, message: status.message } });
+      this.patch({ lcu: { state: 'searching', account: null, message: status.message } });
       return;
     }
     const wasConnected = this.lcuApi !== null;
     this.lcuApi = status.api;
-    this.patch({ lcu: { ...this.state.lcu, state: 'connected', mock, message: null } });
+    this.patch({ lcu: { ...this.state.lcu, state: 'connected', message: null } });
     if (!wasConnected) void this.loadAccount();
   }
 

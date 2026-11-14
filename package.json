@@ -17,7 +17,6 @@
     "dev:worker": "bun run --filter @pick-league/worker dev",
     "dev:api": "bun run --filter @pick-league/api dev",
     "dev:desktop": "bun run --filter @pick-league/desktop dev",
-    "dev:desktop:mock": "bun run --filter @pick-league/desktop dev:mock",
     "build:desktop": "bun run --filter @pick-league/desktop build"
   },
   "devDependencies": {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { deriveChampSelect } from './champ-select.ts';
+import { champSelectSession, FAKE_SUMMONER, gameflowSession, LOCKED_CHAMPION } from './fixtures.ts';
 import {
   isInGamePhase,
   type Lobby,
@@ -9,19 +10,8 @@ import {
   sessionFromGameflow,
 } from './game-flow.ts';
 import type { LcuGameflowSession } from './lcu-types.ts';
-import {
-  MOCK_GAME_MS,
-  MOCK_LOCKED_CHAMPION,
-  MOCK_LOOP_MS,
-  MOCK_TIMINGS,
-  mockCurrentSummoner,
-  mockGameflowSession,
-  mockPhaseAt,
-  mockSessionAt,
-} from './mock-script.ts';
 
-const selectSession = mockSessionAt(MOCK_TIMINGS.finalization);
-if (!selectSession) throw new Error('mock script has no finalization session');
+const selectSession = champSelectSession();
 
 const phase = (p: string | null): LobbyEvent => ({ type: 'phase', phase: p });
 const session = (s = selectSession): LobbyEvent => ({ type: 'session', session: s });
@@ -74,8 +64,7 @@ describe('lobby tracking', () => {
 
   test('a new champion select replaces the last game', () => {
     const over = run([phase('ChampSelect'), session(), phase('InProgress'), phase('EndOfGame')]);
-    const next = mockSessionAt(1_000);
-    if (!next) throw new Error('no planning session');
+    const next = champSelectSession({ championId: 40, locked: false });
     expect(run([phase('ChampSelect'), session(next)], over)).toMatchObject({
       stage: 'select',
       session: next,
@@ -95,10 +84,6 @@ describe('lobby tracking', () => {
     expect(run([recovered], live)).toBe(live);
   });
 
-  test('reset forgets everything', () => {
-    expect(run([phase('InProgress'), session(), { type: 'reset' }])).toEqual(NO_LOBBY);
-  });
-
   test('in-game phases', () => {
     expect(
       ['GameStart', 'InProgress', 'Reconnect', 'WaitingForStats', 'PreEndOfGame'].every(
@@ -110,17 +95,17 @@ describe('lobby tracking', () => {
 });
 
 describe('champion select rebuilt from a game in progress', () => {
-  const me = mockCurrentSummoner();
+  const me = FAKE_SUMMONER;
 
   test('finds the user, their role, spells and every locked champion', () => {
-    const s = sessionFromGameflow(mockGameflowSession([4, 14]), me);
+    const s = sessionFromGameflow(gameflowSession([4, 14]), me);
     if (!s) throw new Error('not recovered');
     const view = deriveChampSelect(s, 'MIDDLE');
     expect(view).toMatchObject({
       role: 'UTILITY',
       roleAssumed: false,
       lockedIn: true,
-      lockedChampionId: MOCK_LOCKED_CHAMPION,
+      lockedChampionId: LOCKED_CHAMPION,
       mySpells: [4, 14],
     });
     expect(view.allies.map((a) => a.championId)).toEqual([516, 64, 103, 222]);
@@ -131,7 +116,7 @@ describe('champion select rebuilt from a game in progress', () => {
   });
 
   test('the user can be on the second team', () => {
-    const gameflow = mockGameflowSession([4, 14]);
+    const gameflow = gameflowSession([4, 14]);
     const swapped: LcuGameflowSession = {
       ...gameflow,
       gameData: {
@@ -142,55 +127,22 @@ describe('champion select rebuilt from a game in progress', () => {
     };
     const s = sessionFromGameflow(swapped, me);
     const view = s && deriveChampSelect(s, 'MIDDLE');
-    expect(view?.lockedChampionId).toBe(MOCK_LOCKED_CHAMPION);
+    expect(view?.lockedChampionId).toBe(LOCKED_CHAMPION);
     expect(view?.enemies.map((e) => e.championId)).toEqual([122, 254, 134, 145, 111]);
   });
 
   test('falls back to the summoner id when the client sends no puuid', () => {
-    const gameflow = mockGameflowSession([4, 14]);
+    const gameflow = gameflowSession([4, 14]);
     gameflow.gameData.teamOne = gameflow.gameData.teamOne.map((p, i) => ({
       championId: p.championId,
       summonerId: i === 4 ? me.summonerId : 100 + i,
     }));
     const s = sessionFromGameflow(gameflow, { summonerId: me.summonerId });
-    expect(s && deriveChampSelect(s, 'MIDDLE').lockedChampionId).toBe(MOCK_LOCKED_CHAMPION);
+    expect(s && deriveChampSelect(s, 'MIDDLE').lockedChampionId).toBe(LOCKED_CHAMPION);
   });
 
   test('null when the user is not playing (spectating)', () => {
-    const other = { summonerId: 999, puuid: 'mock-puuid-someone-else' };
-    expect(sessionFromGameflow(mockGameflowSession([4, 14]), other)).toBeNull();
-  });
-});
-
-describe('mock game after champion select', () => {
-  test('phases follow champion select, the game, the end-of-game screen, then idle', () => {
-    expect(mockPhaseAt(0)).toBe('ChampSelect');
-    expect(mockPhaseAt(MOCK_TIMINGS.end - 1)).toBe('ChampSelect');
-    expect(mockPhaseAt(MOCK_TIMINGS.end)).toBe('GameStart');
-    expect(mockPhaseAt(MOCK_TIMINGS.end + MOCK_GAME_MS / 2)).toBe('InProgress');
-    expect(mockPhaseAt(MOCK_TIMINGS.end + MOCK_GAME_MS)).toBe('EndOfGame');
-    expect(mockPhaseAt(MOCK_LOOP_MS - 1)).toBe('Lobby');
-  });
-
-  test('replaying a loop keeps the locked champion select through the game only', () => {
-    let lobby = NO_LOBBY;
-    const stages = new Map<string, Lobby['stage']>();
-    for (let t = 0; t < MOCK_LOOP_MS; t += 500) {
-      // Same order as the mock source: phase first, then the session.
-      lobby = run([phase(mockPhaseAt(t)), { type: 'session', session: mockSessionAt(t) }], lobby);
-      stages.set(mockPhaseAt(t), lobby.stage);
-      if (mockPhaseAt(t) === 'InProgress') {
-        expect(lobby.session && deriveChampSelect(lobby.session, 'MIDDLE').lockedChampionId).toBe(
-          MOCK_LOCKED_CHAMPION,
-        );
-      }
-    }
-    expect(Object.fromEntries(stages)).toEqual({
-      ChampSelect: 'select',
-      GameStart: 'game',
-      InProgress: 'game',
-      EndOfGame: 'none',
-      Lobby: 'none',
-    });
+    const other = { summonerId: 999, puuid: 'fake-puuid-someone-else' };
+    expect(sessionFromGameflow(gameflowSession([4, 14]), other)).toBeNull();
   });
 });

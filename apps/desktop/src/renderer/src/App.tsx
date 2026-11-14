@@ -30,7 +30,7 @@ function Waiting({ state }: { state: AppState }) {
         <p className="text-sm text-muted-foreground">
           {connected
             ? 'When champion select starts, you get ranked picks for your role with the reasons behind them, then your build once you lock in.'
-            : 'The helper finds the client by itself and reconnects if it restarts. No League at hand? Turn on demo mode in settings.'}
+            : 'The helper finds the client by itself and reconnects if it restarts.'}
         </p>
         {state.api.state === 'down' && (
           <p className="text-sm text-down">

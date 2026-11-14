@@ -51,11 +51,6 @@ export function StatusBar({ state }: { state: AppState }) {
         <span className="truncate">
           {lcu.state === 'connected' ? (lcu.account ?? 'connected') : (lcu.message ?? 'searching…')}
         </span>
-        {lcu.mock && (
-          <span className="bg-primary/15 px-1.5 py-px text-[10px] font-semibold tracking-wider text-primary uppercase">
-            mock
-          </span>
-        )}
       </span>
 
       <span className="flex min-w-0 shrink-0 items-center gap-2" title={api.message ?? api.url}>

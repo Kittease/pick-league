@@ -13,9 +13,8 @@ export interface LcuListener {
   onPhase(phase: LcuGameflowPhase | null): void;
 }
 
-/** A League client: the real one over HTTPS/WebSocket, or the scripted mock. */
+/** The League client, over HTTPS/WebSocket. */
 export interface LcuSource {
-  readonly kind: 'real' | 'mock';
   start(listener: LcuListener): void;
   stop(): void;
 }

@@ -22,8 +22,6 @@ export interface Settings {
   apiUrl: string;
   /** Apply runes + summoner spells automatically when the user locks in. */
   autoApply: boolean;
-  /** Use the scripted fake League client instead of the real one. */
-  mockLcu: boolean;
   /** Role used when champion select has no assigned position (blind pick, customs). */
   fallbackRole: Position;
   /** Only recommend champions the account can play. */
@@ -36,7 +34,6 @@ export interface Settings {
 
 export interface LcuStatus {
   state: 'searching' | 'connected';
-  mock: boolean;
   /** The user's own Riot ID (never other players'). */
   account: string | null;
   message: string | null;
@@ -93,8 +90,6 @@ export interface MasteryEntry {
 
 export interface AppState {
   settings: Settings;
-  /** Settings forced by the environment (PICKLEAGUE_MOCK_LCU=1). */
-  forced: { mockLcu: boolean };
   lcu: LcuStatus;
   api: ApiStatus;
   stats: StatsState;

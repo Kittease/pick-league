@@ -94,17 +94,6 @@ same computer). If the stack runs on a server, open Settings (gear icon) and set
 the app's user data folder. `PICKLEAGUE_API_URL=http://<vps-ip>:3000` also overrides it for one
 run.
 
-**Demo mode, without League.** `bun run dev:desktop:mock` (or the "Demo mode" switch in
-Settings) replays a scripted champion select, then a 40-second fake game, with a fake account,
-fake owned champions and mastery, and fake rune pages. To also run without the API stack, start the dev-only fake API,
-which answers with made-up numbers in the contract's shape:
-
-```sh
-cd apps/desktop
-bun run fake-api                                     # http://localhost:3000 (PORT=3100 to change)
-PICKLEAGUE_API_URL=http://localhost:3100 bun run dev:mock   # if you changed the port
-```
-
 **Window.** On Windows and Linux the app has no native title bar or menu: drag the window by
 its header (double-click it to maximize) and use the minimize / maximize / close buttons at its
 right end. **Zoom** (80–200%, handy on a large second screen) is in Settings; Ctrl + / Ctrl − /

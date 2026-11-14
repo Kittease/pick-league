@@ -50,9 +50,7 @@ export type LobbyEvent =
   /** `leaving` lasted too long without a phase change: treat it as a dodge. */
   | { type: 'timeout' }
   /** Teams read from the game in progress (app started in game). */
-  | { type: 'recovered'; session: LcuChampSelectSession }
-  /** Source switched (real ↔ mock). */
-  | { type: 'reset' };
+  | { type: 'recovered'; session: LcuChampSelectSession };
 
 export const NO_LOBBY: Lobby = { stage: 'none', session: null, phase: null };
 
@@ -62,8 +60,6 @@ function cleared(lobby: Lobby): Lobby {
 
 export function nextLobby(lobby: Lobby, event: LobbyEvent): Lobby {
   switch (event.type) {
-    case 'reset':
-      return NO_LOBBY;
     case 'timeout':
       return lobby.stage === 'leaving' ? cleared(lobby) : lobby;
     case 'recovered':

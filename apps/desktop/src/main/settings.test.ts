@@ -21,10 +21,14 @@ describe('sanitizeSettings', () => {
     const old = {
       apiUrl: 'http://example.test:3000',
       autoApply: false,
-      mockLcu: true,
       fallbackRole: 'TOP' as const,
       ownedOnly: false,
     };
     expect(sanitizeSettings(old)).toEqual({ ...old, zoom: 1, flashKey: 'F' });
+  });
+
+  test('the removed demo mode field of older files is ignored', () => {
+    const old = { ...DEFAULT_SETTINGS, autoApply: false, mockLcu: true };
+    expect(sanitizeSettings(old)).toEqual({ ...DEFAULT_SETTINGS, autoApply: false });
   });
 });

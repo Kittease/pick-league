@@ -158,7 +158,6 @@ export function createRealLcuSource(): LcuSource {
   }
 
   return {
-    kind: 'real',
     start(listener) {
       if (running) return;
       running = true;

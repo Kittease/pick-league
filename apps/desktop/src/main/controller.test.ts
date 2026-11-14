@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { BuildRequestInput, BuildResponse } from '@pick-league/shared';
 import type { AppState } from '../core/app-state.ts';
-import type { LcuChampSelectSession, LcuGameflowPhase } from '../core/lcu-types.ts';
 import {
-  MOCK_LOCKED_CHAMPION,
-  MOCK_TIMINGS,
-  mockCurrentSummoner,
-  mockGameflowSession,
-  mockSessionAt,
-} from '../core/mock-script.ts';
+  champSelectSession,
+  FAKE_SUMMONER,
+  gameflowSession,
+  LOCKED_CHAMPION,
+} from '../core/fixtures.ts';
+import type { LcuChampSelectSession, LcuGameflowPhase } from '../core/lcu-types.ts';
 import type { ApiClient } from './api-client.ts';
 import { Controller } from './controller.ts';
 import type { LcuApi } from './lcu/api.ts';
@@ -70,10 +69,10 @@ function setup() {
   const lcu: LcuApi = {
     getChampSelectSession: async () => null,
     getGameflowPhase: async () => null,
-    getGameflowSession: async () => mockGameflowSession([14, 4]),
+    getGameflowSession: async () => gameflowSession([14, 4]),
     getOwnedChampions: async () => [],
     getMastery: async () => [],
-    getCurrentSummoner: async () => mockCurrentSummoner(),
+    getCurrentSummoner: async () => FAKE_SUMMONER,
     getPerkPages: async () => [],
     getPerkInventory: async () => ({ ownedPageCount: 2 }),
     createPerkPage: async (page) => ({ ...page, id: 99, isEditable: true, isDeletable: true }),
@@ -85,7 +84,6 @@ function setup() {
   };
   let listener: LcuListener | null = null;
   const source: LcuSource = {
-    kind: 'mock',
     start(l) {
       listener = l;
       l.onStatus({ state: 'connected', api: lcu });
@@ -94,7 +92,6 @@ function setup() {
   };
   const controller = new Controller({
     settings: { ...DEFAULT_SETTINGS, ownedOnly: false },
-    forcedMock: true,
     createSource: () => source,
     createApi: () => api,
     loadDdragonStatic: async () => Promise.reject(new Error('offline')),
@@ -121,11 +118,11 @@ describe('controller: champion select → game', () => {
     const { controller, calls, lcu, state } = setup();
     current = controller;
     lcu.phase('ChampSelect');
-    lcu.session(mockSessionAt(MOCK_TIMINGS.finalization));
+    lcu.session(champSelectSession());
     await settle();
     expect(state().build).toMatchObject({
       status: 'ok',
-      data: { championId: MOCK_LOCKED_CHAMPION },
+      data: { championId: LOCKED_CHAMPION },
     });
     expect(state().apply.state).toBe('done');
     const before = { ...calls };
@@ -135,10 +132,10 @@ describe('controller: champion select → game', () => {
     await settle();
     expect(state()).toMatchObject({
       inGame: true,
-      champSelect: { lockedChampionId: MOCK_LOCKED_CHAMPION },
+      champSelect: { lockedChampionId: LOCKED_CHAMPION },
       picks: { status: 'idle' },
-      build: { status: 'ok', data: { championId: MOCK_LOCKED_CHAMPION } },
-      buildTarget: { championId: MOCK_LOCKED_CHAMPION, preview: false },
+      build: { status: 'ok', data: { championId: LOCKED_CHAMPION } },
+      buildTarget: { championId: LOCKED_CHAMPION, preview: false },
     });
 
     // Stats refresh / Retry, previews and the Apply button do nothing in game.
@@ -159,7 +156,7 @@ describe('controller: champion select → game', () => {
     const { controller, lcu, state } = setup();
     current = controller;
     lcu.phase('ChampSelect');
-    lcu.session(mockSessionAt(MOCK_TIMINGS.finalization));
+    lcu.session(champSelectSession());
     await settle();
     lcu.session(null);
     // The client has not said where it goes yet: nothing changes.
@@ -176,8 +173,8 @@ describe('controller: champion select → game', () => {
     await settle();
     expect(state()).toMatchObject({
       inGame: true,
-      champSelect: { lockedChampionId: MOCK_LOCKED_CHAMPION, role: 'UTILITY', mySpells: [14, 4] },
-      build: { status: 'ok', data: { championId: MOCK_LOCKED_CHAMPION } },
+      champSelect: { lockedChampionId: LOCKED_CHAMPION, role: 'UTILITY', mySpells: [14, 4] },
+      build: { status: 'ok', data: { championId: LOCKED_CHAMPION } },
       apply: { state: 'idle' },
     });
     expect(calls).toEqual({ picks: 0, build: 1, spells: 0 });

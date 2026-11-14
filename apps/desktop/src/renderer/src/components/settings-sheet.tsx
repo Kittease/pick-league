@@ -46,7 +46,7 @@ function Row({
 }
 
 export function SettingsSheet({ state }: { state: AppState }) {
-  const { settings, forced } = state;
+  const { settings } = state;
   const [apiUrl, setApiUrl] = useState(settings.apiUrl);
   useEffect(() => setApiUrl(settings.apiUrl), [settings.apiUrl]);
   const urlValid = /^https?:\/\/\S+$/.test(apiUrl.trim());
@@ -180,23 +180,6 @@ export function SettingsSheet({ state }: { state: AppState }) {
               ))}
             </div>
           </div>
-
-          <Row
-            id="mock-lcu"
-            title="Demo mode (fake League client)"
-            hint={
-              forced.mockLcu
-                ? 'Forced on by PICKLEAGUE_MOCK_LCU=1.'
-                : 'Replays a scripted champion select. For trying the app without League.'
-            }
-          >
-            <Switch
-              id="mock-lcu"
-              checked={forced.mockLcu || settings.mockLcu}
-              disabled={forced.mockLcu}
-              onCheckedChange={(v) => update({ mockLcu: v })}
-            />
-          </Row>
         </div>
       </SheetContent>
     </Sheet>

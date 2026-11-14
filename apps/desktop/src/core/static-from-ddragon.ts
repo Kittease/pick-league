@@ -1,6 +1,6 @@
 /**
  * Normalised Data Dragon data → the `GET /static/:patch` response shape. Used as a fallback
- * when the API is unreachable (so champion select still shows icons) and by the fake API.
+ * when the API is unreachable (so champion select still shows icons).
  */
 
 import {
