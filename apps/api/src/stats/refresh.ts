@@ -27,6 +27,13 @@ export const STATS_REFRESH_ORDER: readonly {
   // Tier list ban rates (0003_stats_bans.sql).
   { view: 'stats_patch_matches', concurrent: true },
   { view: 'stats_champion_bans', concurrent: true },
+  // Tier list filters by server and rank (0006_tierlist_filters.sql).
+  { view: 'stats_tierlist_participants', concurrent: false, analyze: true },
+  { view: 'stats_tierlist_roles', concurrent: true },
+  { view: 'stats_tierlist_vs', concurrent: true },
+  { view: 'stats_tierlist_with', concurrent: true },
+  { view: 'stats_tierlist_bans', concurrent: true },
+  { view: 'stats_tierlist_totals', concurrent: true },
 ];
 
 export const STATS_REFRESH_LOCK_KEY = 7_316_221_905;
