@@ -72,6 +72,14 @@ bun run dev:desktop      # opens the app; start League whenever you like
   champion select is dropped right away. Opened mid-game, the app reads the teams from the client.
   If League closes its client during the game, the build stays until the client is back and
   says the game is over.
+- **Lobby** (in game, next to the build): once the match has started — never during champion
+  select, where Riot hides who the players are — the app shows every player of both teams by
+  champion and role (no names), like a scoreboard: solo/duo rank and season win rate, results on
+  the champion they play over their last 10 ranked solo/duo matches plus their mastery on it, an
+  **Off-role** badge when the role they play is rare in those matches ("usually Mid"), and a
+  **First time** hint. Ranks show within seconds; recent matches can take a minute or two (Riot
+  allows the key 100 requests per 2 minutes). The worker fetches them from Riot (the key never
+  leaves it) for the servers in `PLATFORMS` only.
 - Runes and summoner spells are **applied automatically when you lock in** (setting
   "Apply runes and spells on lock-in", on by default; an "Apply runes + spells" button does it
   by hand). If the client refuses, it tries again a few seconds later, up to 3 times. Runes go to a page named `PickLeague`; if every page slot holds one of your pages,
@@ -182,6 +190,7 @@ These commands read `DATABASE_URL` (and the other settings) from the root `.env`
 | `GET /stats/status` | `{ refreshing, lastRefreshedAt, lastRefreshDurationMs, matchesIncluded, matchesStored, pendingMatches, collection }`; `collection` = `{ state, platforms }`, `state` one of `collecting`, `key_rejected` (Riot rejects the key), `stalled` (no worker heartbeat for 3 min), `unknown` (no worker status yet); `platforms` = `[{ platform, heartbeatAt, authRejectedSince, lastError, lastErrorAt, lastMatchStoredAt }]` |
 | `POST /stats/refresh` | starts a background stats refresh: `202 { started: true }`, or `200 { started: false, reason }` with `up_to_date`, `already_running` or `cooldown` (+ `retryAfterSeconds`) |
 | `GET /tierlist?role=UTILITY&patch=latest&platform=ALL&rank=MASTER` | tier list of a role: tiers, win/pick/ban rates, confidence. Optional filters (echoed as `filters`): `platform` = `ALL` (default), `KR`, `EUW1`, `NA1`, `VN2`; `rank` = `MASTER` (Master+, default: every player), `GRANDMASTER` (Grandmaster+), `CHALLENGER` (Challenger only), on each counted player's current solo rank |
+| `POST /live/players` | players of the caller's game in progress, `{ platform, players: [{ puuid, championId, position, team }] }` (≤ 10): queues their lookup for the worker and answers per player (by index, never the puuid) `status` (`pending`, `ready`, `failed`, `unsupported`), rank, mastery and recent form (`offRole`, `mainRole`…); repeat until `done`. Never cached |
 | `GET /tierlist/champion?role=UTILITY&championId=111&patch=latest` | one champion of the tier list: every lane matchup, duo partner and other ally (synergy) with 5+ matchups, best first, with shrunk win-rate delta, win rate and sample size; matchups also carry `lane` (gold / XP / CS difference at 10 min) when there are 20+ matchups with timeline frames. Same `platform`/`rank` filters; `synergies` is `null` and `lane` is omitted when filtered |
 
 Errors are `{ error: { code, message, details? } }`: `400 BAD_REQUEST` (invalid body or query),
