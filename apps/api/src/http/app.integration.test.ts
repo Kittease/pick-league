@@ -284,6 +284,70 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(b.items.situational.map((s) => s.replacesItemId)).not.toContain(3033);
   });
 
+  test('item choices with the duo partner and with ally traits (0012 views)', async () => {
+    const { championId, allyId } = PLANTED.duo;
+    // Every synthetic team has all five positions: the item rows of a support, summed over its
+    // bot partners, are exactly its item rows in stats_choices.
+    const duos = await db<{ kind: string; choice: string; games: number; total: number | null }[]>`
+      SELECT d.kind, d.choice, sum(d.games)::int AS games, max(c.games) AS total
+      FROM stats_choice_duos d
+      LEFT JOIN stats_choices c
+        ON c.patch = d.patch AND c.champion_id = d.champion_id AND c.position = d.position
+       AND c.kind = d.kind AND c.choice = d.choice
+      WHERE d.patch = ${CUR} AND d.champion_id = ${championId} AND d.position = 'UTILITY'
+      GROUP BY d.kind, d.choice, d.partner_position`;
+    expect(duos.length).toBeGreaterThan(0);
+    for (const r of duos) {
+      expect(r.kind).toBe('item');
+      expect(r.games).toBe(r.total ?? -1);
+    }
+    const partners = await db<{ position: string }[]>`
+      SELECT DISTINCT partner_position AS position FROM stats_choice_duos
+      WHERE patch = ${CUR} AND champion_id = ${championId} AND position = 'UTILITY'`;
+    expect(partners.map((p) => p.position)).toEqual(['BOTTOM']);
+    const withPartner = await repo.loadChoiceDuos(db, [CUR], championId, 'UTILITY', [allyId]);
+    expect(withPartner.length).toBeGreaterThan(0);
+
+    // Ally traits: items only, each within the champion's games with that trait and its item rows.
+    const traits = await db<
+      { kind: string; trait: string; games: number; item_games: number; trait_games: number }[]
+    >`
+      SELECT t.kind, t.trait, t.games, c.games AS item_games, ct.games AS trait_games
+      FROM stats_choice_ally_traits t
+      JOIN stats_choices c
+        ON c.patch = t.patch AND c.champion_id = t.champion_id AND c.position = t.position
+       AND c.kind = t.kind AND c.choice = t.choice
+      JOIN stats_champion_comp_traits ct
+        ON ct.patch = t.patch AND ct.champion_id = t.champion_id AND ct.position = t.position
+       AND ct.side = 'ally' AND ct.trait = t.trait
+      WHERE t.patch = ${CUR} AND t.position = 'UTILITY'`;
+    expect(traits.length).toBeGreaterThan(0);
+    for (const r of traits) {
+      expect(r.kind).toBe('item');
+      expect(r.games).toBeLessThanOrEqual(Math.min(r.item_games, r.trait_games));
+    }
+
+    // The build reads them: situational duo / ally-trait reasons name the partner / the trait.
+    const res = await post('/recommendations/build', {
+      championId,
+      role: 'UTILITY',
+      allies: [
+        { championId: allyId, role: 'BOTTOM' },
+        { championId: 19, role: 'JUNGLE' },
+        { championId: 103, role: null },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const b = (await res.json()) as BuildResponse;
+    const reasons = [...b.items.core, ...b.items.situational].flatMap((i) => i.reasons);
+    for (const r of reasons.filter((x) => x.kind === 'duo')) {
+      expect(r.championIds).toEqual([allyId]);
+    }
+    for (const r of reasons.filter((x) => x.kind === 'with_comp')) {
+      expect(r.trait).toBeDefined();
+    }
+  });
+
   test('build: support quest upgrade from the end-of-game inventory, supports only', async () => {
     const res = await post('/recommendations/build', { championId: 89, role: 'UTILITY' });
     const b = (await res.json()) as BuildResponse;
