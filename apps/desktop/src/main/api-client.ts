@@ -5,6 +5,7 @@ import {
   type ApiErrorResponse,
   type BuildRequestInput,
   type BuildResponse,
+  DEFAULT_TIER_LIST_FILTERS,
   type HealthResponse,
   type PicksRequestInput,
   type PicksResponse,
@@ -13,6 +14,7 @@ import {
   type StatsRefreshResponse,
   type StatsStatusResponse,
   TIER_LIST_ROUTE,
+  type TierListFilters,
   type TierListResponse,
 } from '@pick-league/shared';
 
@@ -39,7 +41,7 @@ export interface ApiClient {
   statsStatus(): Promise<StatsStatusResponse>;
   /** Asks the API to refresh its stats views now (answers immediately). */
   statsRefresh(): Promise<StatsRefreshResponse>;
-  tierList(role: Position, patch?: string): Promise<TierListResponse>;
+  tierList(role: Position, filters?: TierListFilters, patch?: string): Promise<TierListResponse>;
 }
 
 export function normaliseApiUrl(url: string): string {
@@ -96,7 +98,7 @@ export function createApiClient(
     build: (request) => call(API_ROUTES.build, request),
     statsStatus: () => call(API_ROUTES.statsStatus),
     statsRefresh: () => call(API_ROUTES.statsRefresh, undefined, 'POST'),
-    tierList: (role, patch = 'latest') =>
-      call(`${TIER_LIST_ROUTE}?${new URLSearchParams({ role, patch })}`),
+    tierList: (role, filters = DEFAULT_TIER_LIST_FILTERS, patch = 'latest') =>
+      call(`${TIER_LIST_ROUTE}?${new URLSearchParams({ role, patch, ...filters })}`),
   };
 }

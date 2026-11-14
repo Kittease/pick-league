@@ -10,6 +10,7 @@ import type {
   StaticDataResponse,
   StatsRefreshSkipReason,
   StatsStatusResponse,
+  TierListFilters,
   TierListResponse,
 } from '@pick-league/shared';
 import type { ChampSelectView } from './champ-select.ts';
@@ -167,8 +168,8 @@ export interface PickLeagueBridge {
     close(): void;
     onState(listener: (state: WindowState) => void): () => void;
   };
-  /** Tier list of a role (latest patch). */
-  getTierList(role: Position): Promise<ApiResult<TierListResponse>>;
+  /** Tier list of a role (latest patch), filtered by server and rank (default: all, Master+). */
+  getTierList(role: Position, filters?: TierListFilters): Promise<ApiResult<TierListResponse>>;
   /** Build of a champion in a role with no allies/enemies (tier list "View build"). */
   getGenericBuild(championId: number, role: Position): Promise<ApiResult<BuildResponse>>;
   onState(listener: (state: AppState) => void): () => void;

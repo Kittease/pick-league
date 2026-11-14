@@ -11,6 +11,7 @@ import type {
   PicksResponse,
   Position,
   StaticDataResponse,
+  TierListFilters,
   TierListResponse,
 } from '@pick-league/shared';
 import type {
@@ -244,8 +245,8 @@ export class Controller {
   // Tier list (one-off calls, not part of AppState)
   // ---------------------------------------------------------------------------
 
-  tierList(role: Position): Promise<ApiResult<TierListResponse>> {
-    return toResult(this.api.tierList(role));
+  tierList(role: Position, filters?: TierListFilters): Promise<ApiResult<TierListResponse>> {
+    return toResult(this.api.tierList(role, filters));
   }
 
   genericBuild(championId: number, role: Position): Promise<ApiResult<BuildResponse>> {

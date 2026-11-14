@@ -1,11 +1,16 @@
 import {
   type BuildResponse,
+  DEFAULT_TIER_LIST_FILTERS,
   POSITIONS,
   type Position,
   type Tier,
   type TierListEntry,
+  type TierListFilters,
+  type TierListPlatform,
+  type TierListRank,
   type TierListRelation,
   type TierListResponse,
+  toTierListFilters,
 } from '@pick-league/shared';
 import {
   ArrowDownIcon,
@@ -19,6 +24,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -47,12 +59,17 @@ type Loaded<T> =
   | { status: 'ok'; data: T }
   | { status: 'error'; code: string | null; message: string };
 
-/** Tier list of a role, cached per role for a few minutes; reset when the API changes. */
-function useTierList(role: Position, apiKey: string) {
-  const cache = useRef(new Map<Position, { at: number; result: ApiResult<TierListResponse> }>());
+/**
+ * Tier list of a role and filters, cached per role + filters for a few minutes; reset when the
+ * API changes.
+ */
+function useTierList(role: Position, filters: TierListFilters, apiKey: string) {
+  const cache = useRef(new Map<string, { at: number; result: ApiResult<TierListResponse> }>());
   const [state, setState] = useState<Loaded<TierListResponse>>({ status: 'loading' });
   const [nonce, setNonce] = useState(0);
   const lastKey = useRef(apiKey);
+  const { platform, rank } = filters;
+  const key = `${role}|${platform}|${rank}`;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: nonce re-runs the fetch on retry
   useEffect(() => {
@@ -60,31 +77,108 @@ function useTierList(role: Position, apiKey: string) {
       cache.current.clear();
       lastKey.current = apiKey;
     }
-    const hit = cache.current.get(role);
+    const hit = cache.current.get(key);
     if (hit?.result.ok && Date.now() - hit.at < CACHE_MS) {
       setState({ status: 'ok', data: hit.result.data });
       return;
     }
     let alive = true;
-    // Same role re-fetched (stats refreshed): keep showing the old list until the new one lands.
+    // Same list re-fetched (stats refreshed): keep showing the old one until the new one lands.
     setState((prev) =>
-      prev.status === 'ok' && prev.data.role === role ? prev : { status: 'loading' },
+      prev.status === 'ok' &&
+      prev.data.role === role &&
+      prev.data.filters?.platform === platform &&
+      prev.data.filters?.rank === rank
+        ? prev
+        : { status: 'loading' },
     );
-    void window.pickleague.getTierList(role).then((result) => {
+    void window.pickleague.getTierList(role, { platform, rank }).then((result) => {
       if (!alive) return;
-      cache.current.set(role, { at: Date.now(), result });
+      cache.current.set(key, { at: Date.now(), result });
       setState(result.ok ? { status: 'ok', data: result.data } : { status: 'error', ...result });
     });
     return () => {
       alive = false;
     };
-  }, [role, apiKey, nonce]);
+  }, [key, apiKey, nonce]);
 
   const retry = useCallback(() => {
-    cache.current.delete(role);
+    cache.current.delete(key);
     setNonce((n) => n + 1);
-  }, [role]);
+  }, [key]);
   return { state, retry };
+}
+
+const PLATFORM_LABEL: Record<TierListPlatform, string> = {
+  ALL: 'All servers',
+  KR: 'KR',
+  EUW1: 'EUW',
+  NA1: 'NA',
+  VN2: 'VN',
+};
+
+const RANK_LABEL: Record<TierListRank, string> = {
+  MASTER: 'Master+',
+  GRANDMASTER: 'Grandmaster+',
+  CHALLENGER: 'Challenger only',
+};
+
+const FILTERS_STORAGE_KEY = 'pickleague.tierListFilters';
+
+/** Server + rank filters, remembered in this renderer's local storage (not in the settings). */
+function useTierListFilters() {
+  const [filters, setFilters] = useState<TierListFilters>(() => {
+    try {
+      return toTierListFilters(JSON.parse(localStorage.getItem(FILTERS_STORAGE_KEY) ?? 'null'));
+    } catch {
+      return { ...DEFAULT_TIER_LIST_FILTERS };
+    }
+  });
+  const update = useCallback((patch: Partial<TierListFilters>) => {
+    setFilters((prev) => {
+      const next = toTierListFilters({ ...prev, ...patch });
+      try {
+        localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Storage unavailable: the choice only lasts for this session.
+      }
+      return next;
+    });
+  }, []);
+  return [filters, update] as const;
+}
+
+function FilterSelect<T extends string>({
+  label,
+  value,
+  labels,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  labels: Record<T, string>;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <Select
+      value={value}
+      items={labels}
+      onValueChange={(v) => {
+        if (typeof v === 'string' && v in labels) onChange(v as T);
+      }}
+    >
+      <SelectTrigger size="sm" aria-label={label} title={label} className="h-8 text-xs">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent alignItemWithTrigger={false} align="start">
+        {(Object.keys(labels) as T[]).map((k) => (
+          <SelectItem key={k} value={k} className="text-xs">
+            {labels[k]}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
 }
 
 const TIER_STYLE: Record<Tier, string> = {
@@ -547,7 +641,8 @@ export function TierListPage({
   // A new API, patch or stats refresh (manual or background) drops the cached tier lists.
   const lastRefreshedAt = state.stats.status?.lastRefreshedAt ?? null;
   const apiKey = `${state.api.url}|${state.api.latestPatch}|${state.api.state === 'ok'}|${lastRefreshedAt}`;
-  const { state: tl, retry } = useTierList(role, apiKey);
+  const [filters, setFilters] = useTierListFilters();
+  const { state: tl, retry } = useTierList(role, filters, apiKey);
 
   useEffect(() => {
     onBusyChange?.(selectedId !== null || buildOf !== null);
@@ -616,6 +711,20 @@ export function TierListPage({
               ))}
             </TabsList>
           </Tabs>
+          <div className="flex items-center gap-3">
+            <FilterSelect
+              label="Server"
+              value={filters.platform}
+              labels={PLATFORM_LABEL}
+              onChange={(platform) => setFilters({ platform })}
+            />
+            <FilterSelect
+              label="Players' current solo rank"
+              value={filters.rank}
+              labels={RANK_LABEL}
+              onChange={(rank) => setFilters({ rank })}
+            />
+          </div>
           <div className="ml-auto flex items-center gap-4">
             <span className="flex items-center gap-2">
               <SearchIcon className="size-3.5 text-muted-foreground" />
@@ -646,6 +755,12 @@ export function TierListPage({
             <span className="num">
               patch {data.patch} · {compact(data.roleGames)} matchups · {data.entries.length}{' '}
               champions
+              {data.filters && (
+                <>
+                  {' · '}
+                  {PLATFORM_LABEL[data.filters.platform]} · {RANK_LABEL[data.filters.rank]}
+                </>
+              )}
             </span>
           )}
           <span className="ml-auto hidden lg:inline">
@@ -683,7 +798,9 @@ export function TierListPage({
           {data && rows.length === 0 && (
             <p className="p-6 text-sm text-muted-foreground">
               {data.entries.length === 0
-                ? 'No champion has enough games in this role yet.'
+                ? filters.platform === 'ALL' && filters.rank === 'MASTER'
+                  ? 'No champion has enough games in this role yet.'
+                  : 'No champion has enough games in this role with this server and rank yet.'
                 : 'No champion matches the filters.'}
             </p>
           )}
