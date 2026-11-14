@@ -79,7 +79,9 @@ bun run dev:desktop      # opens the app; start League whenever you like
 - **Tier list** (left rail, shown whenever you are not in champion select): best picks per lane
   with tier (S–D), win/pick/ban rates, confidence and your mastery; filter by server (all, KR,
   EUW, NA, VN), by rank (Master+, Grandmaster+, Challenger only — players' current rank), by
-  name or owned champions; click a champion for its best/worst matchups, best duos and a generic build. The
+  name or owned champions; click a champion for its best/worst lane matchups, duos and synergies
+  (other allies; not available with server/rank filters), each with "Show all", and a generic
+  build. The
   app switches to champion select by itself when one starts (unless you are reading a
   champion's details).
 
@@ -156,7 +158,8 @@ These commands read `DATABASE_URL` (and the other settings) from the root `.env`
 | `POST /recommendations/build` | items, runes, summoner spells and skill order, with reasons |
 | `GET /stats/status` | `{ refreshing, lastRefreshedAt, lastRefreshDurationMs, matchesIncluded, matchesStored, pendingMatches }` |
 | `POST /stats/refresh` | starts a background stats refresh: `202 { started: true }`, or `200 { started: false, reason }` with `up_to_date`, `already_running` or `cooldown` (+ `retryAfterSeconds`) |
-| `GET /tierlist?role=UTILITY&patch=latest&platform=ALL&rank=MASTER` | tier list of a role: tiers, rates, best/worst matchups, best duos. Optional filters (echoed as `filters`): `platform` = `ALL` (default), `KR`, `EUW1`, `NA1`, `VN2`; `rank` = `MASTER` (Master+, default: every player), `GRANDMASTER` (Grandmaster+), `CHALLENGER` (Challenger only), on each counted player's current solo rank |
+| `GET /tierlist?role=UTILITY&patch=latest&platform=ALL&rank=MASTER` | tier list of a role: tiers, win/pick/ban rates, confidence. Optional filters (echoed as `filters`): `platform` = `ALL` (default), `KR`, `EUW1`, `NA1`, `VN2`; `rank` = `MASTER` (Master+, default: every player), `GRANDMASTER` (Grandmaster+), `CHALLENGER` (Challenger only), on each counted player's current solo rank |
+| `GET /tierlist/champion?role=UTILITY&championId=111&patch=latest` | one champion of the tier list: every lane matchup, duo partner and other ally (synergy) with 5+ matchups, best first, with shrunk win-rate delta, win rate and sample size. Same `platform`/`rank` filters; `synergies` is `null` when filtered |
 
 Request/response types are in `packages/shared/src/api-contract.ts`. Every reason carries the
 win-rate delta (after shrinkage) and its sample size; `patchesUsed` lists the patches combined (the previous one is added when the
