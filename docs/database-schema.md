@@ -1,4 +1,4 @@
-# PickLeague — Database schema (proposal)
+# PickLeague — Database schema
 
 PostgreSQL 17, single database, run by Docker Compose next to the worker and the API.
 
@@ -9,7 +9,7 @@ PostgreSQL 17, single database, run by Docker Compose next to the worker and the
 - **Two patches only.** `patches` lists the patches we keep. When a new patch is detected, every match of the patch before the previous one is deleted (`ON DELETE CASCADE` cleans every child table). Postgres reuses the freed space for the new patch, so disk usage stays flat at ~2 patches.
 - **Static data is per patch.** Champions, items, runes and summoner spells come from Data Dragon and are stored per patch, so an old match is always read with the item/rune data that existed when it was played.
 - **All 10 players are identified.** Every `puuid` met in a match gets a `players` row. Riot IDs come for free in the match payload. Extra info (mastery, solo queue rank) is fetched with a priority scheme so it never slows match collection:
-  1. ladder refresh (Challenger/GM) → 2. match ids of players who played → 3. matches + timelines → 4. daily refresh of tracked ladder players (account + mastery) → 5. **lowest priority:** mastery + rank of non-ladder players, only with leftover budget. Fetched once, refreshed only if the player shows up again and the data is older than 7 days.
+  1. ladder refresh (Challenger, Grandmaster and the top `MASTER_PLAYERS` Master players) → 2. match ids of players who played → 3. matches + timelines → 4. daily refresh of tracked ladder players (account + mastery) → 5. **lowest priority:** mastery + rank of non-ladder players, only with leftover budget. Fetched once, refreshed only if the player shows up again and the data is older than 7 days.
 - Riot timestamps are converted to `timestamptz`; in-game times are kept as milliseconds since game start (`int`).
 
 ## Overview
@@ -23,7 +23,7 @@ patches ─┬─< champions / champion_spells / items / rune_trees / runes / su
                       ├─< kill_events
                       └─< objective_events
 
-players ─┬── ladder_entries          (tracked set: current Challenger/GM state, used to detect who played)
+players ─┬── ladder_entries          (tracked set: current Challenger/GM/top Master state, used to detect who played)
          ├─< champion_masteries      (daily for tracked players, low priority for the others)
          └─< participants            (every player of every match)
 
@@ -166,7 +166,7 @@ CREATE TABLE players (
 CREATE INDEX players_listing_requested_idx ON players (listing_requested_at)
   WHERE listing_requested_at IS NOT NULL;
 
--- Current Challenger/GM state. One league-v4 call per tier per platform refreshes it;
+-- Current Challenger/GM/top Master state. One league-v4 call per tier per platform refreshes it;
 -- a change in wins+losses since the previous run means the player played → fetch their match ids.
 CREATE TABLE ladder_entries (
   puuid         text PRIMARY KEY REFERENCES players ON DELETE CASCADE,
@@ -349,14 +349,6 @@ CREATE TABLE objective_events (
 
 ```
 
-## Stats views (owned by the API)
-
-Materialized views over the tables above, defined in `packages/db/migrations/0002_stats_views.sql` and later migrations and refreshed by the API (`STATS_REFRESH_ORDER` in `apps/api/src/stats/refresh.ts`). `stats_participant_choices` lists every build/rune/spell/skill choice of a participant as `(kind, choice, pos)`; `stats_choices`, `stats_choice_matchups` and `stats_choice_traits` aggregate it per champion + role, vs a lane opponent and vs an enemy composition trait.
-
-**Support quest upgrade** (`0007_support_quest_items.sql`, kind `quest_item`). The support item (World Atlas) is granted for free and upgrades itself through the quest: World Atlas → Runic Compass → Bounty of Worlds → the upgrade the player picks (Celestial Opposition, Dream Maker, Zaz'Zak's Realmspike, Solstice Sleigh, Bloodsong). The timeline only has `ITEM_DESTROYED` events for the first three; the picked upgrade almost never comes as `ITEM_PURCHASED`, and at 400 gold it is not a completed item. `stats_quest_items` (intermediate, one row per participant who had one) reads it from `final_items`, else from its last purchase event (sold before the end). Upgrades are recognised from Data Dragon, not by id: non-consumable, non-completed items tagged `GoldPer` that are built from an item and build into nothing.
-
-**Deterministic composition traits** (`0008_deterministic_comp_traits.sql`). `stats_team_comp` sums the per-champion trait values of a team as `numeric` (exact, cast back to `float8`): float8 sums depended on the order rows reached the aggregate, so a team mean sitting on a `stats_comp_thresholds` percentile could switch traits between two refreshes of the same matches. The views built on it (`stats_comp_thresholds`, `stats_participants` and everything derived from it) are recreated unchanged otherwise. Also adds `stats_champion_with_champion (patch, champion_id, position)`, like `stats_champion_vs_champion`, for one champion's allies (`GET /tierlist/champion`).
-
 ## Worker state
 
 ```sql
@@ -416,8 +408,17 @@ Materialized views computed from the tables above, refreshed by the API in the o
 `STATS_REFRESH_ORDER` (`apps/api/src/stats/refresh.ts`): served views have a unique index and are
 refreshed `CONCURRENTLY`, intermediate ones plainly. All are keyed by patch and exclude remakes.
 Definitions: `packages/db/migrations/0002_stats_views.sql` (traits, compositions, champion+role
-baselines, pairwise vs/with, build choices), `0003_stats_bans.sql` (tier list ban rates) and
-`0006_tierlist_filters.sql` (tier list server/rank filters, below).
+baselines, pairwise vs/with, build choices), `0003_stats_bans.sql` (tier list ban rates),
+`0006_tierlist_filters.sql` (tier list server/rank filters), `0007_support_quest_items.sql` and
+`0008_deterministic_comp_traits.sql` (all three below).
+
+`stats_participant_choices` lists every build/rune/spell/skill choice of a participant as `(kind, choice, pos)`; `stats_choices`, `stats_choice_matchups` and `stats_choice_traits` aggregate it per champion + role, vs a lane opponent and vs an enemy composition trait.
+
+**Support quest upgrade** (`0007_support_quest_items.sql`, kind `quest_item`). The support item (World Atlas) is granted for free and upgrades itself through the quest: World Atlas → Runic Compass → Bounty of Worlds → the upgrade the player picks (Celestial Opposition, Dream Maker, Zaz'Zak's Realmspike, Solstice Sleigh, Bloodsong). The timeline only has `ITEM_DESTROYED` events for the first three; the picked upgrade almost never comes as `ITEM_PURCHASED`, and at 400 gold it is not a completed item. `stats_quest_items` (intermediate, one row per participant who had one) reads it from `final_items`, else from its last purchase event (sold before the end). Upgrades are recognised from Data Dragon, not by id: non-consumable, non-completed items tagged `GoldPer` that are built from an item and build into nothing.
+
+**Deterministic composition traits** (`0008_deterministic_comp_traits.sql`). `stats_team_comp` sums the per-champion trait values of a team as `numeric` (exact, cast back to `float8`): float8 sums depended on the order rows reached the aggregate, so a team mean sitting on a `stats_comp_thresholds` percentile could switch traits between two refreshes of the same matches. The views built on it (`stats_comp_thresholds`, `stats_participants` and everything derived from it) are recreated unchanged otherwise. Also adds `stats_champion_with_champion (patch, champion_id, position)`, like `stats_champion_vs_champion`, for one champion's allies (`GET /tierlist/champion`).
+
+**Tier list filters** (`0006_tierlist_filters.sql`):
 
 ```sql
 -- rank_level = 2 CHALLENGER, 1 GRANDMASTER, 0 anything else (MASTER, below Master, unknown),
