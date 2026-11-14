@@ -39,6 +39,10 @@ export class PatchTracker {
   /** Bumped whenever the kept patches change. */
   generation = 0;
   private lastRefreshAt = Number.NEGATIVE_INFINITY;
+  /** The last cleanup failed: the next refresh comes sooner. */
+  private cleanupFailed = false;
+  /** Orphan players may exist (an old patch was deleted, or the process just started). */
+  private orphanPurgePending = true;
   private running: Promise<void> | null = null;
   private readonly clock: Clock;
   private readonly log: Logger;
@@ -62,7 +66,10 @@ export class PatchTracker {
     return c > 0 ? 'too_new' : c < 0 ? 'old' : 'keep';
   }
 
-  /** Checks Data Dragon, ingests missing patches, deletes old ones. Concurrent calls share one run. */
+  /**
+   * Checks Data Dragon, ingests missing patches, switches to the new latest patch, then deletes old
+   * ones (a cleanup failure is logged, not thrown). Concurrent calls share one run.
+   */
   refresh(): Promise<void> {
     if (!this.running) {
       this.running = this.doRefresh().finally(() => {
@@ -88,6 +95,7 @@ export class PatchTracker {
       let wait = interval;
       try {
         await this.refresh();
+        if (this.cleanupFailed) wait = Math.min(wait, 5 * 60_000);
       } catch (err) {
         this.log.error('patch refresh failed', { error: errorMessage(err) });
         wait = this.ready ? 5 * 60_000 : 60_000;
@@ -119,11 +127,7 @@ export class PatchTracker {
         items: data.items.length,
       });
     }
-    const cleanup = await deleteOldPatches(this.db, KEPT_PATCHES);
-    if (cleanup.deletedPatches.length > 0) {
-      const deletedPlayers = await purgeOrphanPlayers(this.db);
-      this.log.info('old patches deleted', { ...cleanup, deletedPlayers });
-    }
+    // The new patch is usable as soon as its static data is in: cleanup must not hold it back.
     const latest = versions[0]?.patch ?? null;
     const previous = versions[1]?.patch ?? null;
     if (latest !== this.latest || previous !== this.previous) {
@@ -133,5 +137,34 @@ export class PatchTracker {
       this.log.info('kept patches', { latest, previous });
     }
     if (ingested.length === 0) this.log.debug('patches up to date', { latest, previous });
+    this.cleanupFailed = !(await this.cleanup());
+  }
+
+  /**
+   * Deletes patches older than the kept ones (with their matches), then the players left orphaned
+   * (only after a deletion, and once at startup). Failures are logged and retried at the next
+   * refresh (5 min later): returns false then.
+   */
+  private async cleanup(): Promise<boolean> {
+    try {
+      const res = await deleteOldPatches(this.db, KEPT_PATCHES);
+      if (res.deletedPatches.length > 0) {
+        this.orphanPurgePending = true;
+        this.log.info('old patches deleted', { ...res });
+      }
+    } catch (err) {
+      this.log.error('old patch cleanup failed, will retry', { error: errorMessage(err) });
+      return false;
+    }
+    if (!this.orphanPurgePending) return true;
+    try {
+      const deletedPlayers = await purgeOrphanPlayers(this.db);
+      this.orphanPurgePending = false;
+      if (deletedPlayers > 0) this.log.info('orphan players deleted', { deletedPlayers });
+      return true;
+    } catch (err) {
+      this.log.error('orphan player purge failed, will retry', { error: errorMessage(err) });
+      return false;
+    }
   }
 }
