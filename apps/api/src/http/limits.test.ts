@@ -18,6 +18,71 @@ describe('TtlCache', () => {
     expect(await cache.getOrCompute('d', async () => 5)).toEqual({ value: 4, hit: true });
   });
 
+  /** A compute the test resolves (or rejects) by hand. */
+  const deferred = <T>() => {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  };
+
+  test('concurrent identical computes run once', async () => {
+    const cache = new TtlCache<number>(1000);
+    const d = deferred<number>();
+    let calls = 0;
+    const compute = () => {
+      calls++;
+      return d.promise;
+    };
+    const a = cache.getOrCompute('k', compute);
+    const b = cache.getOrCompute('k', compute);
+    d.resolve(7);
+    expect(await Promise.all([a, b])).toEqual([
+      { value: 7, hit: false },
+      { value: 7, hit: false },
+    ]);
+    expect(calls).toBe(1);
+    expect(await cache.getOrCompute('k', compute)).toEqual({ value: 7, hit: true });
+  });
+
+  test('a compute started before clear() is not stored nor joined after it', async () => {
+    const cache = new TtlCache<string>(1000);
+    const old = deferred<string>();
+    const before = cache.getOrCompute('k', () => old.promise);
+    cache.clear(); // e.g. the stats were refreshed while the old response was being computed
+    const fresh = deferred<string>();
+    const after = cache.getOrCompute('k', () => fresh.promise);
+    old.resolve('stale');
+    expect(await before).toEqual({ value: 'stale', hit: false });
+    expect(cache.get('k')).toBeUndefined();
+    fresh.resolve('fresh');
+    expect(await after).toEqual({ value: 'fresh', hit: false });
+    expect(cache.get('k')).toBe('fresh');
+  });
+
+  test('a failed compute is shared by its waiters and not stored', async () => {
+    const cache = new TtlCache<number>(1000);
+    const d = deferred<number>();
+    const a = cache.getOrCompute('k', () => d.promise);
+    const b = cache.getOrCompute('k', () => Promise.resolve(1));
+    d.reject(new Error('db down'));
+    const settled = await Promise.allSettled([a, b]);
+    for (const r of settled) {
+      expect(r.status).toBe('rejected');
+      expect((r as PromiseRejectedResult).reason).toBeInstanceOf(Error);
+      expect(((r as PromiseRejectedResult).reason as Error).message).toBe('db down');
+    }
+    expect(cache.size).toBe(0);
+    expect(await cache.getOrCompute('k', async () => 2)).toEqual({ value: 2, hit: false });
+    const sync = cache.getOrCompute('s', () => {
+      throw new Error('sync');
+    });
+    await expect(sync).rejects.toThrow('sync');
+  });
+
   test('cache keys are order-insensitive', () => {
     const base = { role: 'UTILITY', allies: [], bans: [] as number[] };
     expect(picksCacheKey({ ...base, enemies: [1, null, 2], bans: [5, 4] })).toBe(

@@ -55,6 +55,23 @@ export interface RefreshOptions {
   log?: (msg: string, fields?: Record<string, unknown>) => void;
   /** Session work_mem for the refresh (default '256MB'). */
   workMem?: string;
+  /** Views to refresh, in order (default `STATS_REFRESH_ORDER`; tests use a shorter list). */
+  views?: typeof STATS_REFRESH_ORDER;
+}
+
+/**
+ * A refresh that failed part-way. `refreshedViews` already hold new data while the others still
+ * hold the old one: responses computed before are stale either way, so caches must be cleared
+ * when it is not empty.
+ */
+export class StatsRefreshError extends Error {
+  constructor(
+    readonly refreshedViews: readonly string[],
+    cause: unknown,
+  ) {
+    super((cause as Error)?.message ?? String(cause), { cause });
+    this.name = 'StatsRefreshError';
+  }
 }
 
 /** Match count + newest fetch time: changes whenever matches are added or deleted. */
@@ -167,7 +184,7 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
         await conn.unsafe(`SET work_mem = '${(options.workMem ?? '256MB').replace(/'/g, '')}'`);
         // Fresh planner statistics: the views join large tables whose size changes a lot.
         await conn.unsafe('ANALYZE matches, participants, item_events, skill_events');
-        for (const step of STATS_REFRESH_ORDER) {
+        for (const step of options.views ?? STATS_REFRESH_ORDER) {
           const t = performance.now();
           await conn.unsafe(
             `REFRESH MATERIALIZED VIEW ${step.concurrent ? 'CONCURRENTLY ' : ''}${step.view}`,
@@ -185,7 +202,7 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
         await conn`
           UPDATE stats_refresh_log SET finished_at = now(), error = ${(err as Error).message}
           WHERE id = ${logRow?.id ?? 0}`;
-        throw err;
+        throw new StatsRefreshError(Object.keys(views), err);
       } finally {
         await conn.unsafe('RESET work_mem');
       }
@@ -207,7 +224,10 @@ export interface StatsRefresherOptions extends RefreshOptions {
   manualCooldownMs?: number;
   /** Pool for the cheap status queries (default: the refresh pool). */
   statusDb?: Queryable;
-  /** Called after a refresh that changed the views (e.g. to clear response caches). */
+  /**
+   * Called after a refresh that changed the views (e.g. to clear response caches), including a
+   * failed one that had already refreshed some of them.
+   */
   onRefreshed?: () => void;
   onError?: (err: unknown) => void;
 }
@@ -240,6 +260,9 @@ export class StatsRefresher {
         return r;
       })
       .catch((err) => {
+        if (err instanceof StatsRefreshError && err.refreshedViews.length > 0) {
+          this.options.onRefreshed?.();
+        }
         this.options.onError?.(err);
         return null;
       })

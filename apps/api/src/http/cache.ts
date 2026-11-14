@@ -1,6 +1,14 @@
-/** In-memory TTL cache with a size cap (oldest entries evicted first). */
+/**
+ * In-memory TTL cache with a size cap (oldest entries evicted first).
+ *
+ * `getOrCompute` runs one compute per key at a time (concurrent callers share it) and only stores
+ * its result if the cache was not cleared meanwhile: `clear()` starts a new generation, so a
+ * response computed from the stats as they were before a refresh is never stored after it.
+ */
 export class TtlCache<T> {
   private readonly entries = new Map<string, { value: T; expiresAt: number }>();
+  private readonly pending = new Map<string, { generation: number; promise: Promise<T> }>();
+  private generation = 0;
 
   constructor(
     private readonly ttlMs: number,
@@ -28,17 +36,35 @@ export class TtlCache<T> {
     }
   }
 
-  /** Returns the cached value or computes, stores and returns it. */
+  /**
+   * Returns the cached value, or joins the compute of `key` already running in this generation,
+   * or computes it and stores it unless `clear()` was called meanwhile. `hit` = served from the
+   * cache. A failed compute is not stored.
+   */
   async getOrCompute(key: string, compute: () => Promise<T>): Promise<{ value: T; hit: boolean }> {
     const cached = this.get(key);
     if (cached !== undefined) return { value: cached, hit: true };
-    const value = await compute();
-    this.set(key, value);
-    return { value, hit: false };
+    const running = this.pending.get(key);
+    if (running && running.generation === this.generation) {
+      return { value: await running.promise, hit: false };
+    }
+    const generation = this.generation;
+    const job = { generation, promise: (async () => compute())() };
+    this.pending.set(key, job);
+    try {
+      const value = await job.promise;
+      if (generation === this.generation) this.set(key, value);
+      return { value, hit: false };
+    } finally {
+      if (this.pending.get(key) === job) this.pending.delete(key);
+    }
   }
 
+  /** Drops every entry; computes already running will not store their results. */
   clear(): void {
+    this.generation++;
     this.entries.clear();
+    this.pending.clear();
   }
 
   get size(): number {

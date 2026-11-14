@@ -11,7 +11,13 @@ import { TtlCache } from '../http/cache.ts';
 import { TokenBucketLimiter } from '../http/rate-limit.ts';
 import { silentLogger } from '../logger.ts';
 import { resetApiTestDb, seedSyntheticPatch, withDatabase } from '../testing/seed.ts';
-import { refreshStats, STATS_REFRESH_LOCK_KEY, StatsRefresher } from './refresh.ts';
+import {
+  refreshStats,
+  STATS_REFRESH_LOCK_KEY,
+  type STATS_REFRESH_ORDER,
+  StatsRefreshError,
+  StatsRefresher,
+} from './refresh.ts';
 
 const BASE = process.env.DATABASE_URL_TEST;
 const URL_ = BASE ? withDatabase(BASE, 'pickleague_api_refresh_test') : undefined;
@@ -144,6 +150,41 @@ describe.skipIf(!URL_)('manual stats refresh (Postgres)', () => {
     await refresher.idle();
     expect((await timerRun)?.reason).toBe('refreshed');
     expect(refreshed()).toBe(1);
+  }, 60_000);
+
+  test('a refresh failing after some views were refreshed still clears the cache', async () => {
+    const cache = new TtlCache<unknown>(60_000);
+    const errors: unknown[] = [];
+    let refreshed = 0;
+    const failing = (views: typeof STATS_REFRESH_ORDER) =>
+      new StatsRefresher(db, {
+        intervalMs: 60_000,
+        views,
+        onRefreshed: () => {
+          refreshed++;
+          cache.clear();
+        },
+        onError: (err) => errors.push(err),
+      });
+    const missing = { view: 'stats_no_such_view', concurrent: false };
+
+    // Fails before any view was refreshed: nothing changed, the cache stays.
+    cache.set('kept', 1);
+    expect(await failing([missing]).tick(true)).toBeNull();
+    expect(refreshed).toBe(0);
+    expect(cache.get('kept')).toBe(1);
+
+    // Fails after stats_champion_traits was refreshed: responses may mix old and new data.
+    expect(
+      await failing([{ view: 'stats_champion_traits', concurrent: true }, missing]).tick(true),
+    ).toBeNull();
+    expect(refreshed).toBe(1);
+    expect(cache.size).toBe(0);
+    expect(errors).toHaveLength(2);
+    const last = errors[1] as StatsRefreshError;
+    expect(last).toBeInstanceOf(StatsRefreshError);
+    expect(last.refreshedViews).toEqual(['stats_champion_traits']);
+    expect(last.message).toContain('stats_no_such_view');
   }, 60_000);
 
   test('a refresh holding the advisory lock elsewhere counts as running', async () => {
