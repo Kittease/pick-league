@@ -96,6 +96,17 @@ bun run dev:desktop      # opens the app; start League whenever you like
   app switches to champion select by itself when one starts (unless you are reading a
   champion's details); once you go back to the tier list it stays there until the next
   champion select.
+- **Draft** (left rail): a draft planner that needs no League client. Play a ranked solo/duo
+  draft by hand: 10 bans alternating Blue/Red (a ban can be skipped with "No ban"), then picks
+  in the real order B1, R1, R2, B2, B3, R3, R4, B4, B5, R5. On each pick, choose the role being
+  picked for (the team's first open role by default, or click an empty slot); the champion grid
+  then ranks the remaining champions for that team and role (score from the same pick
+  recommendations as in champion select, reasons on hover; champions with too little data come
+  last, dimmed). Type in the search box and press Enter to take the first match. Undo steps
+  back one action, Reset starts over. Click any drafted champion — once the draft is complete,
+  or already during it — to see its build for this match, against the drafted enemies (lane
+  phase, items, runes, spells, skill order). The draft is kept while you look at other views;
+  a champion select starting switches to it as usual.
 
 **API address.** By default the app talks to `http://localhost:3000` (the Docker stack on the
 same computer). If the stack runs on a server, open Settings (gear icon) and set
@@ -113,8 +124,9 @@ Windows window setup on any OS; Ctrl/Cmd+R reloads and F12 opens the devtools.
 **Keyboard.** Ctrl+K or Ctrl+F (Cmd on macOS) jumps to the tier list's champion search and
 selects its text. Escape steps back, one step per press: in the search field it clears the text,
 then leaves the field; then it closes the generic build page, then the champion's details; from
-the champion select view it goes back to the tier list. While a menu, a select or Settings is
-open, Escape only closes that.
+the champion select view it goes back to the tier list. In the draft planner both work on its
+own search instead (Escape then closes the build shown; it never undoes a draft action). While
+a menu, a select or Settings is open, Escape only closes that.
 
 **Installers.** `bun run --filter @pick-league/desktop package` builds an installer for the
 current OS into `apps/desktop/dist/` (unsigned).
