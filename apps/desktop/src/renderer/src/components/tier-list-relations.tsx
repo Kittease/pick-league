@@ -8,7 +8,7 @@ import { ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { compact, deltaPoints, percent, ROLE_LABEL } from '@/lib/format';
+import { compact, deltaPoints, laneGoldShort, laneTitle, percent, ROLE_LABEL } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { ApiResult } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
@@ -87,22 +87,58 @@ const DUO_HINT: Record<Position, string> = {
   UTILITY: 'with the ADC',
 };
 
+/** Lane gold difference at 10 min of a matchup row ("+250g @10"), CS / XP / sample on hover. */
+function LaneGoldCell({ relation: r }: { relation: TierListRelation }) {
+  if (!r.lane) {
+    return (
+      <span
+        className="text-right text-[10px] text-muted-foreground/50"
+        title="No lane-phase figures: too few matchups with timeline frames, or server/rank filters"
+      >
+        —
+      </span>
+    );
+  }
+  const sign = Math.sign(r.lane.gold);
+  const [gold, at] = laneGoldShort(r.lane).split(' ');
+  return (
+    <span
+      className={cn(
+        'num text-right text-[11px] whitespace-nowrap',
+        sign > 0 ? 'text-up' : sign < 0 ? 'text-down' : 'text-muted-foreground',
+      )}
+      title={laneTitle(r.lane)}
+    >
+      {gold}
+      <span className="ml-0.5 text-[9px] text-muted-foreground">{at}</span>
+    </span>
+  );
+}
+
 function RelationRow({
   relation: r,
   role,
   verb,
   lookup,
+  showLane,
 }: {
   relation: TierListRelation;
   role: Position;
   verb: 'vs' | 'with';
   lookup: StaticLookup | null;
+  /** Matchups: a lane gold column (empty cell when the row has no lane figures). */
+  showLane: boolean;
 }) {
   const champ = lookup?.champion(r.championId);
   const name = champ?.name ?? `#${r.championId}`;
   return (
     <li
-      className="grid grid-cols-[24px_minmax(0,1fr)_28px_36px_38px_34px] items-center gap-1.5 py-0.5 text-xs"
+      className={cn(
+        'grid items-center gap-1.5 py-0.5 text-xs',
+        showLane
+          ? 'grid-cols-[24px_minmax(0,1fr)_54px_28px_36px_38px_34px]'
+          : 'grid-cols-[24px_minmax(0,1fr)_28px_36px_38px_34px]',
+      )}
       title={`${deltaPoints(r.delta)} pts ${verb} ${name}: ${percent(r.winRate)} win rate over ${r.games} matchups (delta shrunk by sample size)`}
     >
       <ChampionIcon src={champ?.iconUrl} name={name} size={24} />
@@ -112,6 +148,7 @@ function RelationRow({
           <span className="shrink-0 text-[10px] text-muted-foreground">{ROLE_LABEL[r.role]}</span>
         )}
       </span>
+      {showLane && <LaneGoldCell relation={r} />}
       <DeltaBar delta={r.delta} games={r.games} />
       <DeltaText delta={r.delta} className="text-right" />
       <span className="num text-right text-[11px] text-muted-foreground">{percent(r.winRate)}</span>
@@ -131,6 +168,7 @@ function RelationColumn({
   verb,
   role,
   lookup,
+  showLane,
 }: {
   side: 'best' | 'worst';
   list: TierListRelation[];
@@ -138,6 +176,7 @@ function RelationColumn({
   verb: 'vs' | 'with';
   role: Position;
   lookup: StaticLookup | null;
+  showLane: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const shown = expanded ? list : list.slice(0, PREVIEW_ROWS);
@@ -163,6 +202,7 @@ function RelationColumn({
               role={role}
               verb={verb}
               lookup={lookup}
+              showLane={showLane}
             />
           ))}
         </ul>
@@ -211,6 +251,8 @@ function RelationSection({
 }) {
   const best = relations.filter((r) => r.delta > 0);
   const worst = relations.filter((r) => r.delta < 0).reverse();
+  // Lane figures only exist for matchups (not under server/rank filters): same columns both sides.
+  const showLane = relations.some((r) => r.lane);
   return (
     <section className="flex flex-col gap-1.5">
       <h3 className="flex min-w-0 items-baseline gap-2 text-[10px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
@@ -228,6 +270,7 @@ function RelationSection({
             verb={verb}
             role={role}
             lookup={lookup}
+            showLane={showLane}
           />
           <RelationColumn
             side="worst"
@@ -236,6 +279,7 @@ function RelationSection({
             verb={verb}
             role={role}
             lookup={lookup}
+            showLane={showLane}
           />
         </div>
       )}
@@ -310,6 +354,8 @@ export function ChampionRelations({
       <p className="text-[11px] leading-snug text-muted-foreground">
         Deltas are points vs its own <span className="num">{percent(d.winRate)}</span> win rate,
         shrunk by sample size. Columns: delta, win rate, matchups.
+        {d.matchups.some((m) => m.lane) &&
+          ` Matchups also show the lane gold difference at 10 min${isBot ? ' (bot lane 2v2: with the duo partner)' : ''}; hover it for CS and XP.`}
       </p>
       <RelationSection
         title="Matchups"
