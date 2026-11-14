@@ -1,8 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { buildRequestSchema } from '@pick-league/shared';
 import { type BuildData, recommendBuild } from './build.ts';
-import { items, lane, names, role, thresholds, traitsOf, vs } from './fixtures.ts';
-import type { ChoiceKind, ChoiceMatchupRow, ChoiceRow, ChoiceTraitRow } from './types.ts';
+import { items, lane, names, role, thresholds, traitsOf, vs, withAlly } from './fixtures.ts';
+import type {
+  ChoiceDuoRow,
+  ChoiceKind,
+  ChoiceMatchupRow,
+  ChoiceRow,
+  ChoiceTraitRow,
+} from './types.ts';
 
 const CUR = '15.22';
 const PAGE_AFTERSHOCK = '8400|8300|8439,8401,8473,8242,8345,8347|5007,5010,5011';
@@ -62,8 +68,11 @@ function data(overrides: Partial<BuildData> = {}): BuildData {
     ],
     choiceMatchups: [],
     choiceTraits: [],
+    choiceDuos: [],
+    choiceAllyTraits: [],
     compTraits: [],
     vs: [],
+    with: [],
     championTraits: [traitsOf(CUR, 89, { physicalShare: 0.3, magicShare: 0.65 })],
     thresholds: [thresholds(CUR)],
     items,
@@ -266,6 +275,170 @@ describe('recommendBuild', () => {
         const b = recommendBuild(req({ ...LEONA, enemies }), data(traitData(order)));
         expect(b?.items.situational.map((s) => s.itemId)).toEqual([9010]);
       }
+    });
+  });
+
+  describe('situational items from the own team', () => {
+    /** Jinx (bot duo partner) + Lee Sin: an AP-heavy pair (and neither ranged- nor melee-heavy). */
+    const allies = [
+      { championId: 222, role: 'BOTTOM' },
+      { championId: 64, role: 'JUNGLE' },
+    ];
+    const apAlly = { physicalShare: 0.3, magicShare: 0.7 };
+    /** Soraka + Warwick: a heal-heavy enemy pair. */
+    const enemies = [
+      { championId: 16, role: 'UTILITY' },
+      { championId: 19, role: 'JUNGLE' },
+    ];
+    const championTraits = [
+      traitsOf(CUR, 89),
+      traitsOf(CUR, 222, apAlly),
+      traitsOf(CUR, 64, { ...apAlly, isRanged: false }),
+      traitsOf(CUR, 16, { healingPerMin: 120 }),
+      traitsOf(CUR, 19, { healingPerMin: 60, isRanged: false }),
+    ];
+    const compTrait = (side: 'enemy' | 'ally', trait: ChoiceTraitRow['trait']) => ({
+      patch: CUR,
+      position: 'UTILITY' as const,
+      championId: 89,
+      side,
+      trait,
+      games: 300,
+      wins: 150,
+    });
+    /** Leona with Jinx: 300 games, 50 %. */
+    const withJinx = [withAlly(CUR, 89, 222, 'BOTTOM', 300, 150)];
+    const duo = (item: number, games: number, wins: number): ChoiceDuoRow => ({
+      partnerId: 222,
+      partnerPosition: 'BOTTOM',
+      kind: 'item',
+      choice: String(item),
+      games,
+      wins,
+    });
+    const trait = (
+      t: ChoiceTraitRow['trait'],
+      item: number,
+      games: number,
+      wins: number,
+    ): ChoiceTraitRow => ({ trait: t, kind: 'item', choice: String(item), games, wins });
+
+    test('an item that works with the duo partner, with a duo reason', () => {
+      const b = recommendBuild(
+        req({ ...LEONA, allies }),
+        data({ championTraits, with: withJinx, choiceDuos: [duo(9007, 100, 70)] }),
+      );
+      expect(b?.items.situational.map((s) => s.itemId)).toEqual([9007]);
+      const reason = b?.items.situational[0]?.reasons[0];
+      expect(reason).toMatchObject({ kind: 'duo', championIds: [222], games: 100, itemId: 9007 });
+      expect(reason?.delta).toBeGreaterThan(0);
+      expect(reason?.label).toMatch(/^\+\d+\.\d% with Jinx when built \(100 games\)$/);
+    });
+
+    test('a guessed duo partner (role unknown) counts too', () => {
+      const b = recommendBuild(
+        req({ ...LEONA, allies: [{ championId: 222, role: null }] }),
+        data({ with: withJinx, choiceDuos: [duo(9007, 100, 70)] }),
+      );
+      expect(b?.items.situational[0]?.reasons[0]).toMatchObject({
+        kind: 'duo',
+        championIds: [222],
+      });
+    });
+
+    test('an item that works with an ally composition trait, with a with_comp reason', () => {
+      const b = recommendBuild(
+        req({ ...LEONA, allies }),
+        data({
+          championTraits,
+          compTraits: [compTrait('ally', 'AP_HEAVY')],
+          choiceAllyTraits: [trait('AP_HEAVY', 9008, 100, 70), trait('MELEE_HEAVY', 9009, 100, 90)],
+        }),
+      );
+      // MELEE_HEAVY is not a trait of these allies: its rows are ignored.
+      expect(b?.items.situational.map((s) => s.itemId)).toEqual([9008]);
+      const swap = b?.items.situational[0];
+      expect(swap?.replacesItemId).not.toBeNull();
+      expect(swap?.reasons[0]).toMatchObject({ kind: 'with_comp', trait: 'AP_HEAVY', games: 100 });
+      expect(swap?.reasons[0]?.label).toMatch(
+        /^\+\d+\.\d% with AP-heavy allies when built instead of .+ \(100 games\)$/,
+      );
+    });
+
+    test('ally and enemy contexts are ranked together by delta', () => {
+      const run = (duoWins: number, enemyWins: number) =>
+        recommendBuild(
+          req({ ...LEONA, allies, enemies }),
+          data({
+            championTraits,
+            compTraits: [compTrait('enemy', 'HIGH_HEALING')],
+            choiceTraits: [trait('HIGH_HEALING', 9001, 100, enemyWins)],
+            with: withJinx,
+            choiceDuos: [duo(9007, 100, duoWins)],
+          }),
+        )?.items.situational.map((s) => [s.itemId, s.reasons[0]?.kind]);
+      expect(run(75, 65)).toEqual([
+        [9007, 'duo'],
+        [9001, 'item_swap'],
+      ]);
+      expect(run(65, 75)).toEqual([
+        [9001, 'item_swap'],
+        [9007, 'duo'],
+      ]);
+    });
+
+    test('an item answering an enemy and an ally context goes to the one it helps most', () => {
+      const b = recommendBuild(
+        req({ ...LEONA, allies, enemies }),
+        data({
+          championTraits,
+          compTraits: [compTrait('enemy', 'HIGH_HEALING')],
+          choiceTraits: [trait('HIGH_HEALING', 9001, 100, 65)],
+          with: withJinx,
+          choiceDuos: [duo(9001, 100, 75)],
+        }),
+      );
+      const listed = b?.items.situational.filter((s) => s.itemId === 9001) ?? [];
+      expect(listed).toHaveLength(1);
+      expect(listed[0]?.reasons[0]).toMatchObject({ kind: 'duo', championIds: [222] });
+    });
+
+    test('no ally swap without enough games or gain, and no tag rule for allies', () => {
+      const run = (rows: ChoiceDuoRow[], extra: Partial<BuildData> = {}) =>
+        recommendBuild(
+          req({ ...LEONA, allies }),
+          data({
+            championTraits,
+            compTraits: [compTrait('ally', 'AP_HEAVY')],
+            with: withJinx,
+            choiceDuos: rows,
+            ...extra,
+          }),
+        )?.items.situational;
+      // Under minContextGames (15), however good.
+      expect(run([duo(9007, 14, 14)])).toEqual([]);
+      // Gain under swapMinGain (0.01): 51 % with Jinx vs 49.5 % without, shrunk.
+      expect(run([duo(9007, 100, 51)])).toEqual([]);
+      // Good with Jinx, but no better than overall (+13 points either way).
+      const strong = [...data().choices, c('item', '9008', 200, 130, 4.5)];
+      expect(run([duo(9008, 100, 66)], { choices: strong })).toEqual([]);
+    });
+
+    test('a core item that does notably better with the duo partner says so', () => {
+      // Knight's Vow (core) with Jinx: 67 % vs 33 % without her.
+      const b = recommendBuild(
+        req({ ...LEONA, allies }),
+        data({ championTraits, with: withJinx, choiceDuos: [duo(3109, 150, 100)] }),
+      );
+      expect(b?.items.situational).toEqual([]);
+      const knightsVow = b?.items.core.find((i) => i.itemId === 3109);
+      expect(knightsVow?.reasons[0]).toMatchObject({
+        kind: 'duo',
+        championIds: [222],
+        games: 150,
+        itemId: 3109,
+      });
+      expect(knightsVow?.reasons[0]?.label).toMatch(/^\+\d+\.\d% with Jinx when built/);
     });
   });
 

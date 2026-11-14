@@ -10,6 +10,7 @@ import type {
 } from '@pick-league/shared';
 import {
   choosePatches,
+  DUO_ROLES,
   LANE_ROLES,
   recommendBuild,
   recommendPicks,
@@ -104,23 +105,44 @@ export async function build(q: Queryable, req: BuildRequest): Promise<BuildRespo
   const opponentIds = req.enemies
     .filter((e) => e.role === null || laneRoles.includes(e.role))
     .map((e) => e.championId);
-  const enemyTraits: CompTrait[] = sideTraits(enemyIds, {
+  // Likewise only duo partners matter for item choices with an ally (unknown roles: candidates).
+  const duoRoles = DUO_ROLES[req.role];
+  const partnerIds = req.allies
+    .filter((a) => a.role === null || duoRoles.includes(a.role))
+    .map((a) => a.championId);
+  const traitData = {
     championTraits,
     thresholds,
     currentPatch: ctx.current,
     previousPatch: ctx.previous,
-  });
-  const [choices, choiceMatchups, choiceTraits, compTraitRows, vs, lanePhase, items, names] =
-    await Promise.all([
-      repo.loadChoices(q, patches, req.championId, req.role),
-      repo.loadChoiceMatchups(q, patches, req.championId, req.role, opponentIds),
-      repo.loadChoiceTraits(q, patches, req.championId, req.role, enemyTraits),
-      repo.loadCompTraits(q, patches, req.role, req.championId, 'enemy'),
-      repo.loadVsForChampion(q, patches, req.championId, req.role, opponentIds),
-      repo.loadLanePhaseOfChampion(q, patches, req.role, req.championId, opponentIds),
-      repo.loadItems(q, ctx.current),
-      repo.loadNames(q, ctx.patches),
-    ]);
+  };
+  const enemyTraits: CompTrait[] = sideTraits(enemyIds, traitData);
+  const allyTraits: CompTrait[] = sideTraits(allyIds, traitData);
+  const [
+    choices,
+    choiceMatchups,
+    choiceTraits,
+    choiceDuos,
+    choiceAllyTraits,
+    compTraitRows,
+    vs,
+    withRows,
+    lanePhase,
+    items,
+    names,
+  ] = await Promise.all([
+    repo.loadChoices(q, patches, req.championId, req.role),
+    repo.loadChoiceMatchups(q, patches, req.championId, req.role, opponentIds),
+    repo.loadChoiceTraits(q, patches, req.championId, req.role, enemyTraits),
+    repo.loadChoiceDuos(q, patches, req.championId, req.role, partnerIds),
+    repo.loadChoiceAllyTraits(q, patches, req.championId, req.role, allyTraits),
+    repo.loadCompTraits(q, patches, req.role, req.championId),
+    repo.loadVsForChampion(q, patches, req.championId, req.role, opponentIds),
+    repo.loadWithForChampion(q, patches, req.championId, req.role, partnerIds),
+    repo.loadLanePhaseOfChampion(q, patches, req.role, req.championId, opponentIds),
+    repo.loadItems(q, ctx.current),
+    repo.loadNames(q, ctx.patches),
+  ]);
   const compTraits = sumByKey(compTraitRows, (r) => `${r.side}|${r.trait}`);
   const result = recommendBuild(req, {
     currentPatch: ctx.current,
@@ -131,8 +153,11 @@ export async function build(q: Queryable, req: BuildRequest): Promise<BuildRespo
     choices,
     choiceMatchups,
     choiceTraits,
+    choiceDuos,
+    choiceAllyTraits,
     compTraits,
     vs,
+    with: withRows,
     championTraits,
     thresholds,
     items,

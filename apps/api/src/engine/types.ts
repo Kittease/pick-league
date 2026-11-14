@@ -105,7 +105,18 @@ export interface ChoiceMatchupRow extends GamesWins {
   choice: string;
 }
 
-/** stats_choice_traits (for one champion + role + patch) */
+/** stats_choice_duos (for one champion + role + patch): items with a duo partner. */
+export interface ChoiceDuoRow extends GamesWins {
+  partnerId: number;
+  partnerPosition: Position;
+  kind: ChoiceKind;
+  choice: string;
+}
+
+/**
+ * stats_choice_traits (enemy composition) or stats_choice_ally_traits (ally composition, items
+ * only), for one champion + role + patch.
+ */
 export interface ChoiceTraitRow extends GamesWins {
   trait: CompTrait;
   kind: ChoiceKind;

@@ -13,6 +13,7 @@ import type { CompTrait, PatchId, Platform, Position } from '@pick-league/shared
 import type { BanRow, PatchMatchesRow } from '../engine/tierlist.ts';
 import type {
   ChampionTraitRow,
+  ChoiceDuoRow,
   ChoiceKind,
   ChoiceMatchupRow,
   ChoiceRow,
@@ -309,6 +310,98 @@ export async function loadChoiceTraits(
     trait: r.trait,
     kind: r.kind,
     choice: r.choice,
+    games: r.games,
+    wins: r.wins,
+  }));
+}
+
+/** Item choices of champion + role with the given duo partners (stats_choice_duos, summed). */
+export async function loadChoiceDuos(
+  q: Queryable,
+  patches: PatchId[],
+  championId: number,
+  position: Position,
+  partnerIdsIn: number[],
+): Promise<ChoiceDuoRow[]> {
+  const partnerIds = storedChampionIds(partnerIdsIn);
+  if (!isStoredChampionId(championId) || partnerIds.length === 0) return [];
+  const rows = await q<
+    {
+      partner_id: number;
+      partner_position: Position;
+      kind: ChoiceKind;
+      choice: string;
+      games: number;
+      wins: number;
+    }[]
+  >`
+    SELECT partner_id, partner_position, kind, choice,
+           sum(games)::int AS games, sum(wins)::int AS wins
+    FROM stats_choice_duos
+    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
+      AND partner_id IN ${q(partnerIds)}
+    GROUP BY partner_id, partner_position, kind, choice`;
+  return rows.map((r) => ({
+    partnerId: r.partner_id,
+    partnerPosition: r.partner_position,
+    kind: r.kind,
+    choice: r.choice,
+    games: r.games,
+    wins: r.wins,
+  }));
+}
+
+/** Item choices of champion + role when the allies have a trait (stats_choice_ally_traits, summed). */
+export async function loadChoiceAllyTraits(
+  q: Queryable,
+  patches: PatchId[],
+  championId: number,
+  position: Position,
+  traits: CompTrait[],
+): Promise<ChoiceTraitRow[]> {
+  if (!isStoredChampionId(championId) || traits.length === 0) return [];
+  const rows = await q<
+    { trait: CompTrait; kind: ChoiceKind; choice: string; games: number; wins: number }[]
+  >`
+    SELECT trait, kind, choice, sum(games)::int AS games, sum(wins)::int AS wins
+    FROM stats_choice_ally_traits
+    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
+      AND trait IN ${q(traits)}
+    GROUP BY trait, kind, choice`;
+  return rows.map((r) => ({
+    trait: r.trait,
+    kind: r.kind,
+    choice: r.choice,
+    games: r.games,
+    wins: r.wins,
+  }));
+}
+
+/**
+ * stats_champion_with of one champion + role with the given allies, summed over `patches`
+ * (index stats_champion_with_champion).
+ */
+export async function loadWithForChampion(
+  q: Queryable,
+  patches: PatchId[],
+  championId: number,
+  position: Position,
+  allyIdsIn: number[],
+): Promise<WithRow[]> {
+  const allyIds = storedChampionIds(allyIdsIn);
+  if (!isStoredChampionId(championId) || allyIds.length === 0) return [];
+  const rows = await q<{ ally_position: Position; ally_id: number; games: number; wins: number }[]>`
+    SELECT ally_position, ally_id, sum(games)::int AS games, sum(wins)::int AS wins
+    FROM stats_champion_with
+    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
+      AND ally_id IN ${q(allyIds)}
+    GROUP BY ally_position, ally_id`;
+  return rows.map((r) => ({
+    patch: patches[0] as PatchId, // summed over `patches`: labelled with the newest
+    position,
+    championId,
+    allyPosition: r.ally_position,
+    allyId: r.ally_id,
     games: r.games,
     wins: r.wins,
   }));

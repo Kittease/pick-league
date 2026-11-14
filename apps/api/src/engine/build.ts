@@ -2,7 +2,9 @@
  * Build recommendations, layered:
  * 1. base = best choice for champion+role (shrunk win-rate delta + popularity bonus),
  * 2. adjusted for the lane opponent (choices vs that opponent),
- * 3. adjusted for enemy composition traits (data-backed deltas, else Data Dragon tag rules).
+ * 3. adjusted for enemy composition traits (data-backed deltas, else Data Dragon tag rules),
+ * 4. situational items also answer the own team: duo partner and ally composition traits
+ *    (data-backed deltas only).
  * Every piece carries reasons with the win-rate delta and sample size.
  */
 import type {
@@ -18,6 +20,7 @@ import type {
   SummonerSpellsRecommendation,
 } from '@pick-league/shared';
 import {
+  DUO_ROLES,
   ENGINE_CONFIG,
   LANE_ROLES,
   ROLE_LABELS,
@@ -42,6 +45,7 @@ import { assignRoles, type RoleGuess, rolePlayRates } from './roles.ts';
 import { parseIntList, skillMaxOrder, synthesiseSkillSequence } from './skills.ts';
 import type {
   ChampionTraitRow,
+  ChoiceDuoRow,
   ChoiceKind,
   ChoiceMatchupRow,
   ChoiceRow,
@@ -54,6 +58,7 @@ import type {
   NameLookup,
   RoleStatRow,
   VsRow,
+  WithRow,
 } from './types.ts';
 
 export interface BuildData {
@@ -71,10 +76,16 @@ export interface BuildData {
   choiceMatchups: readonly ChoiceMatchupRow[];
   /** stats_choice_traits of champion + role on the patches used (summed). */
   choiceTraits: readonly ChoiceTraitRow[];
-  /** stats_champion_comp_traits (side enemy) of champion + role on the patches used (summed). */
+  /** stats_choice_duos of champion + role on the patches used (summed), with the request's allies. */
+  choiceDuos: readonly ChoiceDuoRow[];
+  /** stats_choice_ally_traits of champion + role on the patches used (summed). */
+  choiceAllyTraits: readonly ChoiceTraitRow[];
+  /** stats_champion_comp_traits (both sides) of champion + role on the patches used (summed). */
   compTraits: readonly CompTraitRow[];
   /** stats_champion_vs of champion + role on the patches used (summed), vs the request's enemies. */
   vs: readonly VsRow[];
+  /** stats_champion_with of champion + role on the patches used (summed), with the request's allies. */
+  with: readonly WithRow[];
   /** stats_champion_traits of the champion, its allies and enemies (both patches). */
   championTraits: readonly ChampionTraitRow[];
   thresholds: readonly CompThresholdRow[];
@@ -133,10 +144,13 @@ export function bestChoice(
   );
 }
 
-/** A context: lane opponent or enemy trait, with the champion's overall record in it. */
+/**
+ * A context: lane opponent or enemy trait, or (situational items only) duo partner or ally trait,
+ * with the champion's overall record in it.
+ */
 interface Context {
-  kind: 'matchup' | 'vs_comp';
-  /** "vs Thresh" / "vs heal-heavy teams" */
+  kind: 'matchup' | 'vs_comp' | 'duo' | 'with_comp';
+  /** "vs Thresh" / "vs heal-heavy teams" / "with Jinx" / "with AP-heavy allies" */
   label: string;
   /** Extra detail shown next to the sample size, e.g. "likely support". */
   note?: string;
@@ -275,6 +289,16 @@ export function recommendBuild(req: BuildRequest, data: BuildData): BuildRespons
     data,
   );
   const traitContexts = enemyTraits.map((t) => traitContext(t, data));
+  // Own team (situational items only): duo partner(s) and ally composition traits.
+  const duoRoles = DUO_ROLES[role];
+  const duoContexts = assignRoles(req.allies, playRates, [role])
+    .filter((a) => duoRoles.includes(a.role))
+    .sort((a, b) => duoRoles.indexOf(a.role) - duoRoles.indexOf(b.role))
+    .map((a) => duoContext(a, data, names));
+  const allyTraitContexts = sideTraits(
+    req.allies.map((a) => a.championId),
+    data,
+  ).map((t) => allyTraitContext(t, data));
 
   const selfTraits =
     data.championTraits.find(
@@ -299,6 +323,7 @@ export function recommendBuild(req: BuildRequest, data: BuildData): BuildRespons
     baseWr,
     primaryMatchup,
     traitContexts,
+    allyContexts: [...duoContexts, ...allyTraitContexts],
     enemyTraits,
     data,
     damage,
@@ -372,6 +397,36 @@ function traitContext(trait: CompTrait, data: BuildData): Context {
     label: `vs ${TRAIT_LABELS[trait]} teams`,
     total,
     rows: data.choiceTraits.filter((r) => r.trait === trait),
+    trait,
+  };
+}
+
+function duoContext(a: RoleGuess, data: BuildData, names: NameLookup): Context {
+  const total =
+    data.with.find((w) => w.allyId === a.championId && w.allyPosition === a.role) ??
+    ({ games: 0, wins: 0 } as GamesWins);
+  return {
+    kind: 'duo',
+    label: `with ${names.champion(a.championId)}`,
+    ...(a.known ? {} : { note: `likely ${ROLE_LABELS[a.role]}` }),
+    total,
+    rows: data.choiceDuos.filter(
+      (r) => r.partnerId === a.championId && r.partnerPosition === a.role,
+    ),
+    championIds: [a.championId],
+  };
+}
+
+function allyTraitContext(trait: CompTrait, data: BuildData): Context {
+  const total = data.compTraits.find((r) => r.side === 'ally' && r.trait === trait) ?? {
+    games: 0,
+    wins: 0,
+  };
+  return {
+    kind: 'with_comp',
+    label: `with ${TRAIT_LABELS[trait]} allies`,
+    total,
+    rows: data.choiceAllyTraits.filter((r) => r.trait === trait),
     trait,
   };
 }
@@ -563,6 +618,8 @@ interface ItemsInput {
   baseWr: number;
   primaryMatchup: Context | undefined;
   traitContexts: readonly Context[];
+  /** Duo partner(s), then active ally traits: data-backed situational items only. */
+  allyContexts: readonly Context[];
   enemyTraits: readonly CompTrait[];
   data: BuildData;
   damage: 'physical' | 'magic';
@@ -579,7 +636,8 @@ function itemMatchesRule(id: number, info: ItemInfo | undefined, rule: TagRule):
 }
 
 function recommendItems(input: ItemsInput): ItemsRecommendation {
-  const { byKind, baseline, baseWr, primaryMatchup, traitContexts, data, damage, fallback } = input;
+  const { byKind, baseline, baseWr, primaryMatchup, traitContexts, allyContexts } = input;
+  const { data, damage, fallback } = input;
   const names = data.names;
   const itemRows = byKind('item');
   const itemRow = new Map(itemRows.map((r) => [Number(r.choice), r]));
@@ -737,16 +795,24 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
         : worst,
     );
   };
+  /**
+   * Delta of building a (non-boots) item vs not building it within the context, when the item
+   * has the games there and beats its overall delta by `swapMinGain`; null otherwise.
+   */
+  const contextGain = (ctx: Context, r: Context['rows'][number]): number | null => {
+    const id = Number(r.choice);
+    if (r.kind !== 'item' || r.games < B.minContextGames || isBoots(id)) return null;
+    const rest = { games: ctx.total.games - r.games, wins: ctx.total.wins - r.wins };
+    if (rest.games <= 0) return null;
+    const delta = shrink(winRate(r) - winRate(rest), r.games, B.shrinkK);
+    return delta > 0 && delta - itemDelta(id) >= B.swapMinGain ? delta : null;
+  };
   const dataSwap = (ctx: Context): { itemId: number; delta: number; games: number } | null => {
     let best: { itemId: number; delta: number; games: number } | null = null;
     for (const r of ctx.rows) {
       const id = Number(r.choice);
-      if (r.kind !== 'item' || r.games < B.minContextGames || taken.has(id) || isBoots(id))
-        continue;
-      const rest = { games: ctx.total.games - r.games, wins: ctx.total.wins - r.wins };
-      if (rest.games <= 0) continue;
-      const delta = shrink(winRate(r) - winRate(rest), r.games, B.shrinkK);
-      if (delta <= 0 || delta - itemDelta(id) < B.swapMinGain) continue;
+      const delta = taken.has(id) ? null : contextGain(ctx, r);
+      if (delta === null) continue;
       if (!best || delta > best.delta || (delta === best.delta && id < best.itemId))
         best = { itemId: id, delta, games: r.games };
     }
@@ -764,11 +830,34 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
     });
   };
 
-  // One answer per context (lane opponent, active enemy traits), ranked before the cap: contexts
-  // with a data-backed swap by its delta (largest first), then the tag-rule ones in trait order.
-  // They are answered in that order, so an item answering several contexts goes to the one it
-  // helps most, and an item is only marked `taken` when it is returned.
-  const contexts = [...(primaryMatchup ? [primaryMatchup] : []), ...traitContexts];
+  // A core item that does notably better with the own team (duo partner, active ally trait) says
+  // so, for the context where it gains most (same test as a situational swap).
+  for (const item of core) {
+    let best: { ctx: Context; delta: number; games: number } | null = null;
+    for (const ctx of allyContexts) {
+      const r = ctx.rows.find((x) => x.kind === 'item' && Number(x.choice) === item.itemId);
+      const delta = r ? contextGain(ctx, r) : null;
+      if (r && delta !== null && (!best || delta > best.delta))
+        best = { ctx, delta, games: r.games };
+    }
+    if (!best) continue;
+    item.reasons.unshift({
+      kind: best.ctx.kind,
+      label: `${formatDelta(best.delta)} ${best.ctx.label} when built (${formatGames(best.games)})`,
+      delta: round(best.delta),
+      games: best.games,
+      itemId: item.itemId,
+      ...(best.ctx.championIds ? { championIds: best.ctx.championIds } : {}),
+      ...(best.ctx.trait ? { trait: best.ctx.trait } : {}),
+    });
+  }
+
+  // One answer per context (lane opponent, active enemy traits, duo partners, active ally
+  // traits), ranked before the cap: contexts with a data-backed swap by its delta (largest
+  // first), then the tag-rule ones (enemy traits only) in trait order. They are answered in that
+  // order, so an item answering several contexts goes to the one it helps most, and an item is
+  // only marked `taken` when it is returned.
+  const contexts = [...(primaryMatchup ? [primaryMatchup] : []), ...traitContexts, ...allyContexts];
   const ranked = contexts
     .map((ctx, order) => ({ ctx, order, delta: dataSwap(ctx)?.delta ?? null }))
     .sort((a, b) => {
@@ -782,9 +871,9 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
     if (swap) {
       if (full()) continue;
       const replaces = weakestCore(ctx);
-      if (ctx.kind === 'matchup') {
+      if (ctx.kind === 'matchup' || ctx.kind === 'duo') {
         addSituational(swap.itemId, replaces, {
-          kind: 'matchup',
+          kind: ctx.kind,
           label: `${formatDelta(swap.delta)} ${ctx.label} when built (${formatGames(swap.games)})`,
           delta: round(swap.delta),
           games: swap.games,
@@ -792,7 +881,7 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
         });
       } else {
         addSituational(swap.itemId, replaces, {
-          kind: 'item_swap',
+          kind: ctx.kind === 'with_comp' ? 'with_comp' : 'item_swap',
           label: `${formatDelta(swap.delta)} ${ctx.label} when built${replaces !== null ? ` instead of ${names.item(replaces)}` : ''} (${formatGames(swap.games)})`,
           delta: round(swap.delta),
           games: swap.games,
@@ -801,7 +890,8 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
       }
       continue;
     }
-    if (ctx.kind === 'matchup') continue;
+    // No data-backed answer: Data Dragon tag rules, for enemy traits only.
+    if (ctx.kind !== 'vs_comp') continue;
     const trait = ctx.trait as CompTrait;
     // Fallback: Data Dragon tag rules, restricted to items this champion+role actually builds.
     // A core item that already answers the trait gets the reason even when the list is full.
