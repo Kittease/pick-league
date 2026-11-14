@@ -409,14 +409,29 @@ Materialized views computed from the tables above, refreshed by the API in the o
 refreshed `CONCURRENTLY`, intermediate ones plainly. All are keyed by patch and exclude remakes.
 Definitions: `packages/db/migrations/0002_stats_views.sql` (traits, compositions, champion+role
 baselines, pairwise vs/with, build choices), `0003_stats_bans.sql` (tier list ban rates),
-`0006_tierlist_filters.sql` (tier list server/rank filters), `0007_support_quest_items.sql` and
-`0008_deterministic_comp_traits.sql` (all three below).
+`0006_tierlist_filters.sql` (tier list server/rank filters), `0007_support_quest_items.sql`,
+`0008_deterministic_comp_traits.sql` and `0010_lane_phase.sql` (all four below).
 
 `stats_participant_choices` lists every build/rune/spell/skill choice of a participant as `(kind, choice, pos)`; `stats_choices`, `stats_choice_matchups` and `stats_choice_traits` aggregate it per champion + role, vs a lane opponent and vs an enemy composition trait.
 
 **Support quest upgrade** (`0007_support_quest_items.sql`, kind `quest_item`). The support item (World Atlas) is granted for free and upgrades itself through the quest: World Atlas → Runic Compass → Bounty of Worlds → the upgrade the player picks (Celestial Opposition, Dream Maker, Zaz'Zak's Realmspike, Solstice Sleigh, Bloodsong). The timeline only has `ITEM_DESTROYED` events for the first three; the picked upgrade almost never comes as `ITEM_PURCHASED`, and at 400 gold it is not a completed item. `stats_quest_items` (intermediate, one row per participant who had one) reads it from `final_items`, else from its last purchase event (sold before the end). Upgrades are recognised from Data Dragon, not by id: non-consumable, non-completed items tagged `GoldPer` that are built from an item and build into nothing.
 
 **Deterministic composition traits** (`0008_deterministic_comp_traits.sql`). `stats_team_comp` sums the per-champion trait values of a team as `numeric` (exact, cast back to `float8`): float8 sums depended on the order rows reached the aggregate, so a team mean sitting on a `stats_comp_thresholds` percentile could switch traits between two refreshes of the same matches. The views built on it (`stats_comp_thresholds`, `stats_participants` and everything derived from it) are recreated unchanged otherwise. Also adds `stats_champion_with_champion (patch, champion_id, position)`, like `stats_champion_vs_champion`, for one champion's allies (`GET /tierlist/champion`).
+
+**Lane phase** (`0010_lane_phase.sql`). The first reader of the per-minute frames (`gold_by_minute`, `xp_by_minute`, `cs_by_minute`; index 1 = minute 0, so minute 10 = index 11 and minute 15 = index 16):
+
+```sql
+-- Served. Lane opponents only: same position, and both enemy bot laners for BOTTOM / UTILITY.
+stats_champion_lane_phase (patch, position, champion_id, enemy_position, enemy_id,
+                           games,                                   -- matchups with frames at 10 min
+                           gold_diff_10, xp_diff_10, cs_diff_10,    -- float8 averages, own − enemy
+                           games_15,                                -- matchups with frames at 15 min
+                           gold_diff_15, xp_diff_15, cs_diff_15)    -- NULL when games_15 = 0
+-- unique (patch, position, enemy_id, enemy_position, champion_id)  → picks (candidates vs an enemy)
+-- index  (patch, champion_id, position)                            → build, GET /tierlist/champion
+```
+
+TOP / JUNGLE / MIDDLE compare the two players (1v1). BOTTOM / UTILITY compare the bot lanes as a 2v2 (own + duo partner − enemy BOTTOM − enemy UTILITY): support gold alone says little about how the lane went; the rows vs the enemy ADC and vs the enemy support hold the same difference, each conditioned on that opponent. Remakes and participants without a position are excluded like everywhere; a lane counts only when both sides are complete (1 player, or 2 in the bot lane) and every player in it has the frame of that minute (shorter matches have shorter arrays), hence the separate `games_15`. Averages are exact `numeric` means cast to `float8`; patches are combined as `sum(avg × games) / sum(games)`. Computed in one pass over `participants` (each (match, lane) group holds both teams, then every own × enemy player pair of the lane gets the difference), so it refreshes in about the time of `stats_champion_roles`. Unfiltered only: the tier list server/rank filters do not apply to it.
 
 **Tier list filters** (`0006_tierlist_filters.sql`):
 
