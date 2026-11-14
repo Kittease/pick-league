@@ -3,13 +3,15 @@
  * vs the role average, tiered by score percentile (see `ENGINE_CONFIG.tierList`), with its best
  * and worst lane matchups and best duo partners.
  */
-import type {
-  PatchId,
-  Position,
-  Tier,
-  TierListEntry,
-  TierListRelation,
-  TierListResponse,
+import {
+  DEFAULT_TIER_LIST_FILTERS,
+  type PatchId,
+  type Position,
+  type Tier,
+  type TierListEntry,
+  type TierListFilters,
+  type TierListRelation,
+  type TierListResponse,
 } from '@pick-league/shared';
 import { DUO_ROLES, ENGINE_CONFIG, LANE_ROLES } from './config.ts';
 import {
@@ -23,17 +25,18 @@ import {
 } from './math.ts';
 import type { GamesWins, RoleStatRow, VsRow, WithRow } from './types.ts';
 
-/** stats_champion_bans */
+/** stats_champion_bans (stats_tierlist_bans when filtered) */
 export interface BanRow {
   patch: PatchId;
   championId: number;
-  /** Matches where the champion was banned. */
+  /** Matches where the champion was banned (filtered: counted players whose match banned it). */
   bans: number;
 }
 
-/** stats_patch_matches */
+/** stats_patch_matches (stats_tierlist_totals when filtered) */
 export interface PatchMatchesRow {
   patch: PatchId;
+  /** Ban rate denominator: matches (filtered: counted players). */
   matches: number;
 }
 
@@ -97,7 +100,12 @@ function relations<R extends GamesWins>(
     }));
 }
 
-export function buildTierList(role: Position, data: TierListData): TierListResponse {
+/** `data` is already restricted to `filters` (the server/rank filters only change the rows). */
+export function buildTierList(
+  role: Position,
+  data: TierListData,
+  filters: TierListFilters = DEFAULT_TIER_LIST_FILTERS,
+): TierListResponse {
   const { currentPatch, previousPatch } = data;
   const inRole = data.roleStats.filter((r) => r.position === role);
   const onPatches = <T extends { patch: PatchId }>(rows: readonly T[], patches: PatchId[]) =>
@@ -182,6 +190,7 @@ export function buildTierList(role: Position, data: TierListData): TierListRespo
   return {
     role,
     patch: currentPatch,
+    filters: { ...filters },
     roleGames: roleTotals.get(currentPatch)?.games ?? 0,
     entries: scored.map((e, i) => ({ ...e, tier: tiers[i] ?? 'D' })),
   };

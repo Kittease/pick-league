@@ -15,7 +15,7 @@ import * as meta from '../services/meta.ts';
 import * as reco from '../services/recommendations.ts';
 import * as tiers from '../services/tierlist.ts';
 import type { StatsRefresher } from '../stats/refresh.ts';
-import { buildCacheKey, picksCacheKey, type TtlCache } from './cache.ts';
+import { buildCacheKey, picksCacheKey, type TtlCache, tierListCacheKey } from './cache.ts';
 import type { TokenBucketLimiter } from './rate-limit.ts';
 
 /** What the HTTP layer needs from the stats refresher. */
@@ -125,7 +125,7 @@ export function createApp(deps: AppDeps): Hono<Env> {
     if (!parsed.success)
       throw new ApiError('BAD_REQUEST', 'Invalid query string', parsed.error.issues);
     const query = parsed.data;
-    return cached(c, `tierlist|${query.role}|${query.patch}`, () => tiers.tierList(db, query));
+    return cached(c, tierListCacheKey(query), () => tiers.tierList(db, query));
   });
 
   if (deps.stats) {

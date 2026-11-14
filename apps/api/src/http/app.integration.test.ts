@@ -11,10 +11,13 @@ import type {
   PatchesResponse,
   PicksResponse,
   StaticDataResponse,
+  TierListEntry,
   TierListResponse,
 } from '@pick-league/shared';
+import { DUO_ROLES, LANE_ROLES } from '../engine/index.ts';
 import { silentLogger } from '../logger.ts';
 import { refreshStats } from '../stats/refresh.ts';
+import * as repo from '../stats/repository.ts';
 import { API_TEST_DATABASE_URL, resetApiTestDb, seedSyntheticPatch } from '../testing/seed.ts';
 import { PLANTED } from '../testing/synthetic.ts';
 import { createApp } from './app.ts';
@@ -39,6 +42,12 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       seed: 12,
       pickWeights: { [PLANTED.rareOnCurrent]: 0.05 },
     });
+    // Synthetic players have no rank: spread them over the tiers for the tier list rank filter.
+    await db`
+      UPDATE players SET solo_tier = (ARRAY[
+        'CHALLENGER', 'GRANDMASTER', 'GRANDMASTER', 'GRANDMASTER', 'MASTER', 'MASTER', 'MASTER',
+        'MASTER', 'DIAMOND', NULL
+      ])[1 + abs(hashtext(puuid)) % 10]::solo_tier`;
     await refreshStats(db, { force: true });
     cache = new TtlCache(60_000);
     app = createApp({ db, cache, limiter: null, log: silentLogger });
@@ -302,6 +311,117 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(((await bad.json()) as ApiErrorResponse).error.code).toBe('BAD_REQUEST');
     expect((await get('/tierlist')).status).toBe(400);
     expect((await get('/tierlist?role=TOP&patch=9.9')).status).toBe(404);
+  });
+
+  test('GET /tierlist: default filters are echoed and the filtered views agree with the unfiltered ones', async () => {
+    const body = (await (await get('/tierlist?role=BOTTOM')).json()) as TierListResponse;
+    expect(body.filters).toEqual({ platform: 'ALL', rank: 'MASTER' });
+    const explicit = await get('/tierlist?role=BOTTOM&patch=latest&platform=ALL&rank=MASTER');
+    expect(await explicit.json()).toEqual(body);
+
+    // Every segment summed (no platform, rank level >= 0) = the unfiltered views.
+    const all = { platform: null, minRankLevel: 0 };
+    const patches = [CUR, PREV];
+    const sorted = <T>(rows: T[]) => rows.map((r) => JSON.stringify(r)).sort();
+    for (const role of ['BOTTOM', 'JUNGLE'] as const) {
+      expect(sorted(await repo.loadSegmentRoleStats(db, patches, role, all))).toEqual(
+        sorted((await repo.loadRoleStats(db, patches)).filter((r) => r.position === role)),
+      );
+      expect(
+        sorted(await repo.loadSegmentVsForRole(db, patches, role, LANE_ROLES[role], all)),
+      ).toEqual(sorted(await repo.loadVsForRole(db, patches, role, LANE_ROLES[role])));
+      expect(
+        sorted(await repo.loadSegmentWithForRole(db, patches, role, DUO_ROLES[role], all)),
+      ).toEqual(sorted(await repo.loadWithForRole(db, patches, role, DUO_ROLES[role])));
+    }
+    // Every player counted: weighted ban rates = banned matches / matches.
+    const bans = new Map(
+      (await repo.loadBans(db, patches)).map((b) => [`${b.patch}|${b.championId}`, b.bans]),
+    );
+    const matches = new Map((await repo.loadPatchMatches(db, patches)).map((m) => [m.patch, m]));
+    const totals = await repo.loadSegmentTotals(db, patches, all);
+    for (const t of totals) expect(t.matches).toBe((matches.get(t.patch)?.matches ?? 0) * 10);
+    for (const b of await repo.loadSegmentBans(db, patches, all)) {
+      expect(b.bans).toBe((bans.get(`${b.patch}|${b.championId}`) ?? 0) * 10);
+    }
+  });
+
+  test('GET /tierlist: server filter', async () => {
+    const all = (await (await get('/tierlist?role=UTILITY')).json()) as TierListResponse;
+    const byServer = await Promise.all(
+      (['KR', 'EUW1', 'NA1', 'VN2'] as const).map(
+        async (p) =>
+          (await (await get(`/tierlist?role=UTILITY&platform=${p}`)).json()) as TierListResponse,
+      ),
+    );
+    const kr = byServer[0] as TierListResponse;
+    expect(kr.filters).toEqual({ platform: 'KR', rank: 'MASTER' });
+    expect(kr.roleGames).toBe(750 * 2); // one support per team, 750 KR matches on CUR
+    expect(byServer.reduce((s, t) => s + t.roleGames, 0)).toBe(all.roleGames);
+    expect(kr.entries.length).toBeGreaterThan(0);
+
+    // Ban rate = KR matches of the patches used where it was banned / KR matches.
+    const e = kr.entries.find((x) => x.patchesUsed.length === 1) as TierListEntry;
+    const [row] = await db<{ banned: number; total: number }[]>`
+      SELECT count(DISTINCT b.match_id) FILTER (WHERE b.champion_id = ${e.championId})::int AS banned,
+             count(DISTINCT m.id)::int AS total
+      FROM matches m LEFT JOIN match_bans b ON b.match_id = m.id
+      WHERE m.platform = 'KR' AND m.patch = ${CUR} AND NOT m.is_remake`;
+    expect(e.banRate).toBeCloseTo((row?.banned ?? 0) / (row?.total ?? 1), 4);
+  });
+
+  test('GET /tierlist: rank filter counts players by their current solo tier', async () => {
+    const roleGames = async (tiers: string[], platform?: string) => {
+      const [row] = await db<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM participants p
+        JOIN matches m ON m.id = p.match_id JOIN players pl ON pl.puuid = p.puuid
+        WHERE m.patch = ${CUR} AND NOT m.is_remake AND p.position = 'UTILITY'
+          AND pl.solo_tier::text IN ${db(tiers)}
+          ${platform ? db`AND m.platform = ${platform}` : db``}`;
+      return row?.n ?? 0;
+    };
+    const chall = (await (
+      await get('/tierlist?role=UTILITY&rank=CHALLENGER')
+    ).json()) as TierListResponse;
+    expect(chall.filters).toEqual({ platform: 'ALL', rank: 'CHALLENGER' });
+    expect(chall.roleGames).toBe(await roleGames(['CHALLENGER']));
+    const gm = (await (
+      await get('/tierlist?role=UTILITY&rank=GRANDMASTER&platform=EUW1')
+    ).json()) as TierListResponse;
+    expect(gm.filters).toEqual({ platform: 'EUW1', rank: 'GRANDMASTER' });
+    expect(gm.roleGames).toBe(await roleGames(['CHALLENGER', 'GRANDMASTER'], 'EUW1'));
+
+    // Fewer games per champion than unfiltered, so more of them fall back to both patches.
+    const all = (await (await get('/tierlist?role=UTILITY')).json()) as TierListResponse;
+    for (const e of chall.entries) {
+      const full = all.entries.find((x) => x.championId === e.championId);
+      expect(e.games).toBeLessThan(full?.games ?? Number.POSITIVE_INFINITY);
+      expect(e.banRate).toBeGreaterThanOrEqual(0);
+      expect(e.banRate).toBeLessThan(1);
+    }
+    expect(chall.entries.filter((e) => e.patchesUsed.length > 1).length).toBeGreaterThan(
+      all.entries.filter((e) => e.patchesUsed.length > 1).length,
+    );
+
+    // Ban rate = Challenger players whose match banned it / Challenger players (patches used).
+    const e = chall.entries[0] as TierListEntry;
+    const [row] = await db<{ banned: number; total: number }[]>`
+      SELECT count(*) FILTER (WHERE EXISTS (
+               SELECT 1 FROM match_bans b WHERE b.match_id = p.match_id AND b.champion_id = ${e.championId}
+             ))::int AS banned,
+             count(*)::int AS total
+      FROM participants p
+      JOIN matches m ON m.id = p.match_id JOIN players pl ON pl.puuid = p.puuid
+      WHERE m.patch IN ${db(e.patchesUsed)} AND NOT m.is_remake AND pl.solo_tier = 'CHALLENGER'`;
+    expect(e.banRate).toBeCloseTo((row?.banned ?? 0) / (row?.total ?? 1), 4);
+  });
+
+  test('GET /tierlist: bad filters', async () => {
+    for (const qs of ['platform=EUW', 'platform=euw1', 'rank=DIAMOND', 'rank=master']) {
+      const res = await get(`/tierlist?role=TOP&${qs}`);
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as ApiErrorResponse).error.code).toBe('BAD_REQUEST');
+    }
   });
 
   test('stats refresh is skipped when matches did not change', async () => {

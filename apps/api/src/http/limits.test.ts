@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { buildCacheKey, picksCacheKey, TtlCache } from './cache.ts';
+import { buildCacheKey, picksCacheKey, TtlCache, tierListCacheKey } from './cache.ts';
 import { TokenBucketLimiter } from './rate-limit.ts';
 
 describe('TtlCache', () => {
@@ -43,6 +43,17 @@ describe('TtlCache', () => {
           { championId: 2, role: null },
         ],
       }),
+    );
+  });
+
+  test('tier list cache keys include the server and rank filters', () => {
+    const q = { role: 'UTILITY', patch: 'latest', platform: 'ALL', rank: 'MASTER' };
+    const key = tierListCacheKey(q);
+    expect(tierListCacheKey({ ...q })).toBe(key);
+    expect(tierListCacheKey({ ...q, platform: 'KR' })).not.toBe(key);
+    expect(tierListCacheKey({ ...q, rank: 'CHALLENGER' })).not.toBe(key);
+    expect(tierListCacheKey({ ...q, platform: 'KR' })).not.toBe(
+      tierListCacheKey({ ...q, rank: 'CHALLENGER' }),
     );
   });
 });

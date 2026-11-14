@@ -4,7 +4,7 @@
  * Loaders that return no `patch` column sum their rows over the patches given (see `choosePatches`).
  */
 import type { Queryable } from '@pick-league/db';
-import type { CompTrait, PatchId, Position } from '@pick-league/shared';
+import type { CompTrait, PatchId, Platform, Position } from '@pick-league/shared';
 import type { BanRow, PatchMatchesRow } from '../engine/tierlist.ts';
 import type {
   ChampionTraitRow,
@@ -451,4 +451,136 @@ export async function loadPatchMatches(
   const rows = await q<{ patch: string; matches: number }[]>`
     SELECT patch, matches FROM stats_patch_matches WHERE patch IN ${q(patches)}`;
   return rows.map((r) => ({ patch: r.patch, matches: r.matches }));
+}
+
+// ---------------------------------------------------------------------------
+// Tier list filtered by server and rank (0006_tierlist_filters.sql): rows of the matching
+// (platform, rank_level) segments summed per key. Same shapes as the unfiltered loaders above.
+// ---------------------------------------------------------------------------
+
+/** Segments to sum: one platform (null = every server) and the minimum player rank level. */
+export interface TierListSegment {
+  platform: Platform | null;
+  /** 0 = every player, 1 = Grandmaster+, 2 = Challenger (see stats_tierlist_participants). */
+  minRankLevel: number;
+}
+
+const inSegment = (q: Queryable, s: TierListSegment) =>
+  q`${s.platform ? q`AND platform = ${s.platform}` : q``} AND rank_level >= ${s.minRankLevel}`;
+
+/** Champion + role baselines of one role. */
+export async function loadSegmentRoleStats(
+  q: Queryable,
+  patches: PatchId[],
+  position: Position,
+  segment: TierListSegment,
+): Promise<RoleStatRow[]> {
+  const rows = await q<{ patch: string; champion_id: number; games: number; wins: number }[]>`
+    SELECT patch, champion_id, sum(games)::int AS games, sum(wins)::int AS wins
+    FROM stats_tierlist_roles
+    WHERE patch IN ${q(patches)} AND position = ${position} ${inSegment(q, segment)}
+    GROUP BY patch, champion_id`;
+  return rows.map((r) => ({
+    patch: r.patch,
+    championId: r.champion_id,
+    position,
+    games: r.games,
+    wins: r.wins,
+  }));
+}
+
+/** Every champion in `position` vs lane opponents in `enemyPositions`. */
+export async function loadSegmentVsForRole(
+  q: Queryable,
+  patches: PatchId[],
+  position: Position,
+  enemyPositions: readonly Position[],
+  segment: TierListSegment,
+): Promise<VsRow[]> {
+  const rows = await q<
+    {
+      patch: string;
+      champion_id: number;
+      enemy_position: Position;
+      enemy_id: number;
+      games: number;
+      wins: number;
+    }[]
+  >`
+    SELECT patch, champion_id, enemy_position, enemy_id,
+           sum(games)::int AS games, sum(wins)::int AS wins
+    FROM stats_tierlist_vs
+    WHERE patch IN ${q(patches)} AND position = ${position}
+      AND enemy_position IN ${q([...enemyPositions])} ${inSegment(q, segment)}
+    GROUP BY patch, champion_id, enemy_position, enemy_id`;
+  return rows.map((r) => ({
+    patch: r.patch,
+    position,
+    championId: r.champion_id,
+    enemyPosition: r.enemy_position,
+    enemyId: r.enemy_id,
+    games: r.games,
+    wins: r.wins,
+  }));
+}
+
+/** Every champion in `position` with duo partners in `allyPositions`. */
+export async function loadSegmentWithForRole(
+  q: Queryable,
+  patches: PatchId[],
+  position: Position,
+  allyPositions: readonly Position[],
+  segment: TierListSegment,
+): Promise<WithRow[]> {
+  const rows = await q<
+    {
+      patch: string;
+      champion_id: number;
+      ally_position: Position;
+      ally_id: number;
+      games: number;
+      wins: number;
+    }[]
+  >`
+    SELECT patch, champion_id, ally_position, ally_id,
+           sum(games)::int AS games, sum(wins)::int AS wins
+    FROM stats_tierlist_with
+    WHERE patch IN ${q(patches)} AND position = ${position}
+      AND ally_position IN ${q([...allyPositions])} ${inSegment(q, segment)}
+    GROUP BY patch, champion_id, ally_position, ally_id`;
+  return rows.map((r) => ({
+    patch: r.patch,
+    position,
+    championId: r.champion_id,
+    allyPosition: r.ally_position,
+    allyId: r.ally_id,
+    games: r.games,
+    wins: r.wins,
+  }));
+}
+
+/** Ban counts weighted per counted player (`bans` / `loadSegmentTotals` = ban rate). */
+export async function loadSegmentBans(
+  q: Queryable,
+  patches: PatchId[],
+  segment: TierListSegment,
+): Promise<BanRow[]> {
+  const rows = await q<{ patch: string; champion_id: number; bans: number }[]>`
+    SELECT patch, champion_id, sum(participants)::int AS bans FROM stats_tierlist_bans
+    WHERE patch IN ${q(patches)} ${inSegment(q, segment)}
+    GROUP BY patch, champion_id`;
+  return rows.map((r) => ({ patch: r.patch, championId: r.champion_id, bans: r.bans }));
+}
+
+/** Counted players per patch (ban rate denominator, returned as `matches`). */
+export async function loadSegmentTotals(
+  q: Queryable,
+  patches: PatchId[],
+  segment: TierListSegment,
+): Promise<PatchMatchesRow[]> {
+  const rows = await q<{ patch: string; participants: number }[]>`
+    SELECT patch, sum(participants)::int AS participants FROM stats_tierlist_totals
+    WHERE patch IN ${q(patches)} ${inSegment(q, segment)}
+    GROUP BY patch`;
+  return rows.map((r) => ({ patch: r.patch, matches: r.participants }));
 }

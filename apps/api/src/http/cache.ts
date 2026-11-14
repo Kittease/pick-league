@@ -73,6 +73,16 @@ export function picksCacheKey(req: {
   ]);
 }
 
+/** Cache key of a tier list request (parsed query: defaults filled in, so `?role=X` = all defaults). */
+export function tierListCacheKey(query: {
+  role: string;
+  patch: string;
+  platform: string;
+  rank: string;
+}): string {
+  return JSON.stringify(['tierlist', query.role, query.patch, query.platform, query.rank]);
+}
+
 /** Cache key of a build request. */
 export function buildCacheKey(req: {
   championId: number;

@@ -13,7 +13,7 @@
 import { z } from 'zod';
 import { POSITIONS, type Position } from './domain.ts';
 import type { PatchId } from './patch.ts';
-import type { Platform } from './platform.ts';
+import { PLATFORMS, type Platform } from './platform.ts';
 import type {
   ChampionInfo,
   StaticItem,
@@ -416,10 +416,45 @@ export const TIER_LIST_ROUTE = '/tierlist';
 export const TIERS = ['S', 'A', 'B', 'C', 'D'] as const;
 export type Tier = (typeof TIERS)[number];
 
-/** Query string of `GET /tierlist`. `patch` = a patch id or 'latest' (default). */
+/** Server filter of the tier list: one platform, or 'ALL' (default). */
+export const TIER_LIST_PLATFORMS = ['ALL', ...PLATFORMS] as const;
+export type TierListPlatform = (typeof TIER_LIST_PLATFORMS)[number];
+
+/**
+ * Rank filter of the tier list, on each counted player's current solo tier (not the tier at match
+ * time): 'MASTER' = Master+ (default, every player: the matches come from Master+ ladders),
+ * 'GRANDMASTER' = Grandmaster and Challenger players, 'CHALLENGER' = Challenger players only.
+ */
+export const TIER_LIST_RANKS = ['MASTER', 'GRANDMASTER', 'CHALLENGER'] as const;
+export type TierListRank = (typeof TIER_LIST_RANKS)[number];
+
+export interface TierListFilters {
+  platform: TierListPlatform;
+  rank: TierListRank;
+}
+
+export const DEFAULT_TIER_LIST_FILTERS: TierListFilters = { platform: 'ALL', rank: 'MASTER' };
+
+/** Filters from untrusted input (IPC, local storage): unknown values fall back to the defaults. */
+export function toTierListFilters(value: unknown): TierListFilters {
+  const v = (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>;
+  const pick = <T extends string>(list: readonly T[], x: unknown, fallback: T): T =>
+    list.includes(x as T) ? (x as T) : fallback;
+  return {
+    platform: pick(TIER_LIST_PLATFORMS, v.platform, DEFAULT_TIER_LIST_FILTERS.platform),
+    rank: pick(TIER_LIST_RANKS, v.rank, DEFAULT_TIER_LIST_FILTERS.rank),
+  };
+}
+
+/**
+ * Query string of `GET /tierlist`. `patch` = a patch id or 'latest' (default). `platform` and
+ * `rank` filter the counted players (defaults: every server, Master+ = no rank filter).
+ */
 export const tierListQuerySchema = z.object({
   role: positionSchema,
   patch: z.union([z.literal('latest'), patchIdSchema]).default('latest'),
+  platform: z.enum(TIER_LIST_PLATFORMS).default('ALL'),
+  rank: z.enum(TIER_LIST_RANKS).default('MASTER'),
 });
 export type TierListQuery = z.infer<typeof tierListQuerySchema>;
 export type TierListQueryInput = z.input<typeof tierListQuerySchema>;
@@ -447,7 +482,10 @@ export interface TierListEntry {
   games: number;
   /** Share of the role's games on `patchesUsed` played by this champion (~1 summed over a role). */
   pickRate: number;
-  /** Share of matches of `patchesUsed` where this champion was banned (by either team). */
+  /**
+   * Share of matches of `patchesUsed` where this champion was banned (by either team). With a rank
+   * filter: share of the counted players' matches (a match counts once per counted player in it).
+   */
   banRate: number;
   /** 0..1, derived from the sample size. */
   confidence: number;
@@ -465,7 +503,9 @@ export interface TierListResponse {
   role: Position;
   /** Requested patch ('latest' resolved to the current patch). */
   patch: PatchId;
-  /** Games played in this role on `patch` (one per team per match). */
+  /** Filters applied (defaults filled in). Every count and rate below is restricted to them. */
+  filters: TierListFilters;
+  /** Games played in this role on `patch` (one per team per match) by the counted players. */
   roleGames: number;
   /** Sorted by score, descending. */
   entries: TierListEntry[];

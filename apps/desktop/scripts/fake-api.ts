@@ -27,6 +27,8 @@ import {
   type StaticDataResponse,
   type StatsRefreshResponse,
   type StatsStatusResponse,
+  TIER_LIST_PLATFORMS,
+  TIER_LIST_RANKS,
   TIER_LIST_ROUTE,
   type Tier,
   type TierListEntry,
@@ -497,8 +499,14 @@ async function build(body: unknown): Promise<BuildResponse> {
 }
 
 async function tierList(params: URLSearchParams): Promise<TierListResponse> {
-  const { role } = tierListQuerySchema.parse(Object.fromEntries(params));
+  const { role, platform, rank } = tierListQuerySchema.parse(Object.fromEntries(params));
   const s = await getStatic();
+  // Filters: fewer games (a server ≈ 1/4, Grandmaster+ ≈ 40 %, Challenger ≈ 10 %) and other
+  // numbers. The default filters (seg = 0) give the same list as before.
+  const share =
+    (platform === 'ALL' ? 1 : 0.25) * { MASTER: 1, GRANDMASTER: 0.4, CHALLENGER: 0.1 }[rank];
+  const seg = TIER_LIST_PLATFORMS.indexOf(platform) * 10 + TIER_LIST_RANKS.indexOf(rank);
+  const scaled = (n: number) => Math.max(1, Math.round(n * share));
   const inRole = (r: Position) =>
     s.champions.filter((c) => c.tags.some((t) => ROLE_TAGS[r].includes(t)));
   const pool = inRole(role);
@@ -513,21 +521,22 @@ async function tierList(params: URLSearchParams): Promise<TierListResponse> {
       .filter((o) => o.id !== c)
       .slice(0, 24)
       .map((o) => {
-        const n = games(c, o.id, seed);
+        const n = scaled(games(c, o.id, seed));
         const d = round(delta(c, o.id, seed) * 1.6 * (n / (n + 120)));
         return { championId: o.id, role: r, delta: d, winRate: round(0.5 + d * 1.3), games: n };
-      });
+      })
+      .filter((x) => x.games >= 15);
   const byDelta = (a: TierListRelation, b: TierListRelation) => b.delta - a.delta;
   const raw = pool.map((c) => {
-    const n = games(c.id, 9) * 3;
-    const winRate = round(0.46 + rand(c.id, 5) * 0.08);
-    const matchups = relation(c.id, pool, role, 11).sort(byDelta);
+    const n = scaled(games(c.id, 9) * 3);
+    const winRate = round(0.46 + rand(c.id, 5 + seg * 100) * 0.08);
+    const matchups = relation(c.id, pool, role, 11 + seg * 100).sort(byDelta);
     return {
       championId: c.id,
       score: round(((winRate - 0.5) * n) / (n + 300), 5),
       winRate,
       games: n,
-      banRate: round(rand(c.id, 6) ** 3 * 0.35),
+      banRate: round(rand(c.id, 6 + seg * 100) ** 3 * 0.35),
       confidence: round(n / (n + 200), 3),
       patchesUsed: patchesOf(s, n),
       bestMatchups: matchups.filter((m) => m.delta > 0).slice(0, 3),
@@ -536,7 +545,7 @@ async function tierList(params: URLSearchParams): Promise<TierListResponse> {
         .reverse()
         .slice(0, 3),
       bestDuos: DUO[role]
-        ? relation(c.id, duoPool, DUO[role], 12)
+        ? relation(c.id, duoPool, DUO[role], 12 + seg * 100)
             .filter((d) => d.delta > 0)
             .sort(byDelta)
             .slice(0, 3)
@@ -556,7 +565,7 @@ async function tierList(params: URLSearchParams): Promise<TierListResponse> {
     if (e.score <= 0 && (tier === 'S' || tier === 'A')) tier = 'B';
     return { ...e, tier, pickRate: round(e.games / roleGames) };
   });
-  return { role, patch: patchOf(s), roleGames, entries };
+  return { role, patch: patchOf(s), filters: { platform, rank }, roleGames, entries };
 }
 
 class HttpError extends Error {
