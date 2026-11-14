@@ -11,7 +11,7 @@
  */
 
 import { z } from 'zod';
-import { POSITIONS, type Position } from './domain.ts';
+import { POSITIONS, type Position, type SoloTier } from './domain.ts';
 import type { PatchId } from './patch.ts';
 import { PLATFORMS, type Platform } from './platform.ts';
 import type {
@@ -631,4 +631,138 @@ export interface TierListChampionResponse {
   synergies: TierListRelation[] | null;
   /** Filters applied (defaults filled in). */
   filters: TierListFilters;
+}
+
+// ---------------------------------------------------------------------------
+// POST /live/players
+// Rank, recent form and mastery of the players of the user's game in progress. Only once the
+// game has started (never in champion select, where Riot hides identities). The API only queues
+// the lookups: the worker fetches them from Riot (it holds the key), so the desktop repeats the
+// same request every few seconds until every player is done. Never cached. Puuids go in, they
+// never come back out (players are answered by their index in the request).
+// ---------------------------------------------------------------------------
+
+export const LIVE_PLAYERS_ROUTE = '/live/players';
+
+export const LIVE_TEAMS = ['ally', 'enemy'] as const;
+export type LiveTeam = (typeof LIVE_TEAMS)[number];
+
+/** Riot puuids are 78 characters of [A-Za-z0-9_-]; some room is left. */
+export const puuidSchema = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/, 'expected a puuid');
+
+export const livePlayerRequestSchema = z.object({
+  puuid: puuidSchema,
+  /** Champion the player has in this game. */
+  championId: championIdSchema,
+  /** Position in this game; null when the client does not say (blind pick, customs). */
+  position: positionSchema.nullable(),
+  /** Relative to the user. */
+  team: z.enum(LIVE_TEAMS),
+});
+
+export const livePlayersRequestSchema = z.object({
+  /** The user's platform (from the League client). */
+  platform: z.enum(PLATFORMS),
+  /** The players of the game (the user included, or not): at most 10, each puuid once. */
+  players: z
+    .array(livePlayerRequestSchema)
+    .min(1)
+    .max(10)
+    .refine((list) => new Set(list.map((p) => p.puuid)).size === list.length, {
+      message: 'each puuid at most once',
+    }),
+});
+
+export type LivePlayerRequest = z.infer<typeof livePlayerRequestSchema>;
+export type LivePlayersRequest = z.infer<typeof livePlayersRequestSchema>;
+
+export const LIVE_LOOKUP_STATUSES = [
+  /** The worker is fetching it (some parts may already be there). */
+  'pending',
+  /** Everything is in. */
+  'ready',
+  /** Riot kept failing for this player (retried when asked again a few minutes later). */
+  'failed',
+  /** No worker collects this platform: nothing will come. */
+  'unsupported',
+] as const;
+export type LiveLookupStatus = (typeof LIVE_LOOKUP_STATUSES)[number];
+
+/** Whether the worker can serve the lookups of this platform right now. */
+export const LIVE_WORKER_STATES = [
+  'ok',
+  /** No heartbeat for `COLLECTION_STALL_MS`: the worker is not running. */
+  'stalled',
+  /** Riot rejects the API key. */
+  'key_rejected',
+  /** The worker does not run this platform (`PLATFORMS`). */
+  'unsupported',
+] as const;
+export type LiveWorkerState = (typeof LIVE_WORKER_STATES)[number];
+
+/** Recent matches looked at per player (the most recent ranked solo/duo ones). */
+export const LIVE_RECENT_MATCHES = 10;
+/** Off-role needs at least this many recent matches with a known position. */
+export const LIVE_OFF_ROLE_MIN_MATCHES = 5;
+/** Off-role: the position played now is under this share of those recent matches. */
+export const LIVE_OFF_ROLE_MAX_SHARE = 0.2;
+
+/** Solo/duo rank of this season. */
+export interface LiveRank {
+  tier: SoloTier;
+  /** 1..4; null for Master+. */
+  division: number | null;
+  lp: number;
+  wins: number;
+  losses: number;
+  /** wins / (wins + losses); 0 without games. */
+  winRate: number;
+}
+
+export interface LiveRoleCount {
+  position: Position;
+  matches: number;
+}
+
+/** From the player's most recent ranked solo/duo matches (remakes left out). */
+export interface LiveRecentStats {
+  matches: number;
+  wins: number;
+  /** On the champion they play in this game. */
+  championMatches: number;
+  championWins: number;
+  /** Positions played (known ones), most played first. */
+  roles: LiveRoleCount[];
+  /** Most played position; null without any known one. */
+  mainRole: Position | null;
+  /**
+   * The position played now is under `LIVE_OFF_ROLE_MAX_SHARE` of their recent matches (with at
+   * least `LIVE_OFF_ROLE_MIN_MATCHES` of them); null when unknown (no position now, too few).
+   */
+  offRole: boolean | null;
+}
+
+export interface LivePlayerResult {
+  /** Index of the player in the request. */
+  index: number;
+  team: LiveTeam;
+  championId: number;
+  position: Position | null;
+  status: LiveLookupStatus;
+  /** The rank is in (`rank` null then means unranked this season). */
+  rankLoaded: boolean;
+  rank: LiveRank | null;
+  /** Mastery of `championId` (0 / 0 when never played); null until it is in. */
+  mastery: { level: number; points: number } | null;
+  /** Null until the recent matches are in. */
+  recent: LiveRecentStats | null;
+}
+
+export interface LivePlayersResponse {
+  platform: Platform;
+  worker: LiveWorkerState;
+  /** Every player is ready, failed or unsupported: no need to ask again. */
+  done: boolean;
+  /** Same order as the request. */
+  players: LivePlayerResult[];
 }

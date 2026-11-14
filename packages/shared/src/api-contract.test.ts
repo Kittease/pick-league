@@ -1,5 +1,48 @@
 import { describe, expect, test } from 'bun:test';
-import { tierListQuerySchema, toTierListFilters } from './api-contract.ts';
+import {
+  livePlayersRequestSchema,
+  tierListQuerySchema,
+  toTierListFilters,
+} from './api-contract.ts';
+
+describe('live players request', () => {
+  const player = (n: number) => ({
+    puuid: `fake-live-puuid-${n}`,
+    championId: 412,
+    position: 'UTILITY',
+    team: n < 5 ? 'ally' : 'enemy',
+  });
+
+  test('accepts up to 10 distinct players of a crawled platform', () => {
+    const players = Array.from({ length: 10 }, (_, i) => player(i));
+    const parsed = livePlayersRequestSchema.parse({ platform: 'EUW1', players });
+    expect(parsed.players).toHaveLength(10);
+    expect(
+      livePlayersRequestSchema.safeParse({
+        platform: 'KR',
+        players: [{ ...player(1), position: null }],
+      }).success,
+    ).toBe(true);
+  });
+
+  test('rejects bad platforms, sizes, duplicates and malformed players', () => {
+    const valid = (body: unknown) => livePlayersRequestSchema.safeParse(body).success;
+    expect(valid({ platform: 'EUW', players: [player(1)] })).toBe(false);
+    expect(valid({ platform: 'EUW1', players: [] })).toBe(false);
+    expect(
+      valid({ platform: 'EUW1', players: Array.from({ length: 11 }, (_, i) => player(i)) }),
+    ).toBe(false);
+    expect(valid({ platform: 'EUW1', players: [player(1), player(1)] })).toBe(false);
+    expect(valid({ platform: 'EUW1', players: [{ ...player(1), puuid: 'not a puuid/..' }] })).toBe(
+      false,
+    );
+    expect(valid({ platform: 'EUW1', players: [{ ...player(1), team: 'blue' }] })).toBe(false);
+    expect(valid({ platform: 'EUW1', players: [{ ...player(1), championId: 0 }] })).toBe(false);
+    expect(valid({ platform: 'EUW1', players: [{ ...player(1), position: 'SUPPORT' }] })).toBe(
+      false,
+    );
+  });
+});
 
 describe('tier list filters', () => {
   test('query defaults to every server and Master+', () => {
