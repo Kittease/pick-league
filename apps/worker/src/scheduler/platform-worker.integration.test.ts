@@ -569,7 +569,7 @@ d('PlatformWorker (Postgres)', () => {
       riot,
       patches,
       clock: fixedClock,
-      options: { maxTransientErrors: 3 },
+      options: { maxTransientErrors: 4 },
     });
     riot.matches.set('EUW1_7000000700', makeMatch('EUW1_7000000700', '15.22.1.1'));
     riot.errors.set('match:EUW1_7000000700', [
@@ -594,10 +594,11 @@ d('PlatformWorker (Postgres)', () => {
     // Safety cap: a match that keeps failing transiently ends up FAILED.
     riot.errors.set(
       'match:EUW1_7000000701',
-      Array.from({ length: 3 }, () => new RiotHttpError(500, 'match-v5.match', '/x')),
+      Array.from({ length: 4 }, () => new RiotHttpError(500, 'match-v5.match', '/x')),
     );
-    expect(await capped.processMatch(queued('EUW1_7000000701'))).toBe('retry');
-    expect(await capped.processMatch(queued('EUW1_7000000701'))).toBe('retry');
+    for (let i = 0; i < 3; i++) {
+      expect(await capped.processMatch(queued('EUW1_7000000701'))).toBe('retry');
+    }
     expect(await capped.processMatch(queued('EUW1_7000000701'))).toBe('failed');
     expect(await queueRow('EUW1_7000000701')).toMatchObject({ attempts: 0, status: 'FAILED' });
   });
