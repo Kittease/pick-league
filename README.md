@@ -60,9 +60,11 @@ bun run dev:desktop      # opens the app; start League whenever you like
   champion select it shows the best picks for your assigned role, each with its reasons
   (win-rate delta + number of games) and **your mastery level on the champion icon**. Banned,
   picked and not-owned champions are left out.
-- When you lock in it switches to the build: items in buy order (starting, early, core,
-  situational, and for supports the quest upgrade to pick), runes, summoner spells and skill
-  order, every element with its reasons.
+  Once the lane opponent is picked, each pick also says how the lane usually goes against it
+  ("Lane phase: −420 gold · −8 CS · −310 XP at 10 min", 2v2 for the bot lane).
+- When you lock in it switches to the build: the lane phase vs your lane opponent (at 10 and
+  15 min), items in buy order (starting, early, core, situational, and for supports the quest
+  upgrade to pick), runes, summoner spells and skill order, every element with its reasons.
 - **Until the game ends** it keeps that champion select on screen, marked "In game": your
   champion and role, both teams and the build as it was when champion select ended (nothing is
   fetched or applied again). It goes back to the tier list once the game is over; a dodged
@@ -86,8 +88,9 @@ bun run dev:desktop      # opens the app; start League whenever you like
   with tier (S–D), win/pick/ban rates, confidence and your mastery; filter by server (all, KR,
   EUW, NA, VN), by rank (Master+, Grandmaster+, Challenger only — players' current rank), by
   name or owned champions; click a champion to open its details next to a compact table: best
-  and worst lane matchups, duos and synergies (other allies; not available with server/rank
-  filters) side by side — stacked when the window is narrow — each with "Show all", and a
+  and worst lane matchups (with the lane gold difference at 10 min, e.g. "+250g @10"; CS, XP
+  and sample on hover; not available with server/rank filters), duos and synergies (other
+  allies; not available with server/rank filters) side by side — stacked when the window is narrow — each with "Show all", and a
   generic build. The
   app switches to champion select by itself when one starts (unless you are reading a
   champion's details); once you go back to the tier list it stays there until the next
@@ -161,12 +164,12 @@ These commands read `DATABASE_URL` (and the other settings) from the root `.env`
 | `GET /health` | `{ ok, db, latestPatch, matchCount }` |
 | `GET /patches` | kept patches with match counts per platform |
 | `GET /static/:patch` | champions, items, runes, stat shards, summoner spells (`latest` = newest patch) |
-| `POST /recommendations/picks` | ranked champions for a role, with reasons |
-| `POST /recommendations/build` | items, runes, summoner spells and skill order, with reasons |
+| `POST /recommendations/picks` | ranked champions for a role, with reasons; with a lane opponent, each candidate also gets a `lane_phase` reason (gold / CS / XP difference at 10 min, bot lane 2v2) right after its matchup |
+| `POST /recommendations/build` | items, runes, summoner spells and skill order, with reasons; `lanePhase` (optional): `lane_phase` reasons at 10 and 15 min vs the lane opponent |
 | `GET /stats/status` | `{ refreshing, lastRefreshedAt, lastRefreshDurationMs, matchesIncluded, matchesStored, pendingMatches, collection }`; `collection` = `{ state, platforms }`, `state` one of `collecting`, `key_rejected` (Riot rejects the key), `stalled` (no worker heartbeat for 3 min), `unknown` (no worker status yet); `platforms` = `[{ platform, heartbeatAt, authRejectedSince, lastError, lastErrorAt, lastMatchStoredAt }]` |
 | `POST /stats/refresh` | starts a background stats refresh: `202 { started: true }`, or `200 { started: false, reason }` with `up_to_date`, `already_running` or `cooldown` (+ `retryAfterSeconds`) |
 | `GET /tierlist?role=UTILITY&patch=latest&platform=ALL&rank=MASTER` | tier list of a role: tiers, win/pick/ban rates, confidence. Optional filters (echoed as `filters`): `platform` = `ALL` (default), `KR`, `EUW1`, `NA1`, `VN2`; `rank` = `MASTER` (Master+, default: every player), `GRANDMASTER` (Grandmaster+), `CHALLENGER` (Challenger only), on each counted player's current solo rank |
-| `GET /tierlist/champion?role=UTILITY&championId=111&patch=latest` | one champion of the tier list: every lane matchup, duo partner and other ally (synergy) with 5+ matchups, best first, with shrunk win-rate delta, win rate and sample size. Same `platform`/`rank` filters; `synergies` is `null` when filtered |
+| `GET /tierlist/champion?role=UTILITY&championId=111&patch=latest` | one champion of the tier list: every lane matchup, duo partner and other ally (synergy) with 5+ matchups, best first, with shrunk win-rate delta, win rate and sample size; matchups also carry `lane` (gold / XP / CS difference at 10 min) when there are 20+ matchups with timeline frames. Same `platform`/`rank` filters; `synergies` is `null` and `lane` is omitted when filtered |
 
 Errors are `{ error: { code, message, details? } }`: `400 BAD_REQUEST` (invalid body or query),
 `404 NOT_FOUND` (unknown route, patch or champion: the requested `championId` of a build or of
@@ -177,7 +180,11 @@ Errors are `{ error: { code, message, details? } }`: `400 BAD_REQUEST` (invalid 
 
 Request/response types are in `packages/shared/src/api-contract.ts`. Every reason carries the
 win-rate delta (after shrinkage) and its sample size; `patchesUsed` lists the patches combined (the previous one is added when the
-current patch has fewer than 150 games of the champion in the role).
+current patch has fewer than 150 games of the champion in the role). `lane_phase` reasons only
+explain (delta 0, never in the score): `lane: { minute, gold, xp, cs, duo, games }` is the average
+difference vs the lane opponent from the timeline frames (`stats_champion_lane_phase`), shrunk
+toward 0 by sample size, 1v1 for top / jungle / mid and 2v2 for the bot lane (own + duo partner vs
+both enemy bot laners).
 
 The API owns the stats layer: materialized views (`packages/db/migrations/0002_stats_views.sql`)
 refreshed in the background every `STATS_REFRESH_MINUTES` (default 15) when matches changed.
