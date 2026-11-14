@@ -46,6 +46,8 @@ export const API_ERROR_CODES = [
   'BAD_REQUEST',
   /** 404: unknown route, unknown patch, unknown champion. */
   'NOT_FOUND',
+  /** 413: request body over `MAX_REQUEST_BODY_BYTES`. */
+  'PAYLOAD_TOO_LARGE',
   /** 429: per-IP rate limit; see `Retry-After` header. */
   'RATE_LIMITED',
   /** 503: the database has no usable data yet (no patch / no matches ingested). */
@@ -253,6 +255,11 @@ export interface StaticDataResponse {
 // Request schemas (zod v4) — the API validates bodies with these.
 // ---------------------------------------------------------------------------
 
+/** Largest JSON body the API accepts (POST routes); bigger bodies get 413 PAYLOAD_TOO_LARGE. */
+export const MAX_REQUEST_BODY_BYTES = 64 * 1024;
+/** Max `availableChampionIds` of a picks request (there are ~170 champions). */
+export const MAX_AVAILABLE_CHAMPION_IDS = 1000;
+
 export const positionSchema = z.enum(POSITIONS);
 export const championIdSchema = z.number().int().positive();
 export const patchIdSchema = z.string().regex(/^\d+\.\d+$/, 'expected a patch id like "15.22"');
@@ -273,7 +280,7 @@ export const picksRequestSchema = z.object({
   /** All bans of both teams; excluded from candidates. */
   bans: z.array(championIdSchema).max(10).default([]),
   /** If given, candidates are restricted to these (e.g. the user's owned champions). */
-  availableChampionIds: z.array(championIdSchema).optional(),
+  availableChampionIds: z.array(championIdSchema).max(MAX_AVAILABLE_CHAMPION_IDS).optional(),
   /** Max candidates returned (default 20). */
   limit: z.number().int().min(1).max(100).optional(),
   /** Force a patch instead of the automatic current/previous fallback. */

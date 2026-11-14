@@ -2,6 +2,7 @@ import type { Db } from '@pick-league/db';
 import {
   API_ROUTES,
   buildRequestSchema,
+  MAX_REQUEST_BODY_BYTES,
   picksRequestSchema,
   TIER_LIST_CHAMPION_ROUTE,
   TIER_LIST_ROUTE,
@@ -9,6 +10,7 @@ import {
   tierListQuerySchema,
 } from '@pick-league/shared';
 import { type Context, Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import type { z } from 'zod';
 import { ApiError } from '../errors.ts';
@@ -98,6 +100,17 @@ export function createApp(deps: AppDeps): Hono<Env> {
     }
     await next();
   });
+  // Bodies are read whole before validation: cap them (Content-Length, else while streaming).
+  const limitBody = bodyLimit({
+    maxSize: MAX_REQUEST_BODY_BYTES,
+    onError: () => {
+      throw new ApiError(
+        'PAYLOAD_TOO_LARGE',
+        `Request body over ${MAX_REQUEST_BODY_BYTES / 1024} KB`,
+      );
+    },
+  });
+  app.use('*', (c, next) => (c.req.method === 'POST' ? limitBody(c, next) : next()));
 
   const cached = async <T>(c: Context<Env>, key: string, compute: () => Promise<T>) => {
     const { value, hit } = await cache.getOrCompute(key, compute);
