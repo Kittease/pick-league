@@ -19,6 +19,9 @@
 -- red = team 200), then every (own player, enemy player) pair of the lane gets the difference
 -- from its side. No self-join of participants.
 
+-- Built serially: parallel hash joins live in /dev/shm, only 64 MB in Docker (see stats/refresh.ts).
+SET LOCAL max_parallel_workers_per_gather = 0;
+
 CREATE MATERIALIZED VIEW stats_champion_lane_phase AS
 WITH lanes AS (
   SELECT
