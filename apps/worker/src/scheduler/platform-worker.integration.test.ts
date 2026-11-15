@@ -3,16 +3,21 @@ import {
   createDb,
   type Db,
   enqueueMatchIds,
+  getLiveGame,
   getLiveProfiles,
   getMatchesSyncedUntil,
   listWorkerStatus,
   migrate,
+  readPlayPause,
+  requestLiveGame,
   requestLiveLookups,
+  setClientActivity,
   upsertPatchStaticData,
 } from '@pick-league/db';
 import type {
   AccountDto,
   ChampionMasteryDto,
+  CurrentGameInfoDto,
   LadderTier,
   LeagueEntryDto,
   LeagueListDto,
@@ -21,6 +26,7 @@ import type {
   StaticPatchData,
   TimelineDto,
 } from '@pick-league/shared';
+import { silentLogger } from '../log.ts';
 import matchFixture from '../parser/fixtures/match.json';
 import timelineFixture from '../parser/fixtures/timeline.json';
 import type { PatchVerdict } from '../patches.ts';
@@ -33,6 +39,7 @@ import {
   RiotNetworkError,
 } from '../riot/client.ts';
 import { type PatchView, PlatformWorker } from './platform-worker.ts';
+import { PlayPause } from './play-pause.ts';
 
 const URL = process.env.DATABASE_URL_TEST;
 const d = URL ? describe : describe.skip;
@@ -164,6 +171,27 @@ class FakeRiot implements RiotApi {
         inactive: false,
       },
     ];
+  }
+  /** The game spectator-v5 shows for the fake user (null = 404). */
+  activeGame: CurrentGameInfoDto | null = null;
+  async getAccountByRiotId(
+    _p: Platform,
+    gameName: string,
+    tagLine: string,
+    priority: Priority,
+  ): Promise<AccountDto | null> {
+    this.calls.push(`riot-id:${gameName}#${tagLine}:${priority}`);
+    if (gameName !== 'FakePlayer') return null;
+    return { puuid: 'fake-api-me', gameName, tagLine };
+  }
+  async getActiveGame(
+    _p: Platform,
+    puuid: string,
+    priority: Priority,
+  ): Promise<CurrentGameInfoDto | null> {
+    this.calls.push(`active-game:${puuid}:${priority}`);
+    this.maybeThrow('active-game');
+    return this.activeGame;
   }
   async getChampionMastery(
     _p: Platform,
@@ -835,6 +863,129 @@ d('PlatformWorker (Postgres)', () => {
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({ platform: 'EUW1', matches_added: 1, players_polled: 2 });
     expect(runs[0]?.finished_at).not.toBeNull();
+  });
+
+  describe('live games', () => {
+    const me = { platform: 'EUW1' as const, gameName: 'FakePlayer', tagLine: 'TEST' };
+
+    test("found from the user's Riot ID (spectator-v5), its players queued and looked up", async () => {
+      riot.activeGame = {
+        gameId: 9001,
+        participants: [
+          { teamId: 200, championId: 412, puuid: 'fake-api-me' },
+          { teamId: 200, championId: 21, puuid: 'fake-api-ally' },
+          { teamId: 100, championId: 89, puuid: 'fake-api-enemy' },
+          { teamId: 100, championId: 1, puuid: null, bot: true },
+          // Hidden by Riot: kept without an id, never looked up.
+          { teamId: 100, championId: 2, puuid: null, bot: false },
+        ],
+      };
+      await requestLiveGame(db, { ...me, gameId: 9001 });
+      await worker.processLiveLookups();
+      expect(riot.calls).toEqual(['riot-id:FakePlayer#TEST:6', 'active-game:fake-api-me:6']);
+      expect(await getLiveGame(db, 'EUW1', 9001)).toMatchObject({
+        status: 'READY',
+        myTeamId: 200,
+        participants: [
+          { teamId: 200, championId: 412, puuid: 'fake-api-me' },
+          { teamId: 200, championId: 21, puuid: 'fake-api-ally' },
+          { teamId: 100, championId: 89, puuid: 'fake-api-enemy' },
+          { teamId: 100, championId: 2, puuid: null },
+        ],
+      });
+      // Every participant queued at once, with the champion they play; looked up next.
+      expect(
+        (await db`SELECT puuid FROM live_player_profiles ORDER BY puuid`).map((r) => r.puuid),
+      ).toEqual(['fake-api-ally', 'fake-api-enemy', 'fake-api-me']);
+      riot.calls = [];
+      expect(await worker.processLiveLookups()).toBe(3);
+      expect(riot.calls).toContain('champion-mastery:fake-api-enemy:89:6');
+
+      // Another game of the same user: the account is not asked for again.
+      riot.calls = [];
+      riot.activeGame = { ...riot.activeGame, gameId: 9002 };
+      await requestLiveGame(db, { ...me, gameId: 9002 });
+      await worker.processLiveLookups();
+      expect(riot.calls[0]).toBe('active-game:fake-api-me:6');
+    });
+
+    test('not shown by Riot: asked again, then not found; unknown Riot ID: not found', async () => {
+      const w = new PlatformWorker({
+        platform: 'EUW1',
+        db,
+        riot,
+        patches,
+        clock: fixedClock,
+        options: { idleMs: 10, live: { gameNotFoundRetryMs: 0, gameNotFoundAttempts: 2 } },
+      });
+      await requestLiveGame(db, { ...me, gameId: 9003 });
+      await w.processLiveLookups();
+      expect(await getLiveGame(db, 'EUW1', 9003)).toMatchObject({ status: 'PENDING' });
+      await w.processLiveLookups();
+      expect(await getLiveGame(db, 'EUW1', 9003)).toMatchObject({
+        status: 'FAILED',
+        lastError: 'not_found: Riot does not show this game',
+      });
+
+      await requestLiveGame(db, { ...me, gameName: 'Nobody', gameId: 9004 });
+      await w.processLiveLookups();
+      expect((await getLiveGame(db, 'EUW1', 9004))?.lastError).toStartWith('not_found');
+    });
+  });
+
+  describe('paused while the user plays', () => {
+    test('collection loops wait, live lookups go on, resumed after the game', async () => {
+      const pause = new PlayPause({ db, clock: fixedClock, log: silentLogger });
+      const w = new PlatformWorker({
+        platform: 'EUW1',
+        db,
+        riot,
+        patches,
+        clock: fixedClock,
+        pause,
+        options: { idleMs: 10, live: { pollMs: 10 } },
+      });
+      await setClientActivity(
+        db,
+        { client: 'desktop', phase: 'InProgress', busyForMs: 90_000 },
+        new Date(NOW),
+      );
+      expect(await pause.check()).toBe(true);
+      await requestLiveLookups(db, 'EUW1', [{ puuid: 'fake-live-puuid-1', championId: 412 }]);
+      const ac = new AbortController();
+      const run = w.start(ac.signal);
+      for (let i = 0; i < 100; i++) {
+        const [p] = await getLiveProfiles(db, [{ puuid: 'fake-live-puuid-1', championId: 412 }]);
+        if (p?.status === 'READY') break;
+        await Bun.sleep(20);
+      }
+      // The live lookup ran; the ladder was not even read.
+      expect(riot.calls.some((c) => c.startsWith('entries:fake-live-puuid-1'))).toBe(true);
+      expect(riot.calls.some((c) => c.startsWith('league:'))).toBe(false);
+
+      await setClientActivity(
+        db,
+        { client: 'desktop', phase: 'EndOfGame', busyForMs: null },
+        new Date(NOW),
+      );
+      expect(await pause.check()).toBe(false);
+      for (let i = 0; i < 100 && !riot.calls.some((c) => c.startsWith('league:')); i++) {
+        await Bun.sleep(20);
+      }
+      expect(riot.calls.some((c) => c.startsWith('league:'))).toBe(true);
+      ac.abort();
+      await run;
+    });
+
+    test('the pause ends by itself when the desktop stops renewing it', async () => {
+      await setClientActivity(
+        db,
+        { client: 'desktop', phase: 'ChampSelect', busyForMs: 90_000 },
+        new Date(NOW),
+      );
+      expect((await readPlayPause(db, new Date(NOW + 60_000))).paused).toBe(true);
+      expect((await readPlayPause(db, new Date(NOW + 91_000))).paused).toBe(false);
+    });
   });
 
   describe('live lookups', () => {

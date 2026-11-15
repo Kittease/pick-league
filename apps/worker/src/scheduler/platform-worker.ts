@@ -70,6 +70,7 @@ import { PRIORITY, type RiotApi, RiotAuthError } from '../riot/client.ts';
 import { toSoloRank } from '../riot/ranks.ts';
 import { classifyError, DeterministicError } from './errors.ts';
 import { type LiveLookupOptions, LiveLookups } from './live-lookup.ts';
+import type { PlayPause } from './play-pause.ts';
 import { WorkSource } from './work-source.ts';
 
 const HOUR = 3_600_000;
@@ -158,6 +159,8 @@ export interface PlatformWorkerDeps {
   /** Requests sent so far for this platform (for `worker_runs`). */
   requestCount?: () => number;
   options?: Partial<SchedulerOptions>;
+  /** The user is playing: collection loops wait (live lookups go on). Shared by the platforms. */
+  pause?: PlayPause;
 }
 
 /** 'retry': transient error, the match was deferred without counting an attempt. */
@@ -298,6 +301,7 @@ export class PlatformWorker {
     null;
   private lastError: string | null = null;
   private authPausedUntil = 0;
+  private readonly pause: PlayPause | undefined;
   /** Whether Riot accepts the key, as last seen ('unknown' until the first response). */
   private authState: 'unknown' | 'ok' | 'rejected' = 'unknown';
   private statusWrites: Promise<void> = Promise.resolve();
@@ -310,6 +314,7 @@ export class PlatformWorker {
     this.log = (deps.log ?? silentLogger).child({ platform: deps.platform });
     this.clock = deps.clock ?? systemClock;
     this.requestCount = deps.requestCount ?? (() => 0);
+    this.pause = deps.pause;
     this.opts = {
       ...DEFAULT_SCHEDULER_OPTIONS,
       ...deps.options,
@@ -941,6 +946,7 @@ export class PlatformWorker {
     while (!signal.aborted) {
       try {
         await this.waitForAuth(signal);
+        await this.waitForPlay(signal);
         if (this.clock.now() >= refreshAt) {
           if (!first) await this.rotateRun();
           first = false;
@@ -972,6 +978,7 @@ export class PlatformWorker {
       let item: T | null = null;
       try {
         await this.waitForAuth(signal);
+        await this.waitForPlay(signal);
         item = await next();
       } catch (err) {
         if (isAbortError(err)) break;
@@ -1079,12 +1086,19 @@ export class PlatformWorker {
       getMasteries: (...a) => ok(riot.getMasteries(...a)),
       getLeagueEntries: (...a) => ok(riot.getLeagueEntries(...a)),
       getChampionMastery: (...a) => ok(riot.getChampionMastery(...a)),
+      getAccountByRiotId: (...a) => ok(riot.getAccountByRiotId(...a)),
+      getActiveGame: (...a) => ok(riot.getActiveGame(...a)),
     };
   }
 
   private async waitForAuth(signal: AbortSignal): Promise<void> {
     const wait = this.authPausedUntil - this.clock.now();
     if (wait > 0) await this.clock.sleep(wait, signal);
+  }
+
+  /** While the user plays, collection waits (live lookups do not call this). */
+  private async waitForPlay(signal: AbortSignal): Promise<void> {
+    await this.pause?.wait(signal);
   }
 
   /** false when aborted. */

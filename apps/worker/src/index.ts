@@ -4,11 +4,13 @@
  */
 import { createDb, migrate } from '@pick-league/db';
 import { createDdragonClient } from '@pick-league/shared';
+import { systemClock } from './clock.ts';
 import { ConfigError, loadConfig } from './config.ts';
 import { createLogger, errorMessage } from './log.ts';
 import { PatchTracker } from './patches.ts';
-import { RiotClient } from './riot/client.ts';
+import { PRIORITY, RiotClient } from './riot/client.ts';
 import { PlatformWorker } from './scheduler/platform-worker.ts';
+import { PlayPause } from './scheduler/play-pause.ts';
 
 const PROGRESS_INTERVAL_MS = 60_000;
 const SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -32,6 +34,13 @@ log.info('migrations ok', { applied: applied.length, platforms: config.platforms
 
 const riot = new RiotClient({ apiKey: config.riotApiKey, log });
 const patches = new PatchTracker(db, createDdragonClient(), { log });
+// While the user plays (desktop): only live lookups reach Riot, collection loops wait.
+const pause = new PlayPause({
+  db,
+  clock: systemClock,
+  log,
+  onChange: (paused) => riot.holdBelow(paused ? PRIORITY.LIVE_LOOKUP : null),
+});
 const workers = config.platforms.map(
   (platform) =>
     new PlatformWorker({
@@ -41,6 +50,7 @@ const workers = config.platforms.map(
       patches,
       log,
       requestCount: () => riot.requestsFor(platform),
+      pause,
     }),
 );
 
@@ -92,7 +102,7 @@ const progressTimer = setInterval(async () => {
 
 let exitCode = 0;
 await Promise.all(
-  [patches.run(signal), ...workers.map((w) => w.start(signal))].map((task) =>
+  [patches.run(signal), pause.run(signal), ...workers.map((w) => w.start(signal))].map((task) =>
     task.catch((err) => {
       log.error('worker crashed', { error: errorMessage(err) });
       exitCode = 1;

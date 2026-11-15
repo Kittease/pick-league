@@ -3,6 +3,10 @@
  * that the desktop asked about through the API. They are served above every crawl level
  * (`PRIORITY.LIVE_LOOKUP`), because someone is waiting for them.
  *
+ * First the game (`live_games`): the League client's player ids are not the Riot API's, so the
+ * desktop only sends the user's own Riot ID. account-v1 gives the user's puuid, spectator-v5 the
+ * game and every participant's puuid; the players are then queued as lookups right away.
+ *
  * Per player: league entries + mastery of the champion played (platform host, so every rank
  * shows within seconds), then the ids of the last `recentMatches` ranked solo matches and those
  * matches (match cluster: the slow part, 100 requests / 2 min). Matches already stored by the
@@ -13,14 +17,21 @@
  * Puuids are never logged; Riot error messages (whose paths contain them) are redacted.
  */
 import {
+  claimLiveGames,
   claimLiveLookups,
   type Db,
+  failLiveGame,
   failLiveLookup,
   finishLiveLookup,
+  type LiveGameJob,
+  type LiveGameParticipant,
   type LiveLookupJob,
   type LiveRecentMatch,
+  purgeLiveGames,
   purgeLiveLookups,
+  requestLiveLookups,
   storedRecentMatches,
+  storeLiveGame,
   storeLiveMastery,
   storeLiveRank,
   storeLiveRecent,
@@ -48,6 +59,10 @@ export interface LiveLookupOptions {
   maxAttempts: Record<'transient' | 'deterministic' | 'unknown', number>;
   /** A lookup that hit an error is retried after this, doubling with each attempt (default 5 s). */
   retryMs: number;
+  /** Riot not showing the game yet (spectator 404) is asked again after this (default 10 s)… */
+  gameNotFoundRetryMs: number;
+  /** …up to this many times, then the game is FAILED as not found (default 12: two minutes). */
+  gameNotFoundAttempts: number;
 }
 
 export const DEFAULT_LIVE_LOOKUP_OPTIONS: LiveLookupOptions = {
@@ -57,6 +72,8 @@ export const DEFAULT_LIVE_LOOKUP_OPTIONS: LiveLookupOptions = {
   purgeAfterMs: DAY,
   maxAttempts: { transient: 5, deterministic: 2, unknown: 3 },
   retryMs: 5_000,
+  gameNotFoundRetryMs: 10_000,
+  gameNotFoundAttempts: 12,
 };
 
 export interface LiveLookupDeps {
@@ -145,6 +162,26 @@ class Semaphore {
 }
 
 export type LiveLookupOutcome = 'ready' | 'pending' | 'retry' | 'failed' | 'stopped';
+export type LiveGameOutcome = 'found' | 'retry' | 'failed' | 'stopped';
+
+/**
+ * The players of a spectator-v5 game (bots left out). A player Riot hides (null puuid, privacy
+ * setting) is kept without an id, so the API can say so: never looked up.
+ */
+export function gameParticipants(
+  participants: readonly {
+    teamId: number;
+    championId: number;
+    puuid?: string | null;
+    bot?: boolean;
+  }[],
+): LiveGameParticipant[] {
+  return participants.flatMap((p) =>
+    p.bot || !(p.championId > 0)
+      ? []
+      : [{ teamId: p.teamId, championId: p.championId, puuid: p.puuid || null }],
+  );
+}
 
 export class LiveLookups {
   readonly options: LiveLookupOptions;
@@ -154,8 +191,13 @@ export class LiveLookups {
   private readonly matchSlots: Semaphore;
   private readonly summaries = new MatchSummaries(500);
   private readonly matchFetches = new Map<string, Promise<MatchDto | null>>();
+  /** Games being found, and the ones waiting for a retry (by game id). */
+  private readonly gamesInFlight = new Map<number, Promise<LiveGameOutcome>>();
+  private readonly gameRetryAt = new Map<number, number>();
+  /** The user's puuid by Riot ID (one account-v1 request per Riot ID). */
+  private readonly accounts = new Map<string, string>();
   private lastPurge = Number.NEGATIVE_INFINITY;
-  readonly counters = { ready: 0, failed: 0, matchesFetched: 0, matchesReused: 0 };
+  readonly counters = { ready: 0, failed: 0, matchesFetched: 0, matchesReused: 0, games: 0 };
 
   constructor(private readonly deps: LiveLookupDeps) {
     this.options = {
@@ -167,7 +209,7 @@ export class LiveLookups {
   }
 
   get active(): number {
-    return this.inFlight.size;
+    return this.inFlight.size + this.gamesInFlight.size;
   }
 
   /**
@@ -182,8 +224,10 @@ export class LiveLookups {
         this.deps.db,
         new Date(now - this.options.purgeAfterMs),
       );
-      if (purged > 0) this.deps.log.info('old live lookups purged', { purged });
+      const games = await purgeLiveGames(this.deps.db, new Date(now - this.options.purgeAfterMs));
+      if (purged + games > 0) this.deps.log.info('old live lookups purged', { purged, games });
     }
+    await this.pollGames(now, signal);
     for (const [p, at] of this.retryAt) if (at <= now) this.retryAt.delete(p);
     const jobs = await claimLiveLookups(
       this.deps.db,
@@ -201,9 +245,127 @@ export class LiveLookups {
     return started;
   }
 
-  /** Resolves once every started lookup is over. */
+  /** Resolves once every started lookup (and game search) is over. */
   async drain(): Promise<void> {
-    while (this.inFlight.size > 0) await Promise.allSettled([...this.inFlight.values()]);
+    while (this.inFlight.size + this.gamesInFlight.size > 0) {
+      await Promise.allSettled([...this.inFlight.values(), ...this.gamesInFlight.values()]);
+    }
+  }
+
+  /** Starts finding every PENDING game not being found or waiting for a retry. */
+  private async pollGames(now: number, signal?: AbortSignal): Promise<void> {
+    for (const [id, at] of this.gameRetryAt) if (at <= now) this.gameRetryAt.delete(id);
+    const games = await claimLiveGames(
+      this.deps.db,
+      this.deps.platform,
+      5 + this.gamesInFlight.size + this.gameRetryAt.size,
+    );
+    for (const game of games) {
+      if (this.gamesInFlight.has(game.gameId) || this.gameRetryAt.has(game.gameId)) continue;
+      const run = this.findGame(game, signal).finally(() => this.gamesInFlight.delete(game.gameId));
+      this.gamesInFlight.set(game.gameId, run);
+    }
+  }
+
+  /**
+   * Finds the user's game: account-v1 (the user's puuid), then spectator-v5. Every participant is
+   * queued as a lookup at once (the API would on its next poll). Never rejects.
+   */
+  async findGame(job: LiveGameJob, signal?: AbortSignal): Promise<LiveGameOutcome> {
+    const { riot, db, platform, log } = this.deps;
+    const riotId = `${job.gameName}#${job.tagLine}`.toLowerCase();
+    let puuid = this.accounts.get(riotId) ?? null;
+    try {
+      if (!puuid) {
+        const account = await riot.getAccountByRiotId(
+          platform,
+          job.gameName,
+          job.tagLine,
+          PRIORITY.LIVE_LOOKUP,
+          signal,
+        );
+        if (!account?.puuid) {
+          await failLiveGame(
+            db,
+            platform,
+            job.gameId,
+            'not_found: no account with this Riot ID',
+            1,
+            this.date(),
+          );
+          log.warn('live game not found: unknown Riot ID', { gameId: job.gameId });
+          return 'failed';
+        }
+        puuid = account.puuid;
+        this.accounts.set(riotId, puuid);
+      }
+      const game = await riot.getActiveGame(platform, puuid, PRIORITY.LIVE_LOOKUP, signal);
+      if (!game) {
+        // Spectator data may lag the client by a few seconds: asked again shortly.
+        this.gameRetryAt.set(job.gameId, this.deps.clock.now() + this.options.gameNotFoundRetryMs);
+        const status = await failLiveGame(
+          db,
+          platform,
+          job.gameId,
+          'not_found: Riot does not show this game',
+          this.options.gameNotFoundAttempts,
+          this.date(),
+        );
+        if (status === 'FAILED') log.warn('live game not found', { gameId: job.gameId });
+        return status === 'FAILED' ? 'failed' : 'retry';
+      }
+      if (game.gameId !== job.gameId) {
+        // One active game per account: the ids should match. The players are matched by
+        // champion anyway, so a mismatch shows as players not found.
+        log.warn('active game id differs from the client one', {
+          gameId: job.gameId,
+          activeGameId: game.gameId,
+        });
+      }
+      const participants = gameParticipants(game.participants ?? []);
+      const myTeamId = participants.find((p) => p.puuid === puuid)?.teamId ?? null;
+      await storeLiveGame(db, platform, job.gameId, participants, myTeamId, this.date());
+      await requestLiveLookups(
+        db,
+        platform,
+        participants.flatMap((p) =>
+          p.puuid ? [{ puuid: p.puuid, championId: p.championId }] : [],
+        ),
+        { now: this.date() },
+      );
+      this.counters.games++;
+      log.info('live game found', { gameId: job.gameId, players: participants.length });
+      return 'found';
+    } catch (err) {
+      const kind: ErrorKind = classifyError(err);
+      if (kind === 'abort') return 'stopped';
+      if (kind === 'auth') {
+        this.deps.onAuthError(err);
+        return 'stopped';
+      }
+      const message = puuid ? redactPuuid(errorMessage(err), puuid) : errorMessage(err);
+      const attempt = job.attempts + 1;
+      this.gameRetryAt.set(
+        job.gameId,
+        this.deps.clock.now() + this.options.retryMs * 2 ** Math.min(attempt - 1, 10),
+      );
+      this.deps.onError(message);
+      let status: 'PENDING' | 'READY' | 'FAILED' = 'PENDING';
+      try {
+        status = await failLiveGame(
+          db,
+          platform,
+          job.gameId,
+          `${kind}: ${message}`,
+          this.options.maxAttempts[kind],
+          this.date(),
+        );
+      } catch (dbErr) {
+        log.warn('live game failure not recorded', { error: errorMessage(dbErr) });
+      }
+      log.warn('live game search failed', { kind, error: message, attempt, status });
+      return status === 'FAILED' ? 'failed' : 'retry';
+    }
   }
 
   /**

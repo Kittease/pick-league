@@ -14,6 +14,7 @@ import {
   type AccountDto,
   accountBaseUrl,
   type ChampionMasteryDto,
+  type CurrentGameInfoDto,
   type LadderTier,
   type LeagueEntryDto,
   type LeagueListDto,
@@ -133,6 +134,21 @@ export interface RiotApi {
     priority: Priority,
     signal?: AbortSignal,
   ): Promise<ChampionMasteryDto | null>;
+  /** Account by Riot ID (`gameName#tagLine`); null when there is none (404). */
+  getAccountByRiotId(
+    platform: Platform,
+    gameName: string,
+    tagLine: string,
+    priority: Priority,
+    signal?: AbortSignal,
+  ): Promise<AccountDto | null>;
+  /** The game the player is in (spectator-v5); null when not in one, or not shown yet (404). */
+  getActiveGame(
+    platform: Platform,
+    puuid: string,
+    priority: Priority,
+    signal?: AbortSignal,
+  ): Promise<CurrentGameInfoDto | null>;
 }
 
 export interface RiotClientOptions {
@@ -165,6 +181,7 @@ export class RiotClient implements RiotApi {
   private readonly doFetch: (url: string, init: RequestInit) => Promise<Response>;
   private readonly clock: Clock;
   private readonly log: Logger;
+  private hold: number | null = null;
 
   constructor(private readonly options: RiotClientOptions) {
     this.doFetch = options.fetch ?? ((url, init) => fetch(url, init));
@@ -275,6 +292,43 @@ export class RiotClient implements RiotApi {
     );
   }
 
+  getAccountByRiotId(
+    platform: Platform,
+    gameName: string,
+    tagLine: string,
+    priority: Priority,
+    signal?: AbortSignal,
+  ) {
+    return this.request<AccountDto>(
+      platform,
+      accountBaseUrl(platform),
+      'account-v1.by-riot-id',
+      `/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(gameName)}/${encodeURIComponent(tagLine)}`,
+      priority,
+      signal,
+    );
+  }
+
+  getActiveGame(platform: Platform, puuid: string, priority: Priority, signal?: AbortSignal) {
+    return this.request<CurrentGameInfoDto>(
+      platform,
+      platformBaseUrl(platform),
+      'spectator-v5.active-game',
+      `/lol/spectator/v5/active-games/by-summoner/${encodeURIComponent(puuid)}`,
+      priority,
+      signal,
+    );
+  }
+
+  /**
+   * Requests below `minPriority` wait (on every host, queued ones included) until it is set
+   * back to null: the user is playing, only live lookups go out.
+   */
+  holdBelow(minPriority: number | null): void {
+    this.hold = minPriority;
+    for (const l of this.limiters.values()) l.holdBelow(minPriority);
+  }
+
   /** Per-host counters (requests/min, waiting, 429s…). */
   hostStats(): HostStats[] {
     return [...this.limiters.values()].map((l) => ({
@@ -302,6 +356,7 @@ export class RiotClient implements RiotApi {
         warmUpProbeMs: (this.options.timeoutMs ?? 15_000) + 5_000,
         ...this.options.limiter,
       });
+      limiter.holdBelow(this.hold);
       this.limiters.set(host, limiter);
       this.hostCounters.set(host, { rateLimited: 0, serverErrors: 0 });
     }
