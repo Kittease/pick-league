@@ -31,7 +31,7 @@ player_enrichment_queue               (low-priority mastery/rank fetches for non
 
 live_games                            (the user's live game, found through spectator-v5: its players' puuids)
 live_player_profiles ─< live_player_masteries   (players of the user's live game, looked up on request)
-client_activity                       (the user is queued / in champion select / in game: collection paused)
+client_activity                       (the user is queued / in champion select / in game: stats refresh paused)
 
 match_fetch_queue                     (worker backlog, survives restarts)
 worker_runs                           (monitoring)
@@ -507,9 +507,8 @@ CREATE TABLE client_activity (
 ```
 
 From queue start to the end of the game the desktop renews `busy_until` every few seconds (a
-closed app releases it by itself within a minute and a half). Meanwhile the worker sends no
-collection request (live lookups only, with the whole rate limit) and the API neither starts nor
-keeps running a stats refresh: it runs once the game is over.
+closed app releases it by itself within a minute and a half). Meanwhile the API neither starts nor
+keeps running a stats refresh: it runs once the game is over. The worker keeps collecting.
 
 ## Stats views (owned by apps/api)
 

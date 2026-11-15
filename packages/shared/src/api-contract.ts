@@ -859,9 +859,9 @@ export interface LivePlayersResponse {
 // PUT /client/activity
 // The desktop says what the user is doing in the League client. From queue start to the end of
 // the game (`isPlayingPhase`) it repeats the call every `CLIENT_ACTIVITY_RENEW_MS`; meanwhile
-// the worker sends no collection request (live lookups only) and the API holds its stats refresh
-// (a running one is cancelled and runs again after the game). A pause not renewed ends by itself
-// after `CLIENT_ACTIVITY_TTL_MS` (app closed or crashed).
+// the API holds its stats refresh, heavy on CPU and memory (a running one is cancelled and runs
+// again after the game). The worker keeps collecting. A pause not renewed ends by itself after
+// `CLIENT_ACTIVITY_TTL_MS` (app closed or crashed).
 // ---------------------------------------------------------------------------
 
 export const CLIENT_ACTIVITY_ROUTE = '/client/activity';
@@ -892,6 +892,6 @@ export const clientActivityRequestSchema = z.object({
 export type ClientActivityRequest = z.infer<typeof clientActivityRequestSchema>;
 
 export interface ClientActivityResponse {
-  /** Collection and stats refresh are paused (the user is playing). */
+  /** The stats refresh is paused (the user is playing); collection goes on. */
   paused: boolean;
 }
