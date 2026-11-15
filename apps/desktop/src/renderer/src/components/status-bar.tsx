@@ -67,12 +67,12 @@ export function StatusBar({ state }: { state: AppState }) {
 
         <StatsFreshness state={state} />
 
-        {state.collectionPaused && (
+        {state.statsRefreshPaused && (
           <span
             className="hidden shrink-0 text-muted-foreground lg:inline"
-            title="While you queue and play, the worker only looks up the players of your match and the stats refresh waits for the end of the match."
+            title="While you queue and play, the stats refresh (heavy on CPU and memory) waits for the end of the match. New matches are still collected."
           >
-            Collection paused while you play
+            Stats refresh paused while you play
           </span>
         )}
 

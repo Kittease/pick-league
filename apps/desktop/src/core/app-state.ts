@@ -111,10 +111,10 @@ export interface AppState {
    */
   lobby: LobbyView | null;
   /**
-   * The API confirmed the user is playing (queue → end of game): the worker only looks the
-   * players of the game up and the stats refresh waits for the end of the game.
+   * The API confirmed the user is playing (queue → end of game): its stats refresh waits for
+   * the end of the game (collection goes on).
    */
-  collectionPaused: boolean;
+  statsRefreshPaused: boolean;
   /** championId → the user's mastery. */
   mastery: Record<number, MasteryEntry>;
   /** Number of champions the account can play; null when unknown. */

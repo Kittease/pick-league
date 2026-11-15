@@ -205,7 +205,7 @@ export class Controller {
       champSelect: null,
       inGame: false,
       lobby: null,
-      collectionPaused: false,
+      statsRefreshPaused: false,
       mastery: {},
       availableCount: null,
       ownedChampionIds: null,
@@ -466,7 +466,7 @@ export class Controller {
   }
 
   // ---------------------------------------------------------------------------
-  // Client activity (collection paused while the user plays)
+  // Client activity (stats refresh paused while the user plays)
   // ---------------------------------------------------------------------------
 
   /** The League client phase as the API should know it ('None' without a client). */
@@ -500,7 +500,8 @@ export class Controller {
       const res = await api.clientActivity({ phase });
       if (api !== this.api) return;
       this.activityError = null;
-      if (res.paused !== this.state.collectionPaused) this.patch({ collectionPaused: res.paused });
+      if (res.paused !== this.state.statsRefreshPaused)
+        this.patch({ statsRefreshPaused: res.paused });
     } catch (e) {
       if (api !== this.api) return;
       // Sent again on the next renewal / phase change.
@@ -508,7 +509,7 @@ export class Controller {
       const message = errorInfo(e).message;
       if (message !== this.activityError) this.deps.log(`client activity not sent: ${message}`);
       this.activityError = message;
-      if (this.state.collectionPaused) this.patch({ collectionPaused: false });
+      if (this.state.statsRefreshPaused) this.patch({ statsRefreshPaused: false });
     }
   }
 

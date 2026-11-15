@@ -563,17 +563,17 @@ describe('controller: draft planner', () => {
   });
 });
 
-describe('controller: collection paused while the user plays', () => {
+describe('controller: stats refresh paused while the user plays', () => {
   test('from queue start to the end of the game, renewed meanwhile, then released', async () => {
     const { activity, lcu, state } = setup();
     lcu.phase('Lobby');
     await settle();
     expect(activity.at(-1)).toBe('Lobby');
-    expect(state().collectionPaused).toBe(false);
+    expect(state().statsRefreshPaused).toBe(false);
 
     lcu.phase('Matchmaking');
     await settle();
-    expect(state().collectionPaused).toBe(true);
+    expect(state().statsRefreshPaused).toBe(true);
     lcu.phase('ChampSelect');
     lcu.session(champSelectSession());
     lcu.phase('InProgress');
@@ -583,11 +583,11 @@ describe('controller: collection paused while the user plays', () => {
     // Renewed while in game (every 30 ms here).
     expect(activity.length).toBeGreaterThan(sent + 1);
     expect(activity.at(-1)).toBe('InProgress');
-    expect(state().collectionPaused).toBe(true);
+    expect(state().statsRefreshPaused).toBe(true);
 
     lcu.phase('EndOfGame');
     await settle();
-    expect(state().collectionPaused).toBe(false);
+    expect(state().statsRefreshPaused).toBe(false);
     const ended = activity.length;
     await new Promise((r) => setTimeout(r, 100));
     expect(activity.length).toBe(ended);
@@ -598,10 +598,10 @@ describe('controller: collection paused while the user plays', () => {
     const { activity, lcu, state } = setup();
     lcu.phase('InProgress');
     await settle();
-    expect(state().collectionPaused).toBe(true);
+    expect(state().statsRefreshPaused).toBe(true);
     lcu.disconnect();
     await settle();
     expect(activity.at(-1)).toBe('None');
-    expect(state().collectionPaused).toBe(false);
+    expect(state().statsRefreshPaused).toBe(false);
   });
 });
