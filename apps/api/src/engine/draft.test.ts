@@ -98,7 +98,7 @@ describe('evaluateDraft', () => {
     const matchup = r.reasons.find((x) => x.kind === 'matchup');
     expect(matchup?.delta).toBeCloseTo(expected, 4);
     expect(matchup?.championIds).toEqual([111, 117]);
-    expect(matchup?.label).toMatch(/^\+\d\.\d% Nautilus vs Lulu \(lane\) \(1,000 games\)$/);
+    expect(matchup?.label).toMatch(/^\+\d\.\d% Nautilus vs Lulu \(lane, 1,000 games\)$/);
     expect(r.winProbability).toBeCloseTo(0.5 + expected, 4);
   });
 
@@ -121,7 +121,7 @@ describe('evaluateDraft', () => {
     );
     const duo = ally.reasons.find((x) => x.kind === 'duo');
     expect(duo?.delta).toBeGreaterThan(0);
-    expect(duo?.label).toMatch(/^\+\d\.\d% Lulu \+ Jinx \(duo\)/);
+    expect(duo?.label).toMatch(/^\+\d\.\d% Lulu \+ Jinx \(duo, 1,000 games\)$/);
     const enemy = evaluateDraft(
       req({
         enemies: [

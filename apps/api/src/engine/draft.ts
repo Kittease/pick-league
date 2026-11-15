@@ -271,7 +271,7 @@ export function evaluateDraft(
         a.role === e.role ? 'lane' : LANE_ROLES[a.role].includes(e.role) ? 'bot lane' : null;
       add(delta, {
         kind: 'matchup',
-        label: `${formatDelta(delta)} ${name(a)} vs ${name(e)}${lane ? ` (${lane})` : ''} (${formatGames(games)})`,
+        label: `${formatDelta(delta)} ${name(a)} vs ${name(e)} (${lane ? `${lane}, ` : ''}${formatGames(games)})`,
         games,
         championIds: [a.championId, e.championId],
       });
@@ -295,7 +295,7 @@ export function evaluateDraft(
         const delta = sign * D.pairWeight * x.factor * y.factor * ((one.delta + two.delta) / 2);
         add(delta, {
           kind: duo ? 'duo' : 'with_comp',
-          label: `${formatDelta(delta)} ${sign < 0 ? 'enemy ' : ''}${name(x)} + ${name(y)}${duo ? ' (duo)' : ''} (${formatGames(games)})`,
+          label: `${formatDelta(delta)} ${sign < 0 ? 'enemy ' : ''}${name(x)} + ${name(y)} (${duo ? 'duo, ' : ''}${formatGames(games)})`,
           games,
           championIds: [x.championId, y.championId],
         });
