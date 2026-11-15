@@ -1,5 +1,5 @@
 import type { LadderTier, Platform } from '@pick-league/shared';
-import { byPuuid, inTransaction, type Queryable } from '../client.ts';
+import { byPuuid, chunks, inTransaction, type Queryable } from '../client.ts';
 import type {
   DailyRefreshCandidate,
   LadderEntryInput,
@@ -44,11 +44,12 @@ export async function upsertLadder(
       }
     }
 
-    if (unique.length > 0) {
-      const playedSet = new Set(played);
+    // In slices: a whole ladder (7000+ players) is over Postgres' bind-parameter limit at once.
+    const playedSet = new Set(played);
+    for (const chunk of chunks(unique)) {
       await tx`
         INSERT INTO players ${tx(
-          unique.map((e) => ({
+          chunk.map((e) => ({
             puuid: e.puuid,
             platform,
             solo_tier: e.tier,
@@ -71,7 +72,7 @@ export async function upsertLadder(
 
       await tx`
         INSERT INTO ladder_entries ${tx(
-          unique.map((e) => ({
+          chunk.map((e) => ({
             puuid: e.puuid,
             platform,
             tier: e.tier,

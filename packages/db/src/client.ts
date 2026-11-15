@@ -43,3 +43,14 @@ export async function inTransaction<T>(
 export function byPuuid(a: { puuid: string }, b: { puuid: string }): number {
   return a.puuid < b.puuid ? -1 : a.puuid > b.puuid ? 1 : 0;
 }
+
+/**
+ * Rows per multi-row INSERT: Postgres takes at most 65535 bind parameters per statement, so a
+ * row of up to 30 columns stays far below it.
+ */
+export const INSERT_CHUNK_ROWS = 2000;
+
+/** `list` in slices of `size` (bulk inserts stay under the bind-parameter limit). */
+export function* chunks<T>(list: readonly T[], size: number = INSERT_CHUNK_ROWS): Generator<T[]> {
+  for (let i = 0; i < list.length; i += size) yield list.slice(i, i + size);
+}

@@ -1,4 +1,4 @@
-import { byPuuid, inTransaction, type Queryable } from '../client.ts';
+import { byPuuid, chunks, inTransaction, type Queryable } from '../client.ts';
 import type { ParsedMatch } from '../types.ts';
 import { enqueueEnrichment } from './queues.ts';
 
@@ -257,8 +257,4 @@ export async function insertParsedMatch(
 export async function matchExists(q: Queryable, matchId: string): Promise<boolean> {
   const [row] = await q`SELECT 1 FROM matches WHERE id = ${matchId}`;
   return row !== undefined;
-}
-
-function* chunks<T>(list: readonly T[], size: number): Generator<T[]> {
-  for (let i = 0; i < list.length; i += size) yield list.slice(i, i + size);
 }

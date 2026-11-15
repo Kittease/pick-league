@@ -139,6 +139,25 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       expect((await db`SELECT 1 FROM players WHERE puuid = ${b}`).length).toBe(1);
     });
 
+    test('a ladder too big for one statement (bind-parameter limit) is stored whole', async () => {
+      // ~9 parameters per player: 7500 players would need ~67k in one INSERT (limit 65535).
+      const entries = Array.from({ length: 7500 }, (_, i) => ({
+        puuid: fakePuuid(i + 1),
+        tier: 'MASTER' as const,
+        leaguePoints: i,
+        wins: 10,
+        losses: 10,
+      }));
+      const result = await upsertLadder(db, 'NA1', entries);
+      expect(result.added).toHaveLength(7500);
+      const [count] =
+        await db`SELECT count(*)::int AS n FROM ladder_entries WHERE platform = 'NA1'`;
+      expect(count?.n).toBe(7500);
+      const [players] = await db`
+        SELECT count(*)::int AS n FROM players WHERE listing_requested_at IS NOT NULL`;
+      expect(players?.n).toBe(7500);
+    });
+
     test('matches_synced_until round-trips', async () => {
       const a = fakePuuid(1);
       await upsertLadder(db, 'EUW1', [
