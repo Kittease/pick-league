@@ -31,16 +31,10 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { type ConfidenceLevel, meetsConfidence } from '@/lib/confidence';
 import { compact, confidenceLabel, patchesText, percent, ROLE_LABEL } from '@/lib/format';
 import {
   type EscapeAction,
@@ -51,9 +45,11 @@ import {
 import { cn } from '@/lib/utils';
 import type { ApiResult, AppState, Settings } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
+import { useMinConfidence } from '../hooks/use-min-confidence';
 import { enterListFromSearch, type RovingItemProps, useRoving } from '../hooks/use-roving';
 import { IS_MAC } from '../hooks/use-shortcuts';
 import { BuildDetails } from './build-panel';
+import { ConfidenceFilter, FilterSelect } from './filter-select';
 import { ChampionIcon } from './game-icon';
 import { Notice } from './notice';
 import { ConfidencePips } from './picks-panel';
@@ -155,39 +151,6 @@ function useTierListFilters() {
     });
   }, []);
   return [filters, update] as const;
-}
-
-function FilterSelect<T extends string>({
-  label,
-  value,
-  labels,
-  onChange,
-}: {
-  label: string;
-  value: T;
-  labels: Record<T, string>;
-  onChange: (value: T) => void;
-}) {
-  return (
-    <Select
-      value={value}
-      items={labels}
-      onValueChange={(v) => {
-        if (typeof v === 'string' && v in labels) onChange(v as T);
-      }}
-    >
-      <SelectTrigger size="sm" aria-label={label} title={label} className="h-8 text-xs">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent alignItemWithTrigger={false} align="start">
-        {(Object.keys(labels) as T[]).map((k) => (
-          <SelectItem key={k} value={k} className="text-xs">
-            {labels[k]}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
 }
 
 const TIER_STYLE: Record<Tier, string> = {
@@ -402,6 +365,7 @@ function DetailPanel({
   lookup,
   mastery,
   filters,
+  minConfidence,
   apiKey,
   onClose,
   onViewBuild,
@@ -412,6 +376,7 @@ function DetailPanel({
   lookup: StaticLookup | null;
   mastery: AppState['mastery'];
   filters: TierListFilters;
+  minConfidence: ConfidenceLevel;
   /** Identity of the API data (URL, patch, last stats refresh). */
   apiKey: string;
   onClose: () => void;
@@ -475,6 +440,7 @@ function DetailPanel({
             role={role}
             championId={entry.championId}
             filters={filters}
+            minConfidence={minConfidence}
             apiKey={apiKey}
             lookup={lookup}
           />
@@ -607,6 +573,7 @@ export function TierListPage({
   const lastRefreshedAt = state.stats.status?.lastRefreshedAt ?? null;
   const apiKey = `${state.api.url}|${state.api.latestPatch}|${state.api.state === 'ok'}|${lastRefreshedAt}`;
   const [filters, setFilters] = useTierListFilters();
+  const [minConfidence] = useMinConfidence();
   const { state: tl, retry } = useTierList(role, filters, apiKey);
 
   useEffect(() => {
@@ -626,7 +593,8 @@ export function TierListPage({
     const list = data.entries.filter(
       (e) =>
         (!q || nameOf(e.championId).toLowerCase().includes(q)) &&
-        (!ownedOnly || !owned || owned.has(e.championId)),
+        (!ownedOnly || !owned || owned.has(e.championId)) &&
+        meetsConfidence(e.confidence, minConfidence),
     );
     const dir = sort.desc ? -1 : 1;
     return list.sort((a, b) => {
@@ -636,7 +604,7 @@ export function TierListPage({
         typeof va === 'string' ? va.localeCompare(vb as string) : (va as number) - (vb as number);
       return cmp * dir || b.score - a.score;
     });
-  }, [data, search, ownedOnly, owned, sort, nameOf]);
+  }, [data, search, ownedOnly, owned, minConfidence, sort, nameOf]);
 
   const selected = data?.entries.find((e) => e.championId === selectedId) ?? null;
   const rowIds = useMemo(() => rows.map((e) => e.championId), [rows]);
@@ -730,6 +698,7 @@ export function TierListPage({
             labels={RANK_LABEL}
             onChange={(rank) => setFilters({ rank })}
           />
+          <ConfidenceFilter />
         </div>
         <div className="ml-auto flex items-center gap-4">
           {owned && (
@@ -853,6 +822,7 @@ export function TierListPage({
             lookup={lookup}
             mastery={state.mastery}
             filters={filters}
+            minConfidence={minConfidence}
             apiKey={apiKey}
             onClose={() => setSelectedId(null)}
             onViewBuild={() => setBuildOf(selected.championId)}

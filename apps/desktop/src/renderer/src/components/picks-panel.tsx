@@ -1,20 +1,30 @@
 import type { PickCandidate, PicksResponse } from '@pick-league/shared';
 import { ChevronDownIcon, HammerIcon } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  type ConfidenceLevel,
+  confidenceLevel,
+  MIN_CONFIDENCE_LABEL,
+  meetsConfidence,
+} from '@/lib/confidence';
 import { compact, confidenceLabel, patchesText, percent, ROLE_LABEL } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
+import { useMinConfidence } from '../hooks/use-min-confidence';
 import { type RovingItemProps, useRoving } from '../hooks/use-roving';
+import { ConfidenceFilter } from './filter-select';
 import { ChampionIcon } from './game-icon';
 import { Notice } from './notice';
 import { DeltaText, ReasonHeadline, ReasonList, ReasonStrip } from './reasons';
 
+const PIPS: Record<ConfidenceLevel, number> = { LOW: 1, MEDIUM: 2, HIGH: 3 };
+
 export function ConfidencePips({ confidence }: { confidence: number }) {
-  const filled = confidence >= 0.75 ? 3 : confidence >= 0.4 ? 2 : 1;
+  const filled = PIPS[confidenceLevel(confidence)];
   return (
     <span className="flex gap-0.5" title={`${confidenceLabel(confidence)} confidence`}>
       {[1, 2, 3].map((i) => (
@@ -134,12 +144,22 @@ export function PicksPanel({ state, lookup }: { state: AppState; lookup: StaticL
   const { picks, champSelect } = state;
   const data: PicksResponse | null = picks.status === 'idle' ? null : picks.data;
   const previewId = state.buildTarget?.preview ? state.buildTarget.championId : null;
-  const ids = (data?.candidates ?? []).map((c) => c.championId);
+  const [minConfidence] = useMinConfidence();
+  // Each keeps its rank in the API's order: hidden candidates leave gaps in the numbers.
+  const shown = useMemo(
+    () =>
+      (data?.candidates ?? [])
+        .map((candidate, i) => ({ candidate, rank: i + 1 }))
+        .filter(({ candidate }) => meetsConfidence(candidate.confidence, minConfidence)),
+    [data, minConfidence],
+  );
+  const ids = shown.map(({ candidate }) => candidate.championId);
   const roving = useRoving(ids, 'vertical');
+  const hidden = (data?.candidates.length ?? 0) - shown.length;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-baseline gap-3 border-b border-border px-3 py-2 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-3 border-b border-border px-3 py-1.5 text-[11px] text-muted-foreground">
         <span className="font-semibold tracking-[0.18em] text-foreground uppercase">
           Best {champSelect ? ROLE_LABEL[champSelect.role] : ''} picks
         </span>
@@ -147,8 +167,12 @@ export function PicksPanel({ state, lookup }: { state: AppState; lookup: StaticL
         {state.settings.ownedOnly && state.availableCount !== null && (
           <span>· from your {state.availableCount} champions</span>
         )}
-        <span className="ml-auto">
+        {hidden > 0 && <span>· {hidden} below the confidence filter</span>}
+        <span className="ml-auto hidden xl:inline">
           score = sum of win-rate deltas (points), shrunk by sample size
+        </span>
+        <span className="ml-auto xl:ml-0">
+          <ConfidenceFilter />
         </span>
       </div>
 
@@ -180,19 +204,26 @@ export function PicksPanel({ state, lookup }: { state: AppState; lookup: StaticL
             No candidate left for this role — everything is banned, picked or not owned.
           </p>
         )}
-        {data?.candidates.map((c, i) => (
-          <CandidateRow
-            key={c.championId}
-            rank={i + 1}
-            candidate={c}
-            lookup={lookup}
-            mastery={state.mastery}
-            currentPatch={data.patch}
-            previewing={previewId === c.championId}
-            defaultOpen={i === 0}
-            focus={roving.itemProps(c.championId)}
-          />
-        ))}
+        {data && data.candidates.length > 0 && shown.length === 0 && (
+          <p className="p-6 text-sm text-muted-foreground">
+            No candidate reaches {MIN_CONFIDENCE_LABEL[minConfidence].toLowerCase()} — lower the
+            confidence filter to see all {data.candidates.length}.
+          </p>
+        )}
+        {data &&
+          shown.map(({ candidate: c, rank }, i) => (
+            <CandidateRow
+              key={c.championId}
+              rank={rank}
+              candidate={c}
+              lookup={lookup}
+              mastery={state.mastery}
+              currentPatch={data.patch}
+              previewing={previewId === c.championId}
+              defaultOpen={i === 0}
+              focus={roving.itemProps(c.championId)}
+            />
+          ))}
       </div>
     </div>
   );

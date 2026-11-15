@@ -1,4 +1,5 @@
 import type { LanePhaseDiff, Position, ReasonKind } from '@pick-league/shared';
+import { type ConfidenceLevel, confidenceLevel } from './confidence';
 
 export const ROLE_LABEL: Record<Position, string> = {
   TOP: 'Top',
@@ -99,10 +100,14 @@ export function sampleWeight(games: number): number {
   return 0.25 + 0.75 * Math.min(1, games / 1000);
 }
 
+const CONFIDENCE_LABEL: Record<ConfidenceLevel, string> = {
+  LOW: 'Low',
+  MEDIUM: 'Medium',
+  HIGH: 'High',
+};
+
 export function confidenceLabel(confidence: number): string {
-  if (confidence >= 0.75) return 'High';
-  if (confidence >= 0.4) return 'Medium';
-  return 'Low';
+  return CONFIDENCE_LABEL[confidenceLevel(confidence)];
 }
 
 export const SKILL_KEY: Record<number, string> = { 1: 'Q', 2: 'W', 3: 'E', 4: 'R' };

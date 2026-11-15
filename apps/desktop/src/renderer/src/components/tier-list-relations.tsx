@@ -8,7 +8,16 @@ import { ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { compact, deltaPoints, laneGoldShort, laneTitle, percent, ROLE_LABEL } from '@/lib/format';
+import { type ConfidenceLevel, MIN_CONFIDENCE_LABEL, meetsConfidence } from '@/lib/confidence';
+import {
+  compact,
+  confidenceLabel,
+  deltaPoints,
+  laneGoldShort,
+  laneTitle,
+  percent,
+  ROLE_LABEL,
+} from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { ApiResult } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
@@ -139,7 +148,7 @@ function RelationRow({
           ? 'grid-cols-[24px_minmax(0,1fr)_54px_28px_36px_38px_34px]'
           : 'grid-cols-[24px_minmax(0,1fr)_28px_36px_38px_34px]',
       )}
-      title={`${deltaPoints(r.delta)} pts ${verb} ${name}: ${percent(r.winRate)} win rate over ${r.games} matchups (delta shrunk by sample size)`}
+      title={`${deltaPoints(r.delta)} pts ${verb} ${name}: ${percent(r.winRate)} win rate over ${r.games} matchups (delta shrunk by sample size), ${confidenceLabel(r.confidence).toLowerCase()} confidence`}
     >
       <ChampionIcon src={champ?.iconUrl} name={name} size={24} />
       <span className="flex min-w-0 items-baseline gap-1.5">
@@ -240,6 +249,7 @@ function RelationSection({
   verb,
   role,
   lookup,
+  minConfidence,
 }: {
   title: string;
   hint: string;
@@ -248,9 +258,11 @@ function RelationSection({
   verb: 'vs' | 'with';
   role: Position;
   lookup: StaticLookup | null;
+  minConfidence: ConfidenceLevel;
 }) {
-  const best = relations.filter((r) => r.delta > 0);
-  const worst = relations.filter((r) => r.delta < 0).reverse();
+  const shown = relations.filter((r) => meetsConfidence(r.confidence, minConfidence));
+  const best = shown.filter((r) => r.delta > 0);
+  const worst = shown.filter((r) => r.delta < 0).reverse();
   // Lane figures only exist for matchups (not under server/rank filters): same columns both sides.
   const showLane = relations.some((r) => r.lane);
   return (
@@ -261,6 +273,10 @@ function RelationSection({
       </h3>
       {relations.length === 0 ? (
         <p className="py-1 text-xs text-muted-foreground">Not enough matchups yet.</p>
+      ) : shown.length === 0 ? (
+        <p className="py-1 text-xs text-muted-foreground">
+          None at {MIN_CONFIDENCE_LABEL[minConfidence].toLowerCase()} ({relations.length} below).
+        </p>
       ) : (
         <div className={SIDES}>
           <RelationColumn
@@ -313,6 +329,7 @@ export function ChampionRelations({
   role,
   championId,
   filters,
+  minConfidence,
   apiKey,
   lookup,
 }: {
@@ -320,6 +337,8 @@ export function ChampionRelations({
   championId: number;
   /** Server + rank filters of the tier list (synergies are not available with filters). */
   filters: TierListFilters;
+  /** Rows under this confidence are hidden. */
+  minConfidence: ConfidenceLevel;
   /** Changes with the API URL, patch or a stats refresh: drops the cached lists. */
   apiKey: string;
   lookup: StaticLookup | null;
@@ -364,6 +383,7 @@ export function ChampionRelations({
         verb="vs"
         role={role}
         lookup={lookup}
+        minConfidence={minConfidence}
       />
       <RelationSection
         title="Duos"
@@ -372,6 +392,7 @@ export function ChampionRelations({
         verb="with"
         role={role}
         lookup={lookup}
+        minConfidence={minConfidence}
       />
       {d.synergies ? (
         <RelationSection
@@ -381,6 +402,7 @@ export function ChampionRelations({
           verb="with"
           role={role}
           lookup={lookup}
+          minConfidence={minConfidence}
         />
       ) : (
         <p className="text-[11px] leading-snug text-muted-foreground">

@@ -351,31 +351,35 @@ function searchable(text: string): string {
 export interface RankedChampion<C> {
   champion: C;
   candidate: PickCandidate;
-  /** 1-based rank among the champions still available (search does not renumber). */
+  /** 1-based rank among the champions still available (search and `keep` do not renumber). */
   rank: number;
 }
 
 /**
  * The champion grid: champions still available whose name matches `query`, split into those the
  * API ranked (by its order: best score first) and the rest (no recommendation: too little data
- * in that role), in `champions` order.
+ * in that role; or one `keep` rejects, e.g. under the confidence filter), in `champions` order.
  */
 export function championPool<C extends { id: number; name: string }>(
   champions: readonly C[],
   unavailable: ReadonlySet<number>,
   candidates: readonly PickCandidate[] | null,
   query: string,
+  keep: (candidate: PickCandidate) => boolean = () => true,
 ): { ranked: RankedChampion<C>[]; rest: C[] } {
   const q = searchable(query);
   const byId = new Map(champions.map((c) => [c.id, c]));
   const matches = (c: C) => !q || searchable(c.name).includes(q);
   const ranked: RankedChampion<C>[] = [];
+  const seen = new Set<number>();
   const rankedIds = new Set<number>();
   for (const candidate of candidates ?? []) {
     const champion = byId.get(candidate.championId);
-    if (!champion || unavailable.has(champion.id) || rankedIds.has(champion.id)) continue;
+    if (!champion || unavailable.has(champion.id) || seen.has(champion.id)) continue;
+    seen.add(champion.id);
+    if (!keep(candidate)) continue;
     rankedIds.add(champion.id);
-    if (matches(champion)) ranked.push({ champion, candidate, rank: rankedIds.size });
+    if (matches(champion)) ranked.push({ champion, candidate, rank: seen.size });
   }
   const rest = champions.filter(
     (c) => !unavailable.has(c.id) && !rankedIds.has(c.id) && matches(c),

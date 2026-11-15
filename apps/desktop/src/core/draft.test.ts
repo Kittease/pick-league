@@ -477,6 +477,22 @@ describe('draft: champion pool', () => {
     });
   });
 
+  test('candidates `keep` rejects join the rest, without renumbering the others', () => {
+    const cands = [
+      { ...candidate(4, 0.03), confidence: 0.2 },
+      candidate(2, 0.02),
+      { ...candidate(1, 0.01), confidence: 0.9 },
+    ];
+    const pool = championPool(champions, new Set(), cands, '', (c) => c.confidence >= 0.4);
+    expect(ids(pool)).toEqual({
+      ranked: [
+        [2, 2],
+        [1, 3],
+      ],
+      rest: [3, 4, 5],
+    });
+  });
+
   test('without recommendations (ban phase, API down) every available champion is in the rest', () => {
     expect(ids(championPool(champions, new Set([1]), null, ''))).toEqual({
       ranked: [],

@@ -24,6 +24,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
+import { meetsConfidence } from '@/lib/confidence';
 import { compact, confidenceLabel, patchesText, percent, ROLE_LABEL } from '@/lib/format';
 import { type DraftEscapeAction, type SearchFocus, shortcutLabel } from '@/lib/shortcuts';
 import { cn } from '@/lib/utils';
@@ -57,10 +58,12 @@ import {
 } from '../../../core/draft.ts';
 import { apiDataKey, useApiCall } from '../hooks/use-api-call';
 import type { StaticLookup } from '../hooks/use-app';
+import { useMinConfidence } from '../hooks/use-min-confidence';
 import { enterListFromSearch, type RovingItemProps, useRoving } from '../hooks/use-roving';
 import { IS_MAC } from '../hooks/use-shortcuts';
 import { BuildView } from './build-panel';
 import { DamageSplit, type OutlookSide, WinProbability } from './draft-outlook';
+import { ConfidenceFilter } from './filter-select';
 import { ChampionIcon, GameIcon } from './game-icon';
 import { Notice } from './notice';
 import { ConfidencePips } from './picks-panel';
@@ -566,9 +569,13 @@ export function DraftPlanner({
 
   const candidates = pickTeam && picks.status !== 'idle' ? (picks.data?.candidates ?? null) : null;
   const unavailable = useMemo(() => unavailableChampionIds(draft), [draft]);
+  const [minConfidence] = useMinConfidence();
   const pool = useMemo(
-    () => championPool(lookup?.champions ?? [], unavailable, candidates, search),
-    [lookup, unavailable, candidates, search],
+    () =>
+      championPool(lookup?.champions ?? [], unavailable, candidates, search, (c) =>
+        meetsConfidence(c.confidence, minConfidence),
+      ),
+    [lookup, unavailable, candidates, search, minConfidence],
   );
   const poolIds = useMemo(
     () => [...pool.ranked.map((r) => r.champion.id), ...pool.rest.map((c) => c.id)],
@@ -822,6 +829,11 @@ export function DraftPlanner({
                     score = sum of win-rate deltas (points), shrunk by sample size
                   </span>
                 )}
+                {pickTeam && (
+                  <span className="ml-auto xl:ml-0">
+                    <ConfidenceFilter />
+                  </span>
+                )}
               </div>
 
               {pickTeam && picks.status === 'error' && (
@@ -844,6 +856,7 @@ export function DraftPlanner({
                     loadingFirst={pickTeam !== null && picks.status === 'loading' && !candidates}
                     stale={picks.status === 'loading'}
                     role={role}
+                    filtered={minConfidence !== 'LOW' && candidates !== null}
                     onChoose={choose}
                     roving={roving}
                   />
@@ -967,6 +980,7 @@ function ChampionGrid({
   loadingFirst,
   stale,
   role,
+  filtered,
   onChoose,
   roving,
 }: {
@@ -978,6 +992,8 @@ function ChampionGrid({
   loadingFirst: boolean;
   stale: boolean;
   role: Position | null;
+  /** The confidence filter hides some recommendations: they are in the rest. */
+  filtered: boolean;
   onChoose: (championId: number) => void;
   /** Arrow-key navigation over every tile (one tab stop for the whole grid). */
   roving: Pick<ReturnType<typeof useRoving<number>>, 'containerRef' | 'itemProps' | 'onKeyDown'>;
@@ -1019,9 +1035,11 @@ function ChampionGrid({
         <>
           {!banning && (
             <div className="px-1 pt-2 text-[10px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-              {pool.ranked.length > 0
-                ? `Not enough data${role ? ` in ${ROLE_LABEL[role]}` : ''}`
-                : 'No recommendation available'}
+              {filtered
+                ? `Below the confidence filter or not enough data${role ? ` in ${ROLE_LABEL[role]}` : ''}`
+                : pool.ranked.length > 0
+                  ? `Not enough data${role ? ` in ${ROLE_LABEL[role]}` : ''}`
+                  : 'No recommendation available'}
             </div>
           )}
           <div className={GRID}>
