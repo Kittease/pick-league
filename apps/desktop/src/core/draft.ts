@@ -1,11 +1,12 @@
 /**
- * Draft planner: a ranked solo/duo draft simulated by hand, without the League client. Pure
- * state + rules (turn order, applying and undoing actions, request bodies for the API); the
- * renderer only displays it.
+ * Draft planner: a ranked solo/duo or competitive (tournament) draft simulated by hand, without
+ * the League client. Pure state + rules (turn order, applying and undoing actions, moving picks
+ * between roles, request bodies for the API); the renderer only displays it.
  */
 
 import {
   type BuildRequestInput,
+  type DraftRequestInput,
   type PickCandidate,
   type PicksRequestInput,
   POSITIONS,
@@ -48,30 +49,77 @@ function numbered(kind: DraftTurn['kind'], order: readonly Team[]): DraftTurn[] 
   return order.map((team) => ({ kind, team, number: ++seen[team] }));
 }
 
-/** Every turn of the draft, in order: 10 bans then 10 picks. */
+/** Every turn of a ranked solo/duo draft, in order: 10 bans then 10 picks. */
 export const DRAFT_TURNS: readonly DraftTurn[] = [
   ...numbered('ban', BAN_ORDER),
   ...numbered('pick', PICK_ORDER),
 ];
 
+/**
+ * `soloq`: ranked solo/duo (10 bans, then 10 picks). `competitive`: tournament draft, two ban
+ * phases between the picks: 3 bans each (B R B R B R), picks B1 R1 R2 B2 B3 R3, 2 bans each
+ * (R B R B), picks R4 B4 B5 R5.
+ */
+export type DraftFormat = 'soloq' | 'competitive';
+export const DRAFT_FORMATS: readonly DraftFormat[] = ['soloq', 'competitive'];
+
+/** Every turn of a competitive draft, in order (see `DraftFormat`). */
+export const COMPETITIVE_TURNS: readonly DraftTurn[] = (() => {
+  const seen = { ban: { blue: 0, red: 0 }, pick: { blue: 0, red: 0 } };
+  const turn = (kind: DraftTurn['kind'], team: Team): DraftTurn => ({
+    kind,
+    team,
+    number: ++seen[kind][team],
+  });
+  const B: Team = 'blue';
+  const R: Team = 'red';
+  return [
+    ...[B, R, B, R, B, R].map((t) => turn('ban', t)),
+    ...[B, R, R, B, B, R].map((t) => turn('pick', t)),
+    ...[R, B, R, B].map((t) => turn('ban', t)),
+    ...[R, B, B, R].map((t) => turn('pick', t)),
+  ];
+})();
+
+/** Every turn of a draft of that format, in order. */
+export function draftTurns(format: DraftFormat): readonly DraftTurn[] {
+  return format === 'competitive' ? COMPETITIVE_TURNS : DRAFT_TURNS;
+}
+
 export type DraftAction =
   | { kind: 'ban'; team: Team; championId: number | null }
   | { kind: 'pick'; team: Team; role: Position; championId: number };
 
-/** The actions taken so far, one per turn of `DRAFT_TURNS`. */
+/**
+ * The actions taken so far, one per turn of the format's turns. A pick's `role` is where the
+ * champion plays now (picks can be moved between roles, see `swapRoles`).
+ */
 export interface Draft {
+  readonly format: DraftFormat;
   readonly actions: readonly DraftAction[];
 }
 
-export const EMPTY_DRAFT: Draft = { actions: [] };
+export const EMPTY_DRAFT: Draft = { format: 'soloq', actions: [] };
+
+export function emptyDraft(format: DraftFormat): Draft {
+  return format === 'soloq' ? EMPTY_DRAFT : { format, actions: [] };
+}
 
 /** The turn to play, or null once the 10 picks are in. */
 export function currentTurn(draft: Draft): DraftTurn | null {
-  return DRAFT_TURNS[draft.actions.length] ?? null;
+  return draftTurns(draft.format)[draft.actions.length] ?? null;
 }
 
 export function isComplete(draft: Draft): boolean {
-  return draft.actions.length >= DRAFT_TURNS.length;
+  return draft.actions.length >= draftTurns(draft.format).length;
+}
+
+/**
+ * 1-based ban phase of a ban turn: always 1 in solo/duo; 1 (the first 3 bans of each team) or
+ * 2 (the last 2) in a competitive draft.
+ */
+export function banPhase(draft: Pick<Draft, 'format'>, banNumber: number): 1 | 2 {
+  return draft.format === 'competitive' && banNumber > 3 ? 2 : 1;
 }
 
 /** "B3" / "R1" for picks, "Blue ban 2" for bans. */
@@ -98,24 +146,56 @@ export function ban(draft: Draft, championId: number | null): Draft {
   if (championId !== null) {
     if (!isChampionId(championId) || unavailableChampionIds(draft).has(championId)) return draft;
   }
-  return { actions: [...draft.actions, { kind: 'ban', team: turn.team, championId }] };
+  return { ...draft, actions: [...draft.actions, { kind: 'ban', team: turn.team, championId }] };
 }
 
 /**
  * Picks the champion for `role` on a pick turn; leaves the draft as it is when it is not a pick
- * turn, the champion is banned or taken, or the team already has that role.
+ * turn, the champion is banned or taken, or the team is full. When the team already has a
+ * champion in `role` (a flex pick placed in the wrong lane), the new champion takes `role` and
+ * that champion moves to `displacedTo` (one of the team's open roles; its first open role by
+ * default).
  */
-export function pick(draft: Draft, championId: number, role: Position): Draft {
+export function pick(
+  draft: Draft,
+  championId: number,
+  role: Position,
+  displacedTo?: Position | null,
+): Draft {
   const turn = currentTurn(draft);
   if (turn?.kind !== 'pick' || !isChampionId(championId)) return draft;
   if (unavailableChampionIds(draft).has(championId)) return draft;
-  if (!openRoles(draft, turn.team).includes(role)) return draft;
-  return { actions: [...draft.actions, { kind: 'pick', team: turn.team, role, championId }] };
+  const open = openRoles(draft, turn.team);
+  const first = open[0];
+  if (first === undefined) return draft;
+  const taken = !open.includes(role);
+  const target = taken ? (displacedTo && open.includes(displacedTo) ? displacedTo : first) : role;
+  const next: Draft = {
+    ...draft,
+    actions: [...draft.actions, { kind: 'pick', team: turn.team, role: target, championId }],
+  };
+  return taken ? swapRoles(next, turn.team, target, role) : next;
 }
 
-/** Steps back one action. */
+/**
+ * Swaps the champions the team has in roles `a` and `b` (or moves one to the other role when
+ * that one is empty), at any time: flex picks are often placed before their lane is known. Not
+ * a turn of the draft: `undo` does not revert it.
+ */
+export function swapRoles(draft: Draft, team: Team, a: Position, b: Position): Draft {
+  if (a === b) return draft;
+  let changed = false;
+  const actions = draft.actions.map((x): DraftAction => {
+    if (x.kind !== 'pick' || x.team !== team || (x.role !== a && x.role !== b)) return x;
+    changed = true;
+    return { ...x, role: x.role === a ? b : a };
+  });
+  return changed ? { ...draft, actions } : draft;
+}
+
+/** Steps back one action (the moves between roles made since stay). */
 export function undo(draft: Draft): Draft {
-  return draft.actions.length === 0 ? draft : { actions: draft.actions.slice(0, -1) };
+  return draft.actions.length === 0 ? draft : { ...draft, actions: draft.actions.slice(0, -1) };
 }
 
 /** The last action taken, if any (what `undo` removes). */
@@ -152,17 +232,25 @@ export function openRoles(draft: Draft, team: Team): Position[] {
 }
 
 /**
- * Role the team picks for next: `preferred` (the role the user last chose for it) when still
- * open, else its first open role; null when the team is full.
+ * Role the team picks for next: `preferred` (the role the user chose for it) when still open,
+ * or when taken with `allowTaken` (the pick then moves that role's champion, see `pick`); else
+ * its first open role; null when the team is full.
  */
 export function pickRole(
   draft: Draft,
   team: Team,
   preferred: Position | null | undefined,
+  allowTaken = false,
 ): Position | null {
   const open = openRoles(draft, team);
-  if (preferred && open.includes(preferred)) return preferred;
+  if (open.length === 0) return null;
+  if (preferred && (allowTaken || open.includes(preferred))) return preferred;
   return open[0] ?? null;
+}
+
+/** The team's champion in `role`, which a pick for that role would move: null when it is open. */
+export function displacedBy(draft: Draft, team: Team, role: Position): DraftPick | null {
+  return teamPicks(draft, team)[role] ?? null;
 }
 
 /** All bans of both teams (skipped ones left out). */
@@ -177,17 +265,26 @@ export const DRAFT_PICKS_LIMIT = 100;
 
 /**
  * Body of `POST /recommendations/picks` for `team` picking `role`: its 4 other roles as allies
- * (null = not picked yet), the other team's picks as enemies, every ban. Null when the team
- * already has that role.
+ * (null = not picked yet), the other team's picks as enemies, every ban. When the team already
+ * has a champion in `role`, that champion counts in the role it would move to (`displacedTo`,
+ * else the first open role, as `pick` does). Null when the team is full.
  */
 export function draftPicksRequest(
   draft: Draft,
   team: Team,
   role: Position,
   limit = DRAFT_PICKS_LIMIT,
+  displacedTo?: Position | null,
 ): PicksRequestInput | null {
-  const mine = teamPicks(draft, team);
-  if (mine[role]) return null;
+  const mine = { ...teamPicks(draft, team) };
+  const open = openRoles(draft, team);
+  const first = open[0];
+  if (first === undefined) return null;
+  const occupant = mine[role];
+  if (occupant) {
+    mine[displacedTo && open.includes(displacedTo) ? displacedTo : first] = occupant;
+    delete mine[role];
+  }
   const theirs = teamPicks(draft, otherTeam(team));
   return {
     role,
@@ -229,6 +326,21 @@ export function draftBuildRequest(
     allies: known(mine, role),
     enemies: known(theirs, null),
   };
+}
+
+/**
+ * Body of `POST /recommendations/draft` from `team`'s point of view: its picks and the other
+ * team's, all with their roles, and its side (blue or red), at any point of the draft.
+ */
+export function draftEvaluationRequest(draft: Draft, team: Team = 'blue'): DraftRequestInput {
+  const known = (t: Team) => {
+    const picks = teamPicks(draft, t);
+    return POSITIONS.flatMap((p) => {
+      const id = picks[p]?.championId;
+      return id ? [{ championId: id, role: p }] : [];
+    });
+  };
+  return { allies: known(team), enemies: known(otherTeam(team)), side: team };
 }
 
 /** "Kai'Sa" → "kaisa": search ignores case, spaces and punctuation. */

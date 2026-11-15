@@ -9,6 +9,8 @@ import {
   type ClientActivityRequest,
   type ClientActivityResponse,
   DEFAULT_TIER_LIST_FILTERS,
+  type DraftEvaluationResponse,
+  type DraftRequestInput,
   type HealthResponse,
   LIVE_PLAYERS_ROUTE,
   type LivePlayersRequest,
@@ -46,6 +48,8 @@ export interface ApiClient {
   staticData(patch?: string): Promise<StaticDataResponse>;
   picks(request: PicksRequestInput): Promise<PicksResponse>;
   build(request: BuildRequestInput): Promise<BuildResponse>;
+  /** Win probability and damage split of a draft in any state. */
+  draft(request: DraftRequestInput): Promise<DraftEvaluationResponse>;
   statsStatus(): Promise<StatsStatusResponse>;
   /** Asks the API to refresh its stats views now (answers immediately). */
   statsRefresh(): Promise<StatsRefreshResponse>;
@@ -114,6 +118,7 @@ export function createApiClient(
     staticData: (patch = 'latest') => call(API_ROUTES.static(patch)),
     picks: (request) => call(API_ROUTES.picks, request),
     build: (request) => call(API_ROUTES.build, request),
+    draft: (request) => call(API_ROUTES.draft, request),
     statsStatus: () => call(API_ROUTES.statsStatus),
     statsRefresh: () => call(API_ROUTES.statsRefresh, undefined, 'POST'),
     livePlayers: (request) => call(LIVE_PLAYERS_ROUTE, request),

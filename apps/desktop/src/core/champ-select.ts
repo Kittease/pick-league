@@ -3,7 +3,13 @@
  * Runtime-agnostic (used by the main process and its tests).
  */
 
-import type { BuildRequestInput, PicksRequestInput, Position } from '@pick-league/shared';
+import type {
+  BuildRequestInput,
+  DraftRequestInput,
+  DraftSide,
+  PicksRequestInput,
+  Position,
+} from '@pick-league/shared';
 import type {
   LcuChampSelectAction,
   LcuChampSelectPlayer,
@@ -54,6 +60,8 @@ export interface ChampSelectView {
   lockedChampionId: number | null;
   /** Current summoner spells of the local player [D, F]. */
   mySpells: [number, number];
+  /** Side of the user's team (LCU team 1 = blue, 2 = red); null when unknown. */
+  side?: DraftSide | null;
 }
 
 function allActions(session: LcuChampSelectSession): LcuChampSelectAction[] {
@@ -154,6 +162,7 @@ export function deriveChampSelect(
     lockedIn: lockedChampionId !== null,
     lockedChampionId,
     mySpells: [meRaw?.spell1Id ?? 0, meRaw?.spell2Id ?? 0],
+    side: meRaw?.team === 1 ? 'blue' : meRaw?.team === 2 ? 'red' : null,
   };
 }
 
@@ -208,6 +217,22 @@ export function buildBuildRequest(
     role: view.role,
     allies: known(view.allies).slice(0, 4),
     enemies: known(view.enemies).slice(0, 5),
+  };
+}
+
+/**
+ * Body of `POST /recommendations/draft` for the current state of champion select: the user and
+ * the teammates as allies (the user in the role recommended for), the enemies (roles unknown
+ * unless the client gives them), the side. Hovered champions count: the draft as it stands.
+ */
+export function buildDraftRequest(view: ChampSelectView): DraftRequestInput {
+  const known = (players: SelectPlayerView[]) =>
+    players.flatMap((p) => (p.championId ? [{ championId: p.championId, role: p.role }] : []));
+  const me = view.me.championId ? [{ championId: view.me.championId, role: view.role }] : [];
+  return {
+    allies: [...me, ...known(view.allies)].slice(0, 5),
+    enemies: known(view.enemies).slice(0, 5),
+    side: view.side ?? null,
   };
 }
 

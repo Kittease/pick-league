@@ -100,7 +100,7 @@ function setup(
     live?: (req: LivePlayersRequest, n: number) => Promise<LivePlayersResponse>;
   } = {},
 ) {
-  const calls = { picks: 0, build: 0, spells: 0, applies: 0 };
+  const calls = { picks: 0, build: 0, draft: 0, spells: 0, applies: 0 };
   /** Bodies of POST /live/players, in order. */
   const live: LivePlayersRequest[] = [];
   /** Phases sent to PUT /client/activity, in order. */
@@ -116,6 +116,17 @@ function setup(
     build: async (req) => {
       calls.build++;
       return buildFor(req);
+    },
+    draft: async (req) => {
+      calls.draft++;
+      const none = { physical: 0, magic: 0, true: 0, champions: [] };
+      return {
+        patch: '15.22',
+        patchesUsed: ['15.22'],
+        winProbability: req.side === 'red' ? 0.52 : 0.48,
+        reasons: [],
+        damage: { allies: none, enemies: none },
+      };
     },
     statsStatus: async () => Promise.reject(new Error('no stats in tests')),
     statsRefresh: async () => Promise.reject(new Error('no stats in tests')),
@@ -283,7 +294,7 @@ describe('controller: champion select → game', () => {
       build: { status: 'ok', data: { championId: LOCKED_CHAMPION } },
       apply: { state: 'idle' },
     });
-    expect(calls).toEqual({ picks: 0, build: 1, spells: 0, applies: 0 });
+    expect(calls).toEqual({ picks: 0, build: 1, draft: 0, spells: 0, applies: 0 });
   });
 });
 
@@ -522,6 +533,21 @@ describe('controller: draft planner', () => {
     });
     expect(result.ok && result.data.championId).toBe(14);
     expect(calls.build).toBe(1);
+  });
+
+  test('forwards a valid draft evaluation request', async () => {
+    const { controller, calls } = setup();
+    const result = await controller.evaluateDraft({
+      allies: [{ championId: 14, role: 'UTILITY' }],
+      enemies: [{ championId: 4, role: null }],
+      side: 'red',
+    });
+    expect(result.ok && result.data.winProbability).toBe(0.52);
+    expect(calls.draft).toBe(1);
+    for (const bad of [null, { side: 'green' }, { allies: [{ championId: 0, role: null }] }]) {
+      expect(await controller.evaluateDraft(bad)).toMatchObject({ ok: false, code: 'BAD_REQUEST' });
+    }
+    expect(calls.draft).toBe(1);
   });
 
   test('refuses malformed bodies from the renderer without calling the API', async () => {

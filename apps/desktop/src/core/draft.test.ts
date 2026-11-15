@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildRequestSchema,
+  draftRequestSchema,
   type PickCandidate,
   type Position,
   picksRequestSchema,
@@ -8,19 +9,26 @@ import {
 import {
   allBans,
   ban,
+  banPhase,
+  COMPETITIVE_TURNS,
   championPool,
   currentTurn,
   DRAFT_PICKS_LIMIT,
   DRAFT_TURNS,
   type Draft,
+  displacedBy,
   draftBuildRequest,
+  draftEvaluationRequest,
   draftPicksRequest,
+  draftTurns,
   EMPTY_DRAFT,
+  emptyDraft,
   isComplete,
   lastAction,
   openRoles,
   pick,
   pickRole,
+  swapRoles,
   teamBans,
   teamPicks,
   turnLabel,
@@ -163,14 +171,39 @@ describe('draft: picks', () => {
     expect(unavailableChampionIds(d)).toEqual(new Set([9]));
   });
 
-  test("a role the team already has is refused, the other team's is not", () => {
+  test('a role the team already has: the new pick takes it, its champion moves to an open role', () => {
     const d = play(afterBans(), [[1, 'TOP']]);
     expect(teamPicks(pick(d, 11, 'TOP'), 'red').TOP?.championId).toBe(11);
     const blueAgain = play(d, [
       [11, 'JUNGLE'],
       [12, 'MIDDLE'],
     ]);
-    expect(pick(blueAgain, 2, 'TOP')).toBe(blueAgain);
+    // B1 was a flex pick: B2 takes top, B1 goes to the first open role (jungle)…
+    const moved = pick(blueAgain, 2, 'TOP');
+    expect(teamPicks(moved, 'blue')).toEqual({
+      TOP: { championId: 2, number: 2 },
+      JUNGLE: { championId: 1, number: 1 },
+    });
+    // …or to the open role asked for.
+    expect(teamPicks(pick(blueAgain, 2, 'TOP', 'MIDDLE'), 'blue').MIDDLE?.championId).toBe(1);
+    // Undo removes the new pick; the moved champion stays where it went.
+    expect(teamPicks(undo(moved), 'blue')).toEqual({ JUNGLE: { championId: 1, number: 1 } });
+  });
+
+  test('swapRoles moves picks between roles at any time, not a turn', () => {
+    const done = play(afterBans(), FULL_PICKS);
+    const swapped = swapRoles(done, 'blue', 'TOP', 'JUNGLE');
+    expect(teamPicks(swapped, 'blue').TOP?.championId).toBe(2);
+    expect(teamPicks(swapped, 'blue').JUNGLE?.championId).toBe(1);
+    expect(teamPicks(swapped, 'red')).toEqual(teamPicks(done, 'red'));
+    expect(swapped.actions).toHaveLength(done.actions.length);
+    // To an empty role: a move.
+    const early = play(afterBans(), [[1, 'TOP']]);
+    expect(teamPicks(swapRoles(early, 'blue', 'TOP', 'BOTTOM'), 'blue')).toEqual({
+      BOTTOM: { championId: 1, number: 1 },
+    });
+    expect(swapRoles(early, 'blue', 'TOP', 'TOP')).toBe(early);
+    expect(swapRoles(early, 'red', 'TOP', 'MIDDLE')).toBe(early);
   });
 
   test('nothing more once the draft is complete', () => {
@@ -250,9 +283,99 @@ describe('draft: picks request', () => {
     expect(picksRequestSchema.safeParse(request).success).toBe(true);
   });
 
-  test('null for a role the team already has', () => {
+  test('a role the team already has: its champion counts in the role it would move to', () => {
     const d = play(afterBans(), [[1, 'TOP']]);
-    expect(draftPicksRequest(d, 'blue', 'TOP')).toBeNull();
+    const request = draftPicksRequest(d, 'blue', 'TOP', 10, 'MIDDLE');
+    expect(request?.allies).toContainEqual({ championId: 1, role: 'MIDDLE' });
+    expect(request?.allies).not.toContainEqual({ championId: 1, role: 'TOP' });
+    expect(draftPicksRequest(d, 'blue', 'TOP')?.allies).toContainEqual({
+      championId: 1,
+      role: 'JUNGLE',
+    });
+  });
+
+  test('null once the team is full', () => {
+    const done = play(afterBans(), FULL_PICKS);
+    expect(draftPicksRequest(done, 'blue', 'TOP')).toBeNull();
+  });
+});
+
+describe('draft: competitive format', () => {
+  test('3 bans each, picks B1 R1 R2 B2 B3 R3, 2 bans each (red first), picks R4 B4 B5 R5', () => {
+    expect(draftTurns('competitive')).toBe(COMPETITIVE_TURNS);
+    const label = (t: { kind: string; team: string; number: number }) =>
+      t.kind === 'pick'
+        ? turnLabel(t as Parameters<typeof turnLabel>[0])
+        : `${t.team[0]}${t.number}`;
+    expect(COMPETITIVE_TURNS.map(label)).toEqual([
+      'b1',
+      'r1',
+      'b2',
+      'r2',
+      'b3',
+      'r3',
+      'B1',
+      'R1',
+      'R2',
+      'B2',
+      'B3',
+      'R3',
+      'r4',
+      'b4',
+      'r5',
+      'b5',
+      'R4',
+      'B4',
+      'B5',
+      'R5',
+    ]);
+    expect(banPhase({ format: 'competitive' }, 3)).toBe(1);
+    expect(banPhase({ format: 'competitive' }, 4)).toBe(2);
+    expect(banPhase({ format: 'soloq' }, 5)).toBe(1);
+  });
+
+  test('a competitive draft plays to the end with the same rules', () => {
+    let d = emptyDraft('competitive');
+    expect(d.format).toBe('competitive');
+    for (let i = 1; i <= 6; i++) d = ban(d, 100 + i);
+    expect(currentTurn(d)).toEqual({ kind: 'pick', team: 'blue', number: 1 });
+    d = play(d, [
+      [1, 'TOP'],
+      [11, 'JUNGLE'],
+      [12, 'MIDDLE'],
+      [2, 'JUNGLE'],
+      [3, 'MIDDLE'],
+      [13, 'TOP'],
+    ]);
+    expect(currentTurn(d)).toEqual({ kind: 'ban', team: 'red', number: 4 });
+    for (let i = 7; i <= 10; i++) d = ban(d, 100 + i);
+    expect(teamBans(d, 'red')).toEqual([102, 104, 106, 107, 109]);
+    d = play(d, [
+      [14, 'UTILITY'],
+      [4, 'BOTTOM'],
+      [5, 'UTILITY'],
+      [15, 'BOTTOM'],
+    ]);
+    expect(isComplete(d)).toBe(true);
+    expect(d.format).toBe('competitive');
+    expect(undo(d).format).toBe('competitive');
+  });
+});
+
+describe('draft: evaluation request', () => {
+  test("the team's picks as allies, the other team's as enemies, roles and side included", () => {
+    const d = play(afterBans(), FULL_PICKS.slice(0, 3));
+    const blue = draftRequestSchema.parse(draftEvaluationRequest(d));
+    expect(blue).toEqual({
+      allies: [{ championId: 1, role: 'TOP' }],
+      enemies: [
+        { championId: 11, role: 'JUNGLE' },
+        { championId: 12, role: 'MIDDLE' },
+      ],
+      side: 'blue',
+    });
+    expect(draftEvaluationRequest(d, 'red')).toMatchObject({ side: 'red', allies: blue.enemies });
+    expect(draftEvaluationRequest(EMPTY_DRAFT)).toEqual({ allies: [], enemies: [], side: 'blue' });
   });
 });
 
@@ -359,5 +482,17 @@ describe('draft: champion pool', () => {
       ranked: [],
       rest: [2, 3, 4, 5],
     });
+  });
+});
+
+describe('draft: choosing a role the team already has', () => {
+  test('pickRole keeps a taken role only when asked to, while the team has an open role', () => {
+    const d = play(afterBans(), [[1, 'TOP']]);
+    expect(pickRole(d, 'blue', 'TOP')).toBe('JUNGLE');
+    expect(pickRole(d, 'blue', 'TOP', true)).toBe('TOP');
+    expect(displacedBy(d, 'blue', 'TOP')).toEqual({ championId: 1, number: 1 });
+    expect(displacedBy(d, 'blue', 'MIDDLE')).toBeNull();
+    const done = play(afterBans(), FULL_PICKS);
+    expect(pickRole(done, 'blue', 'TOP', true)).toBeNull();
   });
 });

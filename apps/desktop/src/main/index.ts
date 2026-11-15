@@ -222,6 +222,7 @@ async function main(): Promise<void> {
   // Draft planner: the bodies come from the renderer, validated by the controller.
   ipcMain.handle(IPC.draftPicks, (_e, request: unknown) => controller.draftPicks(request));
   ipcMain.handle(IPC.draftBuild, (_e, request: unknown) => controller.draftBuild(request));
+  ipcMain.handle(IPC.evaluateDraft, (_e, request: unknown) => controller.evaluateDraft(request));
 
   controller.start();
   createWindow(controller);

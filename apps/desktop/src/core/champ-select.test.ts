@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { picksRequestSchema } from '@pick-league/shared';
+import { draftRequestSchema, picksRequestSchema } from '@pick-league/shared';
 import {
   availableChampionIds,
   buildBuildRequest,
+  buildDraftRequest,
   buildPicksRequest,
   deriveChampSelect,
   lcuPositionToPosition,
@@ -216,5 +217,35 @@ describe('buildBuildRequest', () => {
 
   test('can preview another champion', () => {
     expect(buildBuildRequest(deriveChampSelect(session(), 'UTILITY'), 40)?.championId).toBe(40);
+  });
+});
+
+describe('buildDraftRequest', () => {
+  test("the draft as it stands: me in my role, teammates', enemies' champions, our side", () => {
+    const view = deriveChampSelect(session(), 'MIDDLE');
+    expect(view.side).toBe('blue');
+    const request = draftRequestSchema.parse(buildDraftRequest(view));
+    expect(request).toEqual({
+      allies: [
+        { championId: 267, role: 'UTILITY' },
+        { championId: 516, role: 'TOP' },
+        { championId: 64, role: 'JUNGLE' },
+        { championId: 222, role: 'BOTTOM' },
+      ],
+      enemies: [{ championId: 122, role: null }],
+      side: 'blue',
+    });
+  });
+
+  test('red side from the LCU team; unknown side without it', () => {
+    const red = session({
+      localPlayerCellId: 7,
+      myTeam: [5, 6, 7, 8, 9].map((c) => player(c)),
+      theirTeam: [0, 1, 2, 3, 4].map((c) => player(c)),
+    });
+    expect(deriveChampSelect(red, 'MIDDLE').side).toBe('red');
+    expect(
+      buildDraftRequest({ ...deriveChampSelect(session(), 'MIDDLE'), side: undefined }).side,
+    ).toBeNull();
   });
 });

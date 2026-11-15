@@ -6,6 +6,8 @@
 import type {
   BuildRequestInput,
   BuildResponse,
+  DraftEvaluationResponse,
+  DraftRequestInput,
   PicksRequestInput,
   PicksResponse,
   Position,
@@ -147,6 +149,7 @@ export const IPC = {
   genericBuild: 'pickleague:generic-build',
   draftPicks: 'pickleague:draft-picks',
   draftBuild: 'pickleague:draft-build',
+  evaluateDraft: 'pickleague:evaluate-draft',
 } as const;
 
 /** Window chrome drawn by the app itself (frameless window on Windows and Linux). */
@@ -195,5 +198,7 @@ export interface PickLeagueBridge {
   draftPicks(request: PicksRequestInput): Promise<ApiResult<PicksResponse>>;
   /** Draft planner: build of a drafted champion against the simulated teams. */
   draftBuild(request: BuildRequestInput): Promise<ApiResult<BuildResponse>>;
+  /** Win probability and damage split of a draft (draft planner or champion select). */
+  evaluateDraft(request: DraftRequestInput): Promise<ApiResult<DraftEvaluationResponse>>;
   onState(listener: (state: AppState) => void): () => void;
 }

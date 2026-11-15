@@ -9,6 +9,8 @@ import {
   type BuildResponse,
   buildRequestSchema,
   CLIENT_ACTIVITY_RENEW_MS,
+  type DraftEvaluationResponse,
+  draftRequestSchema,
   isPlayingPhase,
   type LiveGameState,
   type LivePlayersResponse,
@@ -140,7 +142,7 @@ async function toResult<T>(call: Promise<T>): Promise<ApiResult<T>> {
   }
 }
 
-function badDraftRequest(what: 'picks' | 'build'): ApiResult<never> {
+function badDraftRequest(what: 'picks' | 'build' | 'evaluation'): ApiResult<never> {
   return { ok: false, code: 'BAD_REQUEST', message: `Invalid draft ${what} request` };
 }
 
@@ -361,6 +363,13 @@ export class Controller {
     const parsed = buildRequestSchema.safeParse(request);
     if (!parsed.success) return badDraftRequest('build');
     return toResult(this.api.build(parsed.data));
+  }
+
+  /** Win probability and damage split of a draft (draft planner or champion select). */
+  async evaluateDraft(request: unknown): Promise<ApiResult<DraftEvaluationResponse>> {
+    const parsed = draftRequestSchema.safeParse(request);
+    if (!parsed.success) return badDraftRequest('evaluation');
+    return toResult(this.api.draft(parsed.data));
   }
 
   // ---------------------------------------------------------------------------
