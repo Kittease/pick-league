@@ -1,7 +1,12 @@
-import type { Db } from '@pick-league/db';
+import { type Db, setClientActivity } from '@pick-league/db';
 import {
   API_ROUTES,
   buildRequestSchema,
+  CLIENT_ACTIVITY_ROUTE,
+  CLIENT_ACTIVITY_TTL_MS,
+  type ClientActivityResponse,
+  clientActivityRequestSchema,
+  isPlayingPhase,
   LIVE_PLAYERS_ROUTE,
   livePlayersRequestSchema,
   MAX_REQUEST_BODY_BYTES,
@@ -26,7 +31,8 @@ import { buildCacheKey, picksCacheKey, type TtlCache, tierListCacheKey } from '.
 import type { TokenBucketLimiter } from './rate-limit.ts';
 
 /** What the HTTP layer needs from the stats refresher. */
-export type StatsControl = Pick<StatsRefresher, 'status' | 'requestRefresh'>;
+export type StatsControl = Pick<StatsRefresher, 'status' | 'requestRefresh'> &
+  Partial<Pick<StatsRefresher, 'activityChanged'>>;
 
 export interface AppDeps {
   db: Db;
@@ -91,7 +97,11 @@ export function createApp(deps: AppDeps): Hono<Env> {
   });
   app.use(
     '*',
-    cors({ origin: '*', allowMethods: ['GET', 'POST', 'OPTIONS'], allowHeaders: ['Content-Type'] }),
+    cors({
+      origin: '*',
+      allowMethods: ['GET', 'POST', 'PUT', 'OPTIONS'],
+      allowHeaders: ['Content-Type'],
+    }),
   );
   app.use('*', async (c, next) => {
     if (limiter && c.req.method !== 'OPTIONS' && c.req.path !== API_ROUTES.health) {
@@ -161,6 +171,22 @@ export function createApp(deps: AppDeps): Hono<Env> {
   app.post(LIVE_PLAYERS_ROUTE, async (c) => {
     const req = await parseBody(c, livePlayersRequestSchema);
     return c.json(await live.livePlayers(db, req));
+  });
+
+  // What the user does in the League client: from queue start to the end of the game the worker
+  // stops collecting and the stats refresh waits (docs/architecture.md, "Playing"). Renewed by
+  // the desktop while it lasts, so a closed app releases the pause by itself.
+  app.put(CLIENT_ACTIVITY_ROUTE, async (c) => {
+    const req = await parseBody(c, clientActivityRequestSchema);
+    const playing = isPlayingPhase(req.phase);
+    await setClientActivity(db, {
+      client: 'desktop',
+      phase: req.phase,
+      busyForMs: playing ? CLIENT_ACTIVITY_TTL_MS : null,
+    });
+    await deps.stats?.activityChanged?.(playing);
+    const body: ClientActivityResponse = { paused: playing };
+    return c.json(body);
   });
 
   if (deps.stats) {

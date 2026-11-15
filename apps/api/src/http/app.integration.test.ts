@@ -7,7 +7,10 @@ import {
   claimLiveLookups,
   createDb,
   type Db,
+  failLiveGame,
   finishLiveLookup,
+  readPlayPause,
+  storeLiveGame,
   storeLiveMastery,
   storeLiveRank,
   storeLiveRecent,
@@ -868,23 +871,62 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(r.reason).toBe('unchanged');
   });
 
-  test('POST /live/players: queued for the worker, answered as it fills in, never cached', async () => {
+  test('POST /live/players: the game is found, then its players looked up, never cached', async () => {
     const players = [
-      { puuid: 'fake-live-puuid-1', championId: 412, position: 'UTILITY', team: 'ally' },
-      { puuid: 'fake-live-puuid-2', championId: 89, position: 'TOP', team: 'enemy' },
+      { championId: 412, position: 'UTILITY', team: 'ally' },
+      { championId: 89, position: 'TOP', team: 'enemy' },
+      // Not in the game Riot shows (e.g. the client's champion changed).
+      { championId: 99, position: 'MIDDLE', team: 'enemy' },
+      // Hidden by Riot (privacy setting): never looked up.
+      { championId: 21, position: 'BOTTOM', team: 'ally' },
     ];
+    const me = { gameName: 'FakePlayer', tagLine: 'TEST' };
+    const ask = (platform: string, gameId = 7001) =>
+      post('/live/players', { platform, gameId, me, players });
     // No worker loop for this platform: nothing is queued.
-    let res = await post('/live/players', { platform: 'NA1', players });
+    let res = await ask('NA1');
     expect(res.status).toBe(200);
     let body = (await res.json()) as LivePlayersResponse;
-    expect(body).toMatchObject({ platform: 'NA1', worker: 'unsupported', done: true });
-    expect(body.players.map((p) => p.status)).toEqual(['unsupported', 'unsupported']);
+    expect(body).toMatchObject({
+      platform: 'NA1',
+      worker: 'unsupported',
+      game: 'unsupported',
+      done: true,
+    });
+    expect(body.players.map((p) => p.status)).toEqual([
+      'unsupported',
+      'unsupported',
+      'unsupported',
+      'unsupported',
+    ]);
+    expect((await db`SELECT 1 FROM live_games`).length).toBe(0);
     expect((await db`SELECT 1 FROM live_player_profiles`).length).toBe(0);
 
+    // The worker has to find the game first: every player pending, nothing looked up yet.
     await touchWorkerStatus(db, 'EUW1');
-    res = await post('/live/players', { platform: 'EUW1', players });
+    body = (await (await ask('EUW1')).json()) as LivePlayersResponse;
+    expect(body).toMatchObject({ worker: 'ok', game: 'finding', done: false });
+    expect(body.players.map((p) => p.status)).toEqual(['pending', 'pending', 'pending', 'pending']);
+    expect([
+      ...(await db`SELECT game_id::int AS id, game_name, tag_line, status FROM live_games`),
+    ]).toEqual([{ id: 7001, game_name: 'FakePlayer', tag_line: 'TEST', status: 'PENDING' }]);
+    expect((await db`SELECT 1 FROM live_player_profiles`).length).toBe(0);
+
+    // Found (spectator-v5): players are matched by team and champion, then queued.
+    await storeLiveGame(
+      db,
+      'EUW1',
+      7001,
+      [
+        { teamId: 200, championId: 412, puuid: 'fake-live-puuid-1' },
+        { teamId: 100, championId: 89, puuid: 'fake-live-puuid-2' },
+        { teamId: 200, championId: 21, puuid: null },
+      ],
+      200,
+    );
+    res = await ask('EUW1');
     body = (await res.json()) as LivePlayersResponse;
-    expect(body).toMatchObject({ platform: 'EUW1', worker: 'ok', done: false });
+    expect(body).toMatchObject({ platform: 'EUW1', worker: 'ok', game: 'found', done: false });
     expect(body.players).toEqual([
       {
         index: 0,
@@ -898,6 +940,8 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
         recent: null,
       },
       expect.objectContaining({ index: 1, team: 'enemy', status: 'pending' }),
+      expect.objectContaining({ index: 2, team: 'enemy', status: 'failed' }),
+      expect.objectContaining({ index: 3, team: 'ally', status: 'hidden' }),
     ]);
     expect(JSON.stringify(body)).not.toContain('fake-live-puuid');
 
@@ -923,9 +967,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       },
     ]);
     await finishLiveLookup(db, 'fake-live-puuid-1');
-    body = (await (
-      await post('/live/players', { platform: 'EUW1', players })
-    ).json()) as LivePlayersResponse;
+    body = (await (await ask('EUW1')).json()) as LivePlayersResponse;
     expect(body.done).toBe(false);
     expect(body.players[0]).toMatchObject({
       status: 'ready',
@@ -942,8 +984,35 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
 
     const bad = await post('/live/players', {
       platform: 'EUW1',
+      gameId: 7001,
+      me,
       players: [players[0], players[0]],
     });
     expect(bad.status).toBe(400);
+
+    // Riot does not show another game: every player failed, nothing more to ask.
+    await ask('EUW1', 7002);
+    await failLiveGame(db, 'EUW1', 7002, 'not_found: Riot does not show this game', 1);
+    body = (await (await ask('EUW1', 7002)).json()) as LivePlayersResponse;
+    expect(body).toMatchObject({ game: 'not_found', done: true });
+    expect(body.players.every((p) => p.status === 'failed')).toBe(true);
+  });
+
+  test('PUT /client/activity: playing from queue start to the end of the game', async () => {
+    const put = (phase: string) =>
+      app.request('/client/activity', {
+        method: 'PUT',
+        body: JSON.stringify({ phase }),
+        headers: { 'content-type': 'application/json' },
+      });
+    const res = await put('Matchmaking');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ paused: true });
+    expect(await readPlayPause(db)).toMatchObject({ paused: true, phase: 'Matchmaking' });
+    // Not renewed: over by itself (90 s).
+    expect((await readPlayPause(db, new Date(Date.now() + 91_000))).paused).toBe(false);
+    expect(await (await put('InProgress')).json()).toEqual({ paused: true });
+    expect(await (await put('EndOfGame')).json()).toEqual({ paused: false });
+    expect(await readPlayPause(db)).toEqual({ paused: false, phase: null, until: null });
   });
 });

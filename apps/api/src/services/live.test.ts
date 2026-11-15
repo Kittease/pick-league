@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import type { LiveProfile, LiveRecentMatch, WorkerStatus } from '@pick-league/db';
 import type { LivePlayerRequest, Position } from '@pick-league/shared';
-import { liveWorkerState, summarizeRecent, toLivePlayerResult } from './live.ts';
+import {
+  liveGameState,
+  liveWorkerState,
+  matchParticipant,
+  summarizeRecent,
+  toLivePlayerResult,
+} from './live.ts';
 
 let seq = 0;
 const match = (
@@ -76,7 +82,6 @@ describe('summarizeRecent', () => {
 
 describe('toLivePlayerResult', () => {
   const req: LivePlayerRequest = {
-    puuid: 'fake-live-puuid-1',
     championId: 412,
     position: 'UTILITY',
     team: 'enemy',
@@ -124,11 +129,68 @@ describe('toLivePlayerResult', () => {
       recent: { matches: 1, championWins: 1, offRole: null },
     });
     expect(toLivePlayerResult(req, 0, { ...profile, status: 'FAILED' }).status).toBe('failed');
-    expect(toLivePlayerResult(req, 0, undefined, true)).toMatchObject({
+    expect(toLivePlayerResult(req, 0, undefined, 'unsupported')).toMatchObject({
       status: 'unsupported',
       rankLoaded: false,
       rank: null,
     });
+    expect(toLivePlayerResult(req, 0, undefined).status).toBe('pending');
+    expect(toLivePlayerResult(req, 0, undefined, 'failed').status).toBe('failed');
+    expect(toLivePlayerResult(req, 0, undefined, 'hidden').status).toBe('hidden');
+  });
+});
+
+describe('matchParticipant', () => {
+  const participants = [
+    { teamId: 100, championId: 412, puuid: 'fake-api-puuid-1' },
+    { teamId: 200, championId: 89, puuid: 'fake-api-puuid-2' },
+    // Blind pick: the same champion on both teams.
+    { teamId: 100, championId: 21, puuid: 'fake-api-puuid-3' },
+    { teamId: 200, championId: 21, puuid: 'fake-api-puuid-4' },
+  ];
+
+  test('same champion, on the user team for an ally and the other one for an enemy', () => {
+    expect(matchParticipant({ team: 'ally', championId: 412 }, participants, 100)?.puuid).toBe(
+      'fake-api-puuid-1',
+    );
+    expect(matchParticipant({ team: 'enemy', championId: 89 }, participants, 100)?.puuid).toBe(
+      'fake-api-puuid-2',
+    );
+    expect(matchParticipant({ team: 'enemy', championId: 21 }, participants, 100)?.puuid).toBe(
+      'fake-api-puuid-4',
+    );
+    expect(matchParticipant({ team: 'ally', championId: 21 }, participants, 200)?.puuid).toBe(
+      'fake-api-puuid-4',
+    );
+  });
+
+  test('not in the game, on the wrong team, or ambiguous without the user team: null', () => {
+    expect(matchParticipant({ team: 'ally', championId: 99 }, participants, 100)).toBeNull();
+    expect(matchParticipant({ team: 'ally', championId: 89 }, participants, 100)).toBeNull();
+    expect(matchParticipant({ team: 'ally', championId: 21 }, participants, null)).toBeNull();
+    expect(matchParticipant({ team: 'ally', championId: 89 }, participants, null)?.puuid).toBe(
+      'fake-api-puuid-2',
+    );
+  });
+});
+
+describe('liveGameState', () => {
+  const game = {
+    platform: 'EUW1' as const,
+    gameId: 1,
+    participants: null,
+    myTeamId: null,
+    lastError: null,
+  };
+  test('finding, found, not found, failed', () => {
+    expect(liveGameState({ ...game, status: 'PENDING' })).toBe('finding');
+    expect(liveGameState({ ...game, status: 'READY' })).toBe('found');
+    expect(
+      liveGameState({ ...game, status: 'FAILED', lastError: 'not_found: Riot does not show it' }),
+    ).toBe('not_found');
+    expect(liveGameState({ ...game, status: 'FAILED', lastError: 'transient: HTTP 503' })).toBe(
+      'failed',
+    );
   });
 });
 

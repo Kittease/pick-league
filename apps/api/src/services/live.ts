@@ -1,14 +1,20 @@
 /**
- * POST /live/players: queues live game lookups for the worker (the only thing the API writes
- * besides its stats views) and answers with what is already in. The worker holds the Riot key;
- * the desktop repeats the request until `done`.
+ * POST /live/players: asks the worker to find the user's game, then to look its players up (the
+ * only things the API writes besides its stats views and the client activity), and answers with
+ * what is already in. The worker holds the Riot key; the desktop repeats the request until
+ * `done`. Players are matched to the game's participants (Riot API puuids, from spectator-v5)
+ * by team and champion: the League client's player ids are not the API's.
  */
 import {
   getLiveProfiles,
+  type LiveGame,
+  type LiveGameParticipant,
+  type LiveLookupRequest,
   type LiveProfile,
   type LiveRecentMatch,
   listWorkerStatus,
   type Queryable,
+  requestLiveGame,
   requestLiveLookups,
   type WorkerStatus,
 } from '@pick-league/db';
@@ -16,6 +22,7 @@ import {
   COLLECTION_STALL_MS,
   LIVE_OFF_ROLE_MAX_SHARE,
   LIVE_OFF_ROLE_MIN_MATCHES,
+  type LiveGameState,
   type LiveLookupStatus,
   type LivePlayerRequest,
   type LivePlayerResult,
@@ -80,12 +87,39 @@ function toRank(rank: LiveProfile['rank']): LiveRank | null {
   return { ...rank, winRate: games > 0 ? rank.wins / games : 0 };
 }
 
-/** One player of the answer (never with the puuid). */
+/** What the game search says, for the answer. */
+export function liveGameState(game: LiveGame): LiveGameState {
+  if (game.status === 'READY') return 'found';
+  if (game.status === 'PENDING') return 'finding';
+  return game.lastError?.startsWith('not_found') ? 'not_found' : 'failed';
+}
+
+/**
+ * The participant a requested player is: same champion, on the user's team for an ally and on
+ * the other one for an enemy. Null when there is no such participant (or several).
+ */
+export function matchParticipant(
+  req: Pick<LivePlayerRequest, 'team' | 'championId'>,
+  participants: readonly LiveGameParticipant[],
+  myTeamId: number | null,
+): LiveGameParticipant | null {
+  const found = participants.filter(
+    (p) =>
+      p.championId === req.championId &&
+      (myTeamId === null || (req.team === 'ally') === (p.teamId === myTeamId)),
+  );
+  return found.length === 1 ? (found[0] ?? null) : null;
+}
+
+/**
+ * One player of the answer (never with the puuid). Without a profile: `missing` says why
+ * (the game is still being found, it was not found, the player is not in it).
+ */
 export function toLivePlayerResult(
   req: LivePlayerRequest,
   index: number,
   profile: LiveProfile | undefined,
-  unsupported = false,
+  missing: 'pending' | 'failed' | 'unsupported' | 'hidden' = 'pending',
 ): LivePlayerResult {
   const base = {
     index,
@@ -93,10 +127,10 @@ export function toLivePlayerResult(
     championId: req.championId,
     position: req.position,
   };
-  if (unsupported || !profile) {
+  if (!profile) {
     return {
       ...base,
-      status: unsupported ? 'unsupported' : 'pending',
+      status: missing,
       rankLoaded: false,
       rank: null,
       mastery: null,
@@ -130,17 +164,52 @@ export async function livePlayers(
     return {
       platform: req.platform,
       worker,
+      game: 'unsupported',
       done: true,
-      players: req.players.map((p, i) => toLivePlayerResult(p, i, undefined, true)),
+      players: req.players.map((p, i) => toLivePlayerResult(p, i, undefined, 'unsupported')),
     };
   }
-  const asks = req.players.map((p) => ({ puuid: p.puuid, championId: p.championId }));
+  const game = await requestLiveGame(
+    db,
+    {
+      platform: req.platform,
+      gameId: req.gameId,
+      gameName: req.me.gameName,
+      tagLine: req.me.tagLine,
+    },
+    { now },
+  );
+  const gameState = liveGameState(game);
+  if (gameState !== 'found') {
+    const missing = gameState === 'finding' ? 'pending' : 'failed';
+    return {
+      platform: req.platform,
+      worker,
+      game: gameState,
+      done: missing === 'failed',
+      players: req.players.map((p, i) => toLivePlayerResult(p, i, undefined, missing)),
+    };
+  }
+  const participants = req.players.map((p) =>
+    matchParticipant(p, game.participants ?? [], game.myTeamId),
+  );
+  const asks: LiveLookupRequest[] = participants.flatMap((p) =>
+    p?.puuid ? [{ puuid: p.puuid, championId: p.championId }] : [],
+  );
   await requestLiveLookups(db, req.platform, asks, { now });
   const profiles = new Map((await getLiveProfiles(db, asks)).map((p) => [p.puuid, p]));
-  const players = req.players.map((p, i) => toLivePlayerResult(p, i, profiles.get(p.puuid)));
+  const players = req.players.map((p, i) => {
+    const participant = participants[i];
+    // Not in the game Riot shows (champion changed, wrong team): nothing to look up.
+    if (!participant) return toLivePlayerResult(p, i, undefined, 'failed');
+    // Riot hides who they are: never looked up.
+    if (!participant.puuid) return toLivePlayerResult(p, i, undefined, 'hidden');
+    return toLivePlayerResult(p, i, profiles.get(participant.puuid));
+  });
   return {
     platform: req.platform,
     worker,
+    game: gameState,
     done: players.every((p) => p.status !== 'pending'),
     players,
   };

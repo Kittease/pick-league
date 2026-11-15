@@ -189,6 +189,43 @@ describe.skipIf(!URL_)('manual stats refresh (Postgres)', () => {
     expect(last.message).toContain('stats_no_such_view');
   }, 60_000);
 
+  test('held while the user plays: a running one cancelled, everything runs after the game', async () => {
+    const errors: unknown[] = [];
+    const cache = new TtlCache<unknown>(60_000);
+    const refresher = new StatsRefresher(db, {
+      intervalMs: 60_000,
+      onError: (e) => errors.push(e),
+    });
+    const app = createApp({ db, cache, limiter: null, log: silentLogger, stats: refresher });
+    const activity = (phase: string) =>
+      app.request('/client/activity', {
+        method: 'PUT',
+        body: JSON.stringify({ phase }),
+        headers: { 'content-type': 'application/json' },
+      });
+    await addMatches(10);
+
+    // A refresh running when the queue starts is stopped (no error: it runs again later).
+    const running = refresher.tick();
+    await activity('Matchmaking');
+    expect(await running).toBeNull();
+    expect(errors).toEqual([]);
+    expect((await status(app)).pendingMatches).toBeGreaterThan(0);
+
+    // Meanwhile neither the timer nor a manual request starts one.
+    expect(await refresher.scheduledTick()).toBeNull();
+    expect((await trigger(app)).body).toEqual({ started: false, reason: 'playing' });
+    await activity('InProgress');
+    expect((await status(app)).refreshing).toBe(false);
+
+    // The game is over: the held refresh runs.
+    await activity('EndOfGame');
+    await refresher.idle();
+    expect((await status(app)).pendingMatches).toBe(0);
+    expect(errors).toEqual([]);
+    await refresher.stop();
+  }, 60_000);
+
   test('a refresh holding the advisory lock elsewhere counts as running', async () => {
     const { app } = setup(0);
     await addMatches(10);
