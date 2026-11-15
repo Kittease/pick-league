@@ -5,6 +5,9 @@ import {
   type ApiErrorResponse,
   type BuildRequestInput,
   type BuildResponse,
+  CLIENT_ACTIVITY_ROUTE,
+  type ClientActivityRequest,
+  type ClientActivityResponse,
   DEFAULT_TIER_LIST_FILTERS,
   type HealthResponse,
   LIVE_PLAYERS_ROUTE,
@@ -48,6 +51,8 @@ export interface ApiClient {
   statsRefresh(): Promise<StatsRefreshResponse>;
   /** Queues the lookups of a game's players; repeat until `done` (never cached). */
   livePlayers(request: LivePlayersRequest): Promise<LivePlayersResponse>;
+  /** Says what the user does in the League client (collection pauses while they play). */
+  clientActivity(request: ClientActivityRequest): Promise<ClientActivityResponse>;
   tierList(role: Position, filters?: TierListFilters, patch?: string): Promise<TierListResponse>;
   tierListChampion(
     role: Position,
@@ -67,7 +72,7 @@ export function createApiClient(
 ): ApiClient {
   const base = normaliseApiUrl(baseUrl);
 
-  async function call<T>(path: string, body?: unknown, method?: 'POST'): Promise<T> {
+  async function call<T>(path: string, body?: unknown, method?: 'POST' | 'PUT'): Promise<T> {
     let res: Response;
     try {
       res = await doFetch(`${base}${path}`, {
@@ -112,6 +117,7 @@ export function createApiClient(
     statsStatus: () => call(API_ROUTES.statsStatus),
     statsRefresh: () => call(API_ROUTES.statsRefresh, undefined, 'POST'),
     livePlayers: (request) => call(LIVE_PLAYERS_ROUTE, request),
+    clientActivity: (request) => call(CLIENT_ACTIVITY_ROUTE, request, 'PUT'),
     tierList: (role, filters = DEFAULT_TIER_LIST_FILTERS, patch = 'latest') =>
       call(`${TIER_LIST_ROUTE}?${new URLSearchParams({ role, patch, ...filters })}`),
     tierListChampion: (role, championId, filters = DEFAULT_TIER_LIST_FILTERS, patch = 'latest') =>

@@ -61,10 +61,28 @@ describe('lobby request', () => {
       ...roles.map((r) => `enemy ${r}`),
     ]);
     expect(req?.meIndex).toBe(4);
-    expect(req?.players[4]?.puuid).toBe(FAKE_SUMMONER.puuid as string);
+    // No player id goes out: the user's Riot ID finds the game (spectator-v5).
+    expect(req?.me).toEqual({ gameName: 'FakePlayer', tagLine: 'TEST' });
+    expect(JSON.stringify(req)).not.toContain(FAKE_SUMMONER.puuid as string);
   });
 
-  test('the user on the red side; players without puuid or champion and unknown roles', () => {
+  test('no Riot ID or no game id: the game cannot be found, nothing to look up', () => {
+    const game = gameflowSession([14, 4]);
+    const noTag = { ...FAKE_SUMMONER, tagLine: ' ' };
+    expect(lobbyRequestFromGameflow(game, noTag, 'InProgress')).toBeNull();
+    const noId: LcuGameflowSession = { ...game, gameData: { ...game.gameData, gameId: 0 } };
+    expect(lobbyRequestFromGameflow(noId, FAKE_SUMMONER, 'InProgress')).toBeNull();
+  });
+
+  test('a champion twice in a team (blind pick) is left out after the first', () => {
+    const game = gameflowSession([14, 4]);
+    const enemies = game.gameData.teamTwo;
+    if (enemies[1] && enemies[0]) enemies[1] = { ...enemies[1], championId: enemies[0].championId };
+    const req = lobbyRequestFromGameflow(game, FAKE_SUMMONER, 'InProgress');
+    expect(req?.players.filter((p) => p.team === 'enemy')).toHaveLength(4);
+  });
+
+  test('the user on the red side; players without champion and unknown roles', () => {
     const game = gameflowSession([14, 4]);
     const flipped: LcuGameflowSession = {
       ...game,
@@ -75,11 +93,10 @@ describe('lobby request', () => {
       },
     };
     const blue = flipped.gameData.teamOne;
-    if (blue[0]) blue[0] = { ...blue[0], puuid: undefined };
     if (blue[1]) blue[1] = { ...blue[1], championId: 0 };
     if (blue[2]) blue[2] = { ...blue[2], selectedPosition: 'NONE' };
     const req = lobbyRequestFromGameflow(flipped, FAKE_SUMMONER, 'Reconnect');
-    expect(req?.players).toHaveLength(8);
+    expect(req?.players).toHaveLength(9);
     expect(req?.players.slice(0, 5).every((p) => p.team === 'ally')).toBe(true);
     expect(req?.meIndex).toBe(4);
     expect(req?.players.find((p) => p.championId === ENEMY_PICKS[2])?.position).toBeNull();
@@ -147,6 +164,7 @@ describe('lobby view', () => {
     const response: LivePlayersResponse = {
       platform: 'EUW1',
       worker: 'ok',
+      game: 'found',
       done: false,
       players: [
         {
@@ -164,6 +182,7 @@ describe('lobby view', () => {
     };
     const view = lobbyView(shuffled, 'EUW1', response, 'loading');
     expect(view.worker).toBe('ok');
+    expect(view.game).toBe('found');
     expect(view.allies).toEqual([]);
     expect(view.enemies.map((p) => p.championId)).toEqual(ENEMY_PICKS);
     expect(view.enemies.map((p) => p.status)).toEqual([

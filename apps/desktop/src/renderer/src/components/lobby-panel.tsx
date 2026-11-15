@@ -39,13 +39,15 @@ function Waiting({ className }: { className?: string }) {
   return <Skeleton className={cn('h-3 w-16', className)} />;
 }
 
-/** "—" for a player whose lookup failed or whose server is not collected. */
+const MISSING_TITLE: Partial<Record<LobbyPlayerView['status'], string>> = {
+  failed: 'Could not be looked up',
+  hidden: 'Riot hides who this player is: not looked up',
+};
+
+/** "—" for a player whose lookup failed, who is hidden, or whose server is not collected. */
 function Missing({ player }: { player: LobbyPlayerView }) {
   return (
-    <span
-      className="text-xs text-muted-foreground"
-      title={player.status === 'failed' ? 'Could not be looked up' : undefined}
-    >
+    <span className="text-xs text-muted-foreground" title={MISSING_TITLE[player.status]}>
       —
     </span>
   );
@@ -197,6 +199,13 @@ function PlayerRow({ player, lookup }: { player: LobbyPlayerView; lookup: Static
           </span>
         </span>
         <span className="ml-auto flex shrink-0 flex-col items-end gap-0.5">
+          {player.status === 'hidden' && (
+            <Flag
+              label="Hidden"
+              tip="Riot hides who this player is (their privacy setting): they are not looked up."
+              tone="muted"
+            />
+          )}
           {offRole && <Flag label="Off-role" tip={offRole} tone="gold" />}
           {isFirstTime(player) && (
             <Flag
@@ -285,8 +294,13 @@ function LobbyNotice({ lobby }: { lobby: LobbyView }) {
       />
     );
   }
-  if (lobby.message)
-    return <Notice tone="warn" title="Worker unavailable" message={lobby.message} />;
+  if (lobby.message) {
+    const title =
+      lobby.game === 'not_found' || lobby.game === 'failed'
+        ? 'Match not found'
+        : 'Worker unavailable';
+    return <Notice tone="warn" title={title} message={lobby.message} />;
+  }
   return null;
 }
 
@@ -317,7 +331,9 @@ export function LobbyPanel({
         {lobby.state === 'loading' && (
           <span className="ml-auto flex items-center gap-1.5">
             <LoaderCircleIcon className="size-3 animate-spin" />
-            Ranks first; recent matches can take a minute or two
+            {lobby.game === 'found'
+              ? 'Ranks first; recent matches can take a minute or two'
+              : 'Finding your match on Riot’s servers'}
           </span>
         )}
       </div>

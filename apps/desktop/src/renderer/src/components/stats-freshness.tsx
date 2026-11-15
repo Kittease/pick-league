@@ -23,6 +23,10 @@ async function requestRefresh() {
   if (out.kind === 'error') toast.error('Refresh failed', { description: out.message });
   else if (out.kind === 'skipped' && out.reason === 'up_to_date')
     toast('Already up to date', { description: 'The stats include every stored match.' });
+  else if (out.kind === 'skipped' && out.reason === 'playing')
+    toast('Runs after your match', {
+      description: 'The refresh is heavy: it waits until the match is over.',
+    });
   else if (out.kind === 'skipped' && out.reason === 'cooldown')
     toast.warning('Refreshed moments ago', {
       description: `Try again in ${out.retryAfterSeconds ?? 60} s.`,

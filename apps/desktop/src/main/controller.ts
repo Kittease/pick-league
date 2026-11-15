@@ -8,6 +8,9 @@ import {
   type BuildRequestInput,
   type BuildResponse,
   buildRequestSchema,
+  CLIENT_ACTIVITY_RENEW_MS,
+  isPlayingPhase,
+  type LiveGameState,
   type LivePlayersResponse,
   type LiveWorkerState,
   type PicksRequestInput,
@@ -73,6 +76,15 @@ const LOBBY_POLL_MS = 3_000;
 /** …for at most this long (the worker is slow or down). */
 const LOBBY_MAX_MS = 5 * 60_000;
 
+const GAME_MESSAGE: Record<LiveGameState, string | null> = {
+  finding: null,
+  found: null,
+  not_found:
+    "Riot's spectator API does not show this match, so its players cannot be looked up (custom matches and some queues are not shown).",
+  failed: 'Riot kept failing to find this match: asked again in a minute.',
+  unsupported: null,
+};
+
 const WORKER_MESSAGE: Record<LiveWorkerState, string | null> = {
   ok: null,
   stalled: 'The PickLeague worker is not running: the players are looked up once it is back.',
@@ -80,7 +92,7 @@ const WORKER_MESSAGE: Record<LiveWorkerState, string | null> = {
   unsupported: 'The PickLeague worker does not collect your server (see PLATFORMS in its .env).',
 };
 
-/** Lookup of the game in progress. Holds the players' puuids: it never leaves the main process. */
+/** Lookup of the game in progress (players by team, champion and role: no player id). */
 interface LobbyLookup {
   request: LiveLobbyRequest;
   platform: Platform;
@@ -105,6 +117,8 @@ export interface ControllerDeps {
   /** Lobby lookup poll period and limit (tests shorten them). */
   lobbyPollMs?: number;
   lobbyMaxMs?: number;
+  /** How often a pause is renewed while the user plays (tests shorten it). */
+  activityRenewMs?: number;
 }
 
 function errorInfo(e: unknown): { message: string; code: string | null } {
@@ -167,6 +181,11 @@ export class Controller {
   /** Lookup of the players of the game in progress (one per game). */
   private lobbyLookup: LobbyLookup | null = null;
   private lobbyStarting = false;
+  /** Phase last sent to `PUT /client/activity` (null = nothing sent to this API yet). */
+  private activityPhase: string | null = null;
+  /** Renews the pause while the user plays. */
+  private activityTimer: ReturnType<typeof setInterval> | null = null;
+  private activityError: string | null = null;
 
   constructor(private readonly deps: ControllerDeps) {
     this.api = deps.createApi(deps.settings.apiUrl);
@@ -184,6 +203,7 @@ export class Controller {
       champSelect: null,
       inGame: false,
       lobby: null,
+      collectionPaused: false,
       mastery: {},
       availableCount: null,
       ownedChampionIds: null,
@@ -216,6 +236,8 @@ export class Controller {
     if (this.leavingTimer) clearTimeout(this.leavingTimer);
     this.cancelAutoApplyRetry();
     this.stopLobbyLookup();
+    if (this.activityTimer) clearInterval(this.activityTimer);
+    this.activityTimer = null;
   }
 
   getState(): AppState {
@@ -247,6 +269,8 @@ export class Controller {
       });
       void this.checkHealth();
       void this.ensureStatic();
+      this.activityPhase = null;
+      this.syncActivity();
       this.manualRefresh = null;
       this.patch({ stats: { status: null, refreshing: false, lastManual: null } });
       void this.pollStats();
@@ -358,6 +382,7 @@ export class Controller {
     if (status.state === 'searching') {
       this.lcuApi = null;
       this.patch({ lcu: { state: 'searching', account: null, message: status.message } });
+      this.syncActivity();
       return;
     }
     const wasConnected = this.lcuApi !== null;
@@ -428,6 +453,54 @@ export class Controller {
     }
     // `leaving`: the last champion select stays as it is until the next phase tells.
     this.syncLobbyLookup();
+    this.syncActivity();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Client activity (collection paused while the user plays)
+  // ---------------------------------------------------------------------------
+
+  /** The League client phase as the API should know it ('None' without a client). */
+  private currentPhase(): string {
+    return (this.lcuApi && this.lobby.phase) || 'None';
+  }
+
+  /**
+   * Tells the API each phase change; while the user plays (queue → end of game) the call is
+   * renewed every `CLIENT_ACTIVITY_RENEW_MS`, so the pause ends by itself if the app goes away.
+   */
+  private syncActivity(): void {
+    const phase = this.currentPhase();
+    if (phase !== this.activityPhase) void this.sendActivity(phase);
+    const playing = isPlayingPhase(phase);
+    if (playing && !this.activityTimer) {
+      this.activityTimer = setInterval(
+        () => void this.sendActivity(this.currentPhase()),
+        this.deps.activityRenewMs ?? CLIENT_ACTIVITY_RENEW_MS,
+      );
+    } else if (!playing && this.activityTimer) {
+      clearInterval(this.activityTimer);
+      this.activityTimer = null;
+    }
+  }
+
+  private async sendActivity(phase: string): Promise<void> {
+    const api = this.api;
+    this.activityPhase = phase;
+    try {
+      const res = await api.clientActivity({ phase });
+      if (api !== this.api) return;
+      this.activityError = null;
+      if (res.paused !== this.state.collectionPaused) this.patch({ collectionPaused: res.paused });
+    } catch (e) {
+      if (api !== this.api) return;
+      // Sent again on the next renewal / phase change.
+      if (this.activityPhase === phase) this.activityPhase = null;
+      const message = errorInfo(e).message;
+      if (message !== this.activityError) this.deps.log(`client activity not sent: ${message}`);
+      this.activityError = message;
+      if (this.state.collectionPaused) this.patch({ collectionPaused: false });
+    }
   }
 
   private showSelect(isNew: boolean): void {
@@ -598,6 +671,8 @@ export class Controller {
     try {
       const res = await api.livePlayers({
         platform: lookup.platform,
+        gameId: lookup.request.gameId,
+        me: lookup.request.me,
         players: lookup.request.players,
       });
       if (lookup !== this.lobbyLookup || api !== this.api) return;
@@ -605,7 +680,7 @@ export class Controller {
       lookup.finished = res.done;
       showLobby(
         res.worker === 'unsupported' ? 'unsupported' : res.done ? 'done' : 'loading',
-        WORKER_MESSAGE[res.worker],
+        WORKER_MESSAGE[res.worker] ?? GAME_MESSAGE[res.game],
       );
     } catch (e) {
       if (lookup !== this.lobbyLookup || api !== this.api) return;

@@ -3,12 +3,14 @@
  * progress, fetched through the user's own API (the worker asks Riot).
  *
  * Only once the game has started: never in champion select, where Riot hides who the players
- * are (the helper never reveals hidden identities). The puuids read from the client stay in the
- * main process (`LiveLobbyRequest`); the UI gets `LobbyView`, players by champion and role only.
+ * are (the helper never reveals hidden identities). No player id is sent: the League client's are
+ * not the Riot API's. The API gets the game id, the user's own Riot ID (the worker finds the game
+ * through it, spectator-v5) and the players by team, champion and role; the UI gets `LobbyView`.
  */
 
 import {
   isPosition,
+  type LiveGameState,
   type LiveLookupStatus,
   type LivePlayerRequest,
   type LivePlayersResponse,
@@ -19,6 +21,7 @@ import {
   type Platform,
   POSITIONS,
   type Position,
+  type RiotId,
 } from '@pick-league/shared';
 import { isMe } from './game-flow.ts';
 import type {
@@ -60,20 +63,21 @@ export function platformFromLcu(hints: LcuPlatformHints): Platform | null {
   return null;
 }
 
-/** What the main process sends to the API for one game (holds puuids: never sent to the UI). */
+/** What the main process sends to the API for one game. */
 export interface LiveLobbyRequest {
   gameId: number;
-  /** Players with a puuid and a champion, the user's team first. */
+  /** The user's own Riot ID: the worker finds the game through it. */
+  me: RiotId;
+  /** Players with a champion (each champion once per team), the user's team first. */
   players: LivePlayerRequest[];
   /** Index of the user in `players`; -1 when not among them. */
   meIndex: number;
 }
 
 function toRequest(p: LcuGameflowPlayer, team: LiveTeam): LivePlayerRequest | null {
-  if (!p.puuid || !(p.championId > 0)) return null;
+  if (!(p.championId > 0)) return null;
   const position = (p.selectedPosition ?? '').toUpperCase();
   return {
-    puuid: p.puuid,
     championId: p.championId,
     position: isPosition(position) ? position : null,
     team,
@@ -83,7 +87,7 @@ function toRequest(p: LcuGameflowPlayer, team: LiveTeam): LivePlayerRequest | nu
 /**
  * The players to look up, from `/lol-gameflow/v1/session`. Null unless both the tracked phase and
  * the session say the game is running (`canLookUpLobby`), when the user is not one of the
- * players (spectating), or when no player can be looked up.
+ * players (spectating), has no Riot ID, or when no player can be looked up.
  */
 export function lobbyRequestFromGameflow(
   gameflow: LcuGameflowSession,
@@ -91,6 +95,9 @@ export function lobbyRequestFromGameflow(
   phase: LcuGameflowPhase | null,
 ): LiveLobbyRequest | null {
   if (!canLookUpLobby(phase) || !canLookUpLobby(gameflow.phase)) return null;
+  const gameName = me.gameName?.trim();
+  const tagLine = me.tagLine?.trim();
+  if (!gameName || !tagLine) return null;
   const { teamOne = [], teamTwo = [] } = gameflow.gameData ?? {};
   const [mine, theirs] = teamOne.some((p) => isMe(p, me))
     ? [teamOne, teamTwo]
@@ -106,13 +113,16 @@ export function lobbyRequestFromGameflow(
   ] as const) {
     for (const p of list) {
       const req = toRequest(p, team);
-      if (!req) continue;
+      // A champion twice in a team cannot be told apart (never in draft queues): left out.
+      if (!req || players.some((o) => o.team === team && o.championId === req.championId)) continue;
       if (team === 'ally' && isMe(p, me)) meIndex = players.length;
       players.push(req);
     }
   }
   if (players.length === 0 || players.length > 10) return null;
-  return { gameId: gameflow.gameData.gameId, players, meIndex };
+  const gameId = gameflow.gameData.gameId;
+  if (!Number.isSafeInteger(gameId) || gameId <= 0) return null;
+  return { gameId, me: { gameName, tagLine }, players, meIndex };
 }
 
 export interface LobbyPlayerView {
@@ -143,6 +153,8 @@ export interface LobbyView {
   message: string | null;
   platform: Platform | null;
   worker: LiveWorkerState | null;
+  /** Finding the game on Riot's side (null before the first answer). */
+  game: LiveGameState | null;
   allies: LobbyPlayerView[];
   enemies: LobbyPlayerView[];
 }
@@ -186,6 +198,7 @@ export function lobbyView(
     message,
     platform,
     worker: response?.worker ?? null,
+    game: response?.game ?? null,
     allies: team('ally'),
     enemies: team('enemy'),
   };

@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import type {
-  BuildRequestInput,
-  BuildResponse,
-  LivePlayersRequest,
-  LivePlayersResponse,
+import {
+  type BuildRequestInput,
+  type BuildResponse,
+  isPlayingPhase,
+  type LivePlayersRequest,
+  type LivePlayersResponse,
 } from '@pick-league/shared';
 import type { AppState } from '../core/app-state.ts';
 import {
@@ -84,7 +85,13 @@ function liveAnswer(req: LivePlayersRequest, pending: number[] = []): LivePlayer
     mastery: pending.includes(index) ? null : { level: 1, points: 100 },
     recent: null,
   }));
-  return { platform: req.platform, worker: 'ok', done: pending.length === 0, players };
+  return {
+    platform: req.platform,
+    worker: 'ok',
+    game: 'found',
+    done: pending.length === 0,
+    players,
+  };
 }
 
 function setup(
@@ -96,6 +103,8 @@ function setup(
   const calls = { picks: 0, build: 0, spells: 0, applies: 0 };
   /** Bodies of POST /live/players, in order. */
   const live: LivePlayersRequest[] = [];
+  /** Phases sent to PUT /client/activity, in order. */
+  const activity: string[] = [];
   const api: ApiClient = {
     baseUrl: 'http://api.test',
     health: async () => ({ ok: true, db: true, latestPatch: '15.22', matchCount: 10 }),
@@ -115,6 +124,10 @@ function setup(
     livePlayers: async (req) => {
       live.push(req);
       return options.live ? options.live(req, live.length) : liveAnswer(req);
+    },
+    clientActivity: async (req) => {
+      activity.push(req.phase);
+      return { paused: isPlayingPhase(req.phase) };
     },
   };
   const lcu: LcuApi = {
@@ -155,6 +168,7 @@ function setup(
     log: () => undefined,
     autoApplyRetryMs: 20,
     lobbyPollMs: 20,
+    activityRenewMs: 30,
   });
   current = controller;
   controller.start();
@@ -175,7 +189,7 @@ function setup(
     },
   };
   const state = (): AppState => controller.getState();
-  return { controller, calls, live, lcu: lcuEvents, state };
+  return { controller, calls, live, activity, lcu: lcuEvents, state };
 }
 
 describe('controller: champion select → game', () => {
@@ -292,6 +306,9 @@ describe('controller: lobby lookup', () => {
     expect(live.length).toBe(3);
     expect(live[0]?.platform).toBe('EUW1');
     expect(live[0]?.players).toHaveLength(10);
+    // The game is found from the user's own Riot ID: no player id is sent.
+    expect(live[0]).toMatchObject({ gameId: 1, me: { gameName: 'FakePlayer', tagLine: 'TEST' } });
+    expect(JSON.stringify(live)).not.toContain(FAKE_SUMMONER.puuid as string);
     // Done: no more requests.
     await settle();
     expect(live.length).toBe(3);
@@ -517,5 +534,48 @@ describe('controller: draft planner', () => {
     }
     expect(calls.picks).toBe(0);
     expect(calls.build).toBe(0);
+  });
+});
+
+describe('controller: collection paused while the user plays', () => {
+  test('from queue start to the end of the game, renewed meanwhile, then released', async () => {
+    const { activity, lcu, state } = setup();
+    lcu.phase('Lobby');
+    await settle();
+    expect(activity.at(-1)).toBe('Lobby');
+    expect(state().collectionPaused).toBe(false);
+
+    lcu.phase('Matchmaking');
+    await settle();
+    expect(state().collectionPaused).toBe(true);
+    lcu.phase('ChampSelect');
+    lcu.session(champSelectSession());
+    lcu.phase('InProgress');
+    lcu.session(null);
+    const sent = activity.length;
+    await new Promise((r) => setTimeout(r, 100));
+    // Renewed while in game (every 30 ms here).
+    expect(activity.length).toBeGreaterThan(sent + 1);
+    expect(activity.at(-1)).toBe('InProgress');
+    expect(state().collectionPaused).toBe(true);
+
+    lcu.phase('EndOfGame');
+    await settle();
+    expect(state().collectionPaused).toBe(false);
+    const ended = activity.length;
+    await new Promise((r) => setTimeout(r, 100));
+    expect(activity.length).toBe(ended);
+    expect(activity.at(-1)).toBe('EndOfGame');
+  });
+
+  test('the League client closing in game ends the pause', async () => {
+    const { activity, lcu, state } = setup();
+    lcu.phase('InProgress');
+    await settle();
+    expect(state().collectionPaused).toBe(true);
+    lcu.disconnect();
+    await settle();
+    expect(activity.at(-1)).toBe('None');
+    expect(state().collectionPaused).toBe(false);
   });
 });

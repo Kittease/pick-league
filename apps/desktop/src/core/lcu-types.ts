@@ -1,11 +1,10 @@
 /**
  * Minimal shapes of the League client (LCU) endpoints we use. Only the fields we read are
  * typed; the client sends many more. Identity fields (names, puuids) are deliberately absent,
- * except the puuids of a game in progress (`LcuGameflowPlayer`): compared with the user's own to
- * find their team, and — only once the game has started, never in champion select — sent to the
- * user's own PickLeague API to look the players up (rank, recent form, mastery). They stay in the
- * main process: never shown, logged, stored, nor passed to the UI, which shows players by
- * champion and role only.
+ * except the puuids of a game in progress (`LcuGameflowPlayer`), only compared with the user's
+ * own to find their team, and the user's own Riot ID. Other players' ids never leave the main
+ * process (they are not the Riot API's anyway): the lobby lookup sends the user's own Riot ID and
+ * the players by team, champion and role, and the worker finds the game through Riot.
  */
 
 /** `assignedPosition` in champion select; '' in blind/custom games. */
