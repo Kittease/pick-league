@@ -4,6 +4,8 @@ import type {
   BuildRequest,
   BuildResponse,
   CompTrait,
+  DraftEvaluationResponse,
+  DraftRequest,
   PatchId,
   PicksRequest,
   PicksResponse,
@@ -11,6 +13,9 @@ import type {
 import {
   choosePatches,
   DUO_ROLES,
+  draftPairs,
+  draftRoles,
+  evaluateDraft,
   LANE_ROLES,
   recommendBuild,
   recommendPicks,
@@ -167,4 +172,35 @@ export async function build(q: Queryable, req: BuildRequest): Promise<BuildRespo
   if (!result)
     throw new ApiError('NO_DATA', `No build data for champion ${req.championId} as ${req.role}`);
   return result;
+}
+
+/** Win probability and damage profile of a draft in any state. */
+export async function draft(q: Queryable, req: DraftRequest): Promise<DraftEvaluationResponse> {
+  const ctx = await patchContext(q, req.patch);
+  const roleStats = await repo.loadRoleStats(q, ctx.patches);
+  if (roleStats.length === 0) throw new ApiError('NO_DATA', 'No stats yet');
+  const roles = draftRoles(req, roleStats);
+  const pairs = draftPairs(roles);
+  const ids = [...req.allies, ...req.enemies].map((p) => p.championId);
+  const [vs, withRows, championTraits, sides, names] = await Promise.all([
+    repo.loadVsPairs(q, ctx.patches, pairs.vs),
+    repo.loadWithPairs(q, ctx.patches, pairs.with),
+    repo.loadChampionTraits(q, ctx.patches, ids),
+    repo.loadSideWins(q, ctx.patches),
+    repo.loadNames(q, ctx.patches),
+  ]);
+  return evaluateDraft(
+    req,
+    {
+      currentPatch: ctx.current,
+      previousPatch: ctx.previous,
+      roleStats,
+      vs,
+      with: withRows,
+      championTraits,
+      sides,
+      names,
+    },
+    roles,
+  );
 }

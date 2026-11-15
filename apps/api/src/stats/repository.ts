@@ -10,6 +10,7 @@
  */
 import type { Queryable } from '@pick-league/db';
 import type { CompTrait, PatchId, Platform, Position } from '@pick-league/shared';
+import type { SideRow } from '../engine/draft.ts';
 import type { BanRow, PatchMatchesRow } from '../engine/tierlist.ts';
 import type {
   ChampionTraitRow,
@@ -768,4 +769,105 @@ export async function loadSegmentTotals(
     WHERE patch IN ${q(patches)} ${inSegment(q, segment)}
     GROUP BY patch`;
   return rows.map((r) => ({ patch: r.patch, matches: r.participants }));
+}
+
+/**
+ * stats_champion_vs rows of every champion of `position` vs `otherId` playing `otherPosition`,
+ * for each pair asked (the draft evaluation: both points of view of each ally–enemy pair).
+ */
+export async function loadVsPairs(
+  q: Queryable,
+  patches: PatchId[],
+  pairs: readonly { position: Position; otherId: number; otherPosition: Position }[],
+): Promise<VsRow[]> {
+  const kept = uniquePairs(pairs.filter((p) => isStoredChampionId(p.otherId)));
+  if (kept.length === 0) return [];
+  const rows = await q<
+    {
+      patch: string;
+      position: Position;
+      champion_id: number;
+      enemy_position: Position;
+      enemy_id: number;
+      games: number;
+      wins: number;
+    }[]
+  >`
+    SELECT v.patch, v.position, v.champion_id, v.enemy_position, v.enemy_id, v.games, v.wins
+    FROM unnest(${kept.map((p) => p.position)}::text[], ${kept.map((p) => p.otherId)}::int[],
+                ${kept.map((p) => p.otherPosition)}::text[]) AS c(position, other_id, other_position)
+    JOIN stats_champion_vs v
+      ON v.patch IN ${q(patches)} AND v.position = c.position::"position"
+     AND v.enemy_id = c.other_id AND v.enemy_position = c.other_position::"position"`;
+  return rows.map((r) => ({
+    patch: r.patch,
+    position: r.position,
+    championId: r.champion_id,
+    enemyPosition: r.enemy_position,
+    enemyId: r.enemy_id,
+    games: r.games,
+    wins: r.wins,
+  }));
+}
+
+/** stats_champion_with rows of every champion of `position` with `otherId` playing `otherPosition`. */
+export async function loadWithPairs(
+  q: Queryable,
+  patches: PatchId[],
+  pairs: readonly { position: Position; otherId: number; otherPosition: Position }[],
+): Promise<WithRow[]> {
+  const kept = uniquePairs(pairs.filter((p) => isStoredChampionId(p.otherId)));
+  if (kept.length === 0) return [];
+  const rows = await q<
+    {
+      patch: string;
+      position: Position;
+      champion_id: number;
+      ally_position: Position;
+      ally_id: number;
+      games: number;
+      wins: number;
+    }[]
+  >`
+    SELECT w.patch, w.position, w.champion_id, w.ally_position, w.ally_id, w.games, w.wins
+    FROM unnest(${kept.map((p) => p.position)}::text[], ${kept.map((p) => p.otherId)}::int[],
+                ${kept.map((p) => p.otherPosition)}::text[]) AS c(position, other_id, other_position)
+    JOIN stats_champion_with w
+      ON w.patch IN ${q(patches)} AND w.position = c.position::"position"
+     AND w.ally_id = c.other_id AND w.ally_position = c.other_position::"position"`;
+  return rows.map((r) => ({
+    patch: r.patch,
+    position: r.position,
+    championId: r.champion_id,
+    allyPosition: r.ally_position,
+    allyId: r.ally_id,
+    games: r.games,
+    wins: r.wins,
+  }));
+}
+
+function uniquePairs<T extends { position: Position; otherId: number; otherPosition: Position }>(
+  pairs: readonly T[],
+): T[] {
+  const seen = new Map<string, T>();
+  for (const p of pairs) seen.set(`${p.position}|${p.otherId}|${p.otherPosition}`, p);
+  return [...seen.values()];
+}
+
+/** Results per side (stats_side_wins, 0016): team 100 = blue, 200 = red. */
+export async function loadSideWins(q: Queryable, patches: PatchId[]): Promise<SideRow[]> {
+  const rows = await q<{ patch: string; team_id: number; games: number; wins: number }[]>`
+    SELECT patch, team_id, games, wins FROM stats_side_wins WHERE patch IN ${q(patches)}`;
+  return rows.flatMap((r) =>
+    r.team_id === 100 || r.team_id === 200
+      ? [
+          {
+            patch: r.patch,
+            side: r.team_id === 100 ? ('blue' as const) : ('red' as const),
+            games: r.games,
+            wins: r.wins,
+          },
+        ]
+      : [],
+  );
 }

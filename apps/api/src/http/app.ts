@@ -6,6 +6,7 @@ import {
   CLIENT_ACTIVITY_TTL_MS,
   type ClientActivityResponse,
   clientActivityRequestSchema,
+  draftRequestSchema,
   isPlayingPhase,
   LIVE_PLAYERS_ROUTE,
   livePlayersRequestSchema,
@@ -27,7 +28,13 @@ import * as meta from '../services/meta.ts';
 import * as reco from '../services/recommendations.ts';
 import * as tiers from '../services/tierlist.ts';
 import type { StatsRefresher } from '../stats/refresh.ts';
-import { buildCacheKey, picksCacheKey, type TtlCache, tierListCacheKey } from './cache.ts';
+import {
+  buildCacheKey,
+  draftCacheKey,
+  picksCacheKey,
+  type TtlCache,
+  tierListCacheKey,
+} from './cache.ts';
 import type { TokenBucketLimiter } from './rate-limit.ts';
 
 /** What the HTTP layer needs from the stats refresher. */
@@ -147,6 +154,10 @@ export function createApp(deps: AppDeps): Hono<Env> {
   app.post(API_ROUTES.build, async (c) => {
     const req = await parseBody(c, buildRequestSchema);
     return cached(c, buildCacheKey(req), () => reco.build(db, req));
+  });
+  app.post(API_ROUTES.draft, async (c) => {
+    const req = await parseBody(c, draftRequestSchema);
+    return cached(c, draftCacheKey(req), () => reco.draft(db, req));
   });
   app.get(TIER_LIST_ROUTE, (c) => {
     const parsed = tierListQuerySchema.safeParse(c.req.query());

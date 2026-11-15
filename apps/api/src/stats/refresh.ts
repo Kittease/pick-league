@@ -39,6 +39,8 @@ export const STATS_REFRESH_ORDER: readonly {
   // Tier list ban rates (0003_stats_bans.sql).
   { view: 'stats_patch_matches', concurrent: true },
   { view: 'stats_champion_bans', concurrent: true },
+  // Results per side, for the draft evaluation (0016_side_wins.sql).
+  { view: 'stats_side_wins', concurrent: true },
   // Tier list filters by server and rank (0006_tierlist_filters.sql).
   { view: 'stats_tierlist_participants', concurrent: false, analyze: true },
   { view: 'stats_tierlist_roles', concurrent: true },

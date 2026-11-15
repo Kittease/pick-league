@@ -19,6 +19,7 @@ import {
 import type {
   ApiErrorResponse,
   BuildResponse,
+  DraftEvaluationResponse,
   HealthResponse,
   LivePlayersResponse,
   PatchesResponse,
@@ -235,6 +236,48 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     const braum = body.candidates.find((c) => c.championId === PLANTED.rareOnCurrent);
     expect(braum?.patchesUsed).toEqual([CUR, PREV]);
     expect(braum?.reasons[0]?.kind).toBe('patch_fallback');
+  });
+
+  test('draft: win probability, reasons and damage of a partial draft', async () => {
+    const res = await post('/recommendations/draft', {
+      allies: [
+        { championId: PLANTED.matchup.championId, role: 'UTILITY' },
+        { championId: 222, role: 'BOTTOM' },
+      ],
+      enemies: [{ championId: PLANTED.matchup.opponentId, role: null }],
+      side: 'red',
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as DraftEvaluationResponse;
+    expect(body.patch).toBe(CUR);
+    expect(body.winProbability).toBeGreaterThan(0.05);
+    expect(body.winProbability).toBeLessThan(0.95);
+    const kinds = new Set(body.reasons.map((r) => r.kind));
+    expect(kinds.has('base')).toBe(true);
+    expect(kinds.has('side')).toBe(true);
+    // The planted lane counter shows as a matchup in the allies' favour.
+    const lane = body.reasons.find(
+      (r) => r.kind === 'matchup' && r.championIds?.[1] === PLANTED.matchup.opponentId,
+    );
+    expect(lane?.delta).toBeGreaterThan(0);
+    expect(body.damage.allies.champions).toHaveLength(2);
+    const { physical, magic } = body.damage.allies;
+    expect(physical + magic).toBeGreaterThan(0);
+    expect(body.damage.enemies.champions.map((c) => c.championId)).toEqual([
+      PLANTED.matchup.opponentId,
+    ]);
+    // Same draft in another order: the same answer (cache key ignores the order).
+    const again = await post('/recommendations/draft', {
+      allies: [
+        { championId: 222, role: 'BOTTOM' },
+        { championId: PLANTED.matchup.championId, role: 'UTILITY' },
+      ],
+      enemies: [{ championId: PLANTED.matchup.opponentId, role: null }],
+      side: 'red',
+    });
+    expect(((await again.json()) as DraftEvaluationResponse).winProbability).toBe(
+      body.winProbability,
+    );
   });
 
   test('picks: availableChampionIds and limit', async () => {

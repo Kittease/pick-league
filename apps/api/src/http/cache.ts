@@ -128,3 +128,21 @@ export function buildCacheKey(req: {
     req.patch ?? null,
   ]);
 }
+
+/** Same draft whatever the order of each team's champions. */
+export function draftCacheKey(req: {
+  allies: readonly { championId: number; role: string | null }[];
+  enemies: readonly { championId: number; role: string | null }[];
+  side: string | null;
+  patch?: string;
+}): string {
+  const team = (xs: readonly { championId: number; role: string | null }[]) =>
+    xs.map((x) => `${x.role ?? '?'}:${x.championId}`).sort();
+  return JSON.stringify([
+    'draft',
+    team(req.allies),
+    team(req.enemies),
+    req.side,
+    req.patch ?? null,
+  ]);
+}

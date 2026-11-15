@@ -178,6 +178,24 @@ export const ENGINE_CONFIG = {
     minGames: 20,
   },
 
+  /**
+   * Draft evaluation (POST /recommendations/draft): the picks engine's deltas summed per team.
+   * Weights from a held-out logistic fit on 16.22 (25k test matches): summed champion strengths
+   * came out at ~0.92 of a calibrated win-rate difference and pair terms at ~0.62 (noisier), so
+   * they are scaled down to match; the resulting probabilities matched the observed results
+   * bucket by bucket (e.g. predicted 45.3 % → 44.8 % won, 59.3 % → 56.5 %).
+   */
+  draft: {
+    baseWeight: 0.9,
+    pairWeight: 0.6,
+    /** The probability stays within these bounds (a draft never decides a match alone). */
+    minProbability: 0.05,
+    maxProbability: 0.95,
+    /** Pair reasons under this |delta| are left out (each champion's strength is always listed). */
+    minReasonDelta: 0.002,
+    maxReasons: 14,
+  },
+
   /** Picks confidence: weighted mean of n / (n + k) of each scored component. */
   confidenceK: {
     base: 200,

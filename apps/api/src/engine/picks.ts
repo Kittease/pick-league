@@ -101,6 +101,7 @@ const KIND_ORDER: Record<Reason['kind'], number> = {
   popularity: 6,
   item_swap: 7,
   tag_rule: 8,
+  side: 9,
 };
 
 /** Resolves the traits of a side from champion profiles (current patch, else previous). */

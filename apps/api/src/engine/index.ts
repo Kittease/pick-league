@@ -1,6 +1,16 @@
 export { type BuildData, bestChoice, parseRunePage, recommendBuild } from './build.ts';
 export * from './config.ts';
 export {
+  type DraftData,
+  type DraftRoles,
+  draftPairs,
+  draftRoles,
+  evaluateDraft,
+  type PairKey,
+  type SideRow,
+  teamDamage,
+} from './draft.ts';
+export {
   formatLanePhase,
   isDuoLane,
   lanePhaseDiff,
