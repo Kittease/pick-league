@@ -225,6 +225,8 @@ export const STATS_REFRESH_SKIP_REASONS = [
   'already_running',
   /** The previous refresh finished too recently; see `retryAfterSeconds`. */
   'cooldown',
+  /** The user is queued, in champion select or in game: it runs once the game is over. */
+  'playing',
 ] as const;
 export type StatsRefreshSkipReason = (typeof STATS_REFRESH_SKIP_REASONS)[number];
 
@@ -637,9 +639,11 @@ export interface TierListChampionResponse {
 // POST /live/players
 // Rank, recent form and mastery of the players of the user's game in progress. Only once the
 // game has started (never in champion select, where Riot hides identities). The API only queues
-// the lookups: the worker fetches them from Riot (it holds the key), so the desktop repeats the
-// same request every few seconds until every player is done. Never cached. Puuids go in, they
-// never come back out (players are answered by their index in the request).
+// the work: the worker finds the game from the user's own Riot ID (account-v1, spectator-v5,
+// whose participants carry the Riot API puuids: the League client's player ids are not the
+// API's), then looks its players up. The desktop repeats the same request every few seconds
+// until `done`. Never cached. No player id goes in or comes out: players are named by team and
+// champion, answered by their index in the request.
 // ---------------------------------------------------------------------------
 
 export const LIVE_PLAYERS_ROUTE = '/live/players';
@@ -647,12 +651,15 @@ export const LIVE_PLAYERS_ROUTE = '/live/players';
 export const LIVE_TEAMS = ['ally', 'enemy'] as const;
 export type LiveTeam = (typeof LIVE_TEAMS)[number];
 
-/** Riot puuids are 78 characters of [A-Za-z0-9_-]; some room is left. */
-export const puuidSchema = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/, 'expected a puuid');
+/** The user's own Riot ID (`gameName#tagLine`), as the League client shows it. */
+export const riotIdSchema = z.object({
+  gameName: z.string().trim().min(1).max(64),
+  tagLine: z.string().trim().min(1).max(16),
+});
+export type RiotId = z.infer<typeof riotIdSchema>;
 
 export const livePlayerRequestSchema = z.object({
-  puuid: puuidSchema,
-  /** Champion the player has in this game. */
+  /** Champion the player has in this game (identifies the player within its team). */
   championId: championIdSchema,
   /** Position in this game; null when the client does not say (blind pick, customs). */
   position: positionSchema.nullable(),
@@ -663,13 +670,17 @@ export const livePlayerRequestSchema = z.object({
 export const livePlayersRequestSchema = z.object({
   /** The user's platform (from the League client). */
   platform: z.enum(PLATFORMS),
-  /** The players of the game (the user included, or not): at most 10, each puuid once. */
+  /** The game in progress (League client `gameData.gameId`). */
+  gameId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  /** The user, to find the game (spectator-v5 by the user's account). */
+  me: riotIdSchema,
+  /** The players of the game (the user included): at most 10, each team + champion once. */
   players: z
     .array(livePlayerRequestSchema)
     .min(1)
     .max(10)
-    .refine((list) => new Set(list.map((p) => p.puuid)).size === list.length, {
-      message: 'each puuid at most once',
+    .refine((list) => new Set(list.map((p) => `${p.team}:${p.championId}`)).size === list.length, {
+      message: 'each champion at most once per team',
     }),
 });
 
@@ -685,8 +696,25 @@ export const LIVE_LOOKUP_STATUSES = [
   'failed',
   /** No worker collects this platform: nothing will come. */
   'unsupported',
+  /** Riot hides who this player is (spectator-v5 gives no id): never looked up. */
+  'hidden',
 ] as const;
 export type LiveLookupStatus = (typeof LIVE_LOOKUP_STATUSES)[number];
+
+/** Finding the user's game (spectator-v5), before its players can be looked up. */
+export const LIVE_GAME_STATES = [
+  /** The worker is looking for it. */
+  'finding',
+  /** Found: its players are looked up. */
+  'found',
+  /** Riot does not show this game (not started yet for spectators, custom game, wrong Riot ID). */
+  'not_found',
+  /** Riot kept failing (asked again a minute later). */
+  'failed',
+  /** No worker collects this platform. */
+  'unsupported',
+] as const;
+export type LiveGameState = (typeof LIVE_GAME_STATES)[number];
 
 /** Whether the worker can serve the lookups of this platform right now. */
 export const LIVE_WORKER_STATES = [
@@ -761,8 +789,50 @@ export interface LivePlayerResult {
 export interface LivePlayersResponse {
   platform: Platform;
   worker: LiveWorkerState;
+  game: LiveGameState;
   /** Every player is ready, failed or unsupported: no need to ask again. */
   done: boolean;
   /** Same order as the request. */
   players: LivePlayerResult[];
+}
+
+// ---------------------------------------------------------------------------
+// PUT /client/activity
+// The desktop says what the user is doing in the League client. From queue start to the end of
+// the game (`isPlayingPhase`) it repeats the call every `CLIENT_ACTIVITY_RENEW_MS`; meanwhile
+// the worker sends no collection request (live lookups only) and the API holds its stats refresh
+// (a running one is cancelled and runs again after the game). A pause not renewed ends by itself
+// after `CLIENT_ACTIVITY_TTL_MS` (app closed or crashed).
+// ---------------------------------------------------------------------------
+
+export const CLIENT_ACTIVITY_ROUTE = '/client/activity';
+/** The desktop renews a pause this often. */
+export const CLIENT_ACTIVITY_RENEW_MS = 30_000;
+/** A pause not renewed for this long is over. */
+export const CLIENT_ACTIVITY_TTL_MS = 90_000;
+
+/** League client gameflow phases from queue start to the end of the game. */
+export const PLAYING_PHASES = [
+  'Matchmaking',
+  'CheckedIntoTournament',
+  'ReadyCheck',
+  'ChampSelect',
+  'GameStart',
+  'InProgress',
+  'Reconnect',
+] as const;
+
+export function isPlayingPhase(phase: string | null | undefined): boolean {
+  return phase != null && (PLAYING_PHASES as readonly string[]).includes(phase);
+}
+
+export const clientActivityRequestSchema = z.object({
+  /** League client gameflow phase ('None' when the client is gone). */
+  phase: z.string().trim().min(1).max(40),
+});
+export type ClientActivityRequest = z.infer<typeof clientActivityRequestSchema>;
+
+export interface ClientActivityResponse {
+  /** Collection and stats refresh are paused (the user is playing). */
+  paused: boolean;
 }
