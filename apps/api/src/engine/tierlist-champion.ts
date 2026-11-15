@@ -11,7 +11,7 @@ import type {
 } from '@pick-league/shared';
 import { DUO_ROLES, ENGINE_CONFIG, LANE_ROLES } from './config.ts';
 import { lanePhaseDiff, lanePhaseRowsOf } from './lane-phase.ts';
-import { round, shrink, sumByKey, winRate } from './math.ts';
+import { round, sampleConfidence, shrink, sumByKey, winRate } from './math.ts';
 import { championBaseline, rowsByPatchAndChampion } from './tierlist.ts';
 import type { GamesWins, LanePhaseRow, RoleStatRow, VsRow, WithRow } from './types.ts';
 
@@ -38,6 +38,7 @@ export type TierListChampionDetail = Omit<TierListChampionResponse, 'filters' | 
 
 const TL = ENGINE_CONFIG.tierList;
 const K = ENGINE_CONFIG.tierList.shrinkK;
+const CK = ENGINE_CONFIG.confidenceK;
 
 /** Best first; ties: bigger sample, then champion id (stable output). */
 const byDelta = (a: TierListRelation, b: TierListRelation) =>
@@ -47,7 +48,7 @@ function relations<R extends GamesWins & { patch: PatchId }>(
   rows: readonly R[],
   patches: readonly PatchId[],
   baseWr: number,
-  k: number,
+  k: { shrink: number; confidence: number },
   idOf: (r: R) => number,
   roleOf: (r: R) => Position,
 ): TierListRelation[] {
@@ -59,9 +60,10 @@ function relations<R extends GamesWins & { patch: PatchId }>(
     .map((r) => ({
       championId: idOf(r),
       role: roleOf(r),
-      delta: round(shrink(winRate(r) - baseWr, r.games, k)),
+      delta: round(shrink(winRate(r) - baseWr, r.games, k.shrink)),
       winRate: round(winRate(r)),
       games: r.games,
+      confidence: round(sampleConfidence(r.games, k.confidence), 3),
     }))
     .sort(byDelta);
 }
@@ -96,7 +98,14 @@ export function buildTierListChampion(
     patchesUsed: patches,
     games: base.games,
     winRate: round(baseWr),
-    matchups: relations(vs, patches, baseWr, K.matchup, enemy.id, enemy.role).map((m) => {
+    matchups: relations(
+      vs,
+      patches,
+      baseWr,
+      { shrink: K.matchup, confidence: CK.matchup },
+      enemy.id,
+      enemy.role,
+    ).map((m) => {
       const lane = lanePhaseDiff(
         lanePhaseRowsOf(data.lanePhase ?? [], championId, m.championId, m.role),
         patches,
@@ -104,12 +113,19 @@ export function buildTierListChampion(
       );
       return lane ? { ...m, lane } : m;
     }),
-    duos: relations(allies.filter(isDuo), patches, baseWr, K.duo, ally.id, ally.role),
+    duos: relations(
+      allies.filter(isDuo),
+      patches,
+      baseWr,
+      { shrink: K.duo, confidence: CK.duo },
+      ally.id,
+      ally.role,
+    ),
     synergies: relations(
       allies.filter((r) => !isDuo(r) && r.allyPosition !== role),
       patches,
       baseWr,
-      K.synergy,
+      { shrink: K.synergy, confidence: CK.pair },
       ally.id,
       ally.role,
     ),

@@ -64,6 +64,8 @@ describe('buildTierListChampion', () => {
       delta: expect.closeTo((0.2 * 400) / (400 + K.matchup), 4),
       winRate: 0.7,
       games: 400,
+      // Matchup confidence, like the picks engine: 400 / (400 + 80).
+      confidence: expect.closeTo(400 / (400 + ENGINE_CONFIG.confidenceK.matchup), 3),
     });
     expect(d.matchups.at(-1)?.delta).toBeCloseTo((-0.1 * 400) / (400 + K.matchup), 4);
   });

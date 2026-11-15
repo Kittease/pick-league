@@ -610,6 +610,8 @@ export interface TierListRelation {
   winRate: number;
   /** Games (matchups) the champion played vs / with this one. */
   games: number;
+  /** 0..1, derived from `games` (same scale as the picks engine's matchup / duo / pair parts). */
+  confidence: number;
   /**
    * Matchups only: lane-phase difference at 10 min vs this opponent. Omitted with server/rank
    * filters (unfiltered data only) or when the sample is too small.
