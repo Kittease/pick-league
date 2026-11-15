@@ -96,7 +96,9 @@ bun run dev:desktop      # opens the app; start League whenever you like
 - **Tier list** (left rail, shown whenever you are not in champion select): best picks per lane
   with tier (S–D), win/pick/ban rates, confidence and your mastery; filter by server (all, KR,
   EUW, NA, VN), by rank (Master+, Grandmaster+, Challenger only — players' current rank), by
-  name or owned champions; click a champion to open its details next to a compact table: best
+  confidence (Low+, Medium+, High — from sample size; the same choice also filters the
+  champion's matchups, duos and synergies, the champion select picks and the draft planner's
+  ranking), by name or owned champions; click a champion to open its details next to a compact table: best
   and worst lane matchups (with the lane gold difference at 10 min, e.g. "+250g @10"; CS, XP
   and sample on hover; not available with server/rank filters), duos and synergies (other
   allies; not available with server/rank filters) side by side — stacked when the window is narrow — each with "Show all", and a
@@ -192,7 +194,7 @@ These commands read `DATABASE_URL` (and the other settings) from the root `.env`
 | `GET /tierlist?role=UTILITY&patch=latest&platform=ALL&rank=MASTER` | tier list of a role: tiers, win/pick/ban rates, confidence. Optional filters (echoed as `filters`): `platform` = `ALL` (default), `KR`, `EUW1`, `NA1`, `VN2`; `rank` = `MASTER` (Master+, default: every player), `GRANDMASTER` (Grandmaster+), `CHALLENGER` (Challenger only), on each counted player's current solo rank |
 | `PUT /client/activity` | `{ phase }` of the League client: from queue start to the end of the game the worker only looks up live players and the stats refresh waits (renewed every 30 s, over after 90 s without) |
 | `POST /live/players` | players of the caller's game in progress, `{ platform, gameId, me: { gameName, tagLine }, players: [{ championId, position, team }] }` (≤ 10, no player id: the worker finds the game from the caller's Riot ID through spectator-v5): queues their lookup for the worker and answers per player (by index) `game` state and `status` (`pending`, `ready`, `failed`, `unsupported`), rank, mastery and recent form (`offRole`, `mainRole`…); repeat until `done`. Never cached |
-| `GET /tierlist/champion?role=UTILITY&championId=111&patch=latest` | one champion of the tier list: every lane matchup, duo partner and other ally (synergy) with 5+ matchups, best first, with shrunk win-rate delta, win rate and sample size; matchups also carry `lane` (gold / XP / CS difference at 10 min) when there are 20+ matchups with timeline frames. Same `platform`/`rank` filters; `synergies` is `null` and `lane` is omitted when filtered |
+| `GET /tierlist/champion?role=UTILITY&championId=111&patch=latest` | one champion of the tier list: every lane matchup, duo partner and other ally (synergy) with 5+ matchups, best first, with shrunk win-rate delta, win rate, sample size and confidence; matchups also carry `lane` (gold / XP / CS difference at 10 min) when there are 20+ matchups with timeline frames. Same `platform`/`rank` filters; `synergies` is `null` and `lane` is omitted when filtered |
 
 Errors are `{ error: { code, message, details? } }`: `400 BAD_REQUEST` (invalid body or query),
 `404 NOT_FOUND` (unknown route, patch or champion: the requested `championId` of a build or of
