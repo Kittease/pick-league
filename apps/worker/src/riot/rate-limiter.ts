@@ -9,8 +9,7 @@
  * with usage we didn't see (e.g. a previous process). `429` responses block a scope until
  * `Retry-After`.
  *
- * Waiting requests are served by priority (highest first, FIFO within a priority). Requests
- * below a held priority (`holdBelow`) wait without using any budget until the hold is lifted.
+ * Waiting requests are served by priority (highest first, FIFO within a priority).
  */
 import { abortError, type Clock } from '../clock.ts';
 
@@ -133,8 +132,6 @@ export class HostLimiter {
   private cancelTimer: (() => void) | null = null;
   private timerAt = Number.POSITIVE_INFINITY;
   private granted = 0;
-  /** Waiters below this priority are held (null = none). */
-  private hold: number | null = null;
   /** Grants of the last minute, for requests/min reporting. */
   private recent: number[] = [];
 
@@ -212,15 +209,6 @@ export class HostLimiter {
     };
   }
 
-  /**
-   * Holds every request below `minPriority` (queued ones too) until called again with null.
-   * Held requests neither use budget nor delay the others.
-   */
-  holdBelow(minPriority: number | null): void {
-    this.hold = minPriority;
-    this.pump();
-  }
-
   /** Rejects every waiting request (shutdown). */
   close(): void {
     const waiters = this.waiters;
@@ -261,10 +249,6 @@ export class HostLimiter {
     const remaining: Waiter[] = [];
     let appBlocked = false;
     for (const w of this.waiters) {
-      if (this.hold !== null && w.priority < this.hold) {
-        remaining.push(w);
-        continue;
-      }
       if (appBlocked) {
         remaining.push(w);
         continue;
@@ -296,7 +280,6 @@ export class HostLimiter {
     }
     this.waiters = remaining;
 
-    // Only held waiters left: nothing to wake up for until the hold is lifted.
     if (remaining.length === 0 || !Number.isFinite(nextWait)) {
       this.cancelTimer?.();
       this.cancelTimer = null;

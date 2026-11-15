@@ -181,7 +181,6 @@ export class RiotClient implements RiotApi {
   private readonly doFetch: (url: string, init: RequestInit) => Promise<Response>;
   private readonly clock: Clock;
   private readonly log: Logger;
-  private hold: number | null = null;
 
   constructor(private readonly options: RiotClientOptions) {
     this.doFetch = options.fetch ?? ((url, init) => fetch(url, init));
@@ -320,15 +319,6 @@ export class RiotClient implements RiotApi {
     );
   }
 
-  /**
-   * Requests below `minPriority` wait (on every host, queued ones included) until it is set
-   * back to null: the user is playing, only live lookups go out.
-   */
-  holdBelow(minPriority: number | null): void {
-    this.hold = minPriority;
-    for (const l of this.limiters.values()) l.holdBelow(minPriority);
-  }
-
   /** Per-host counters (requests/min, waiting, 429s…). */
   hostStats(): HostStats[] {
     return [...this.limiters.values()].map((l) => ({
@@ -356,7 +346,6 @@ export class RiotClient implements RiotApi {
         warmUpProbeMs: (this.options.timeoutMs ?? 15_000) + 5_000,
         ...this.options.limiter,
       });
-      limiter.holdBelow(this.hold);
       this.limiters.set(host, limiter);
       this.hostCounters.set(host, { rateLimited: 0, serverErrors: 0 });
     }

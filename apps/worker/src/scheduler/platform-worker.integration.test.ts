@@ -8,7 +8,6 @@ import {
   getMatchesSyncedUntil,
   listWorkerStatus,
   migrate,
-  readPlayPause,
   requestLiveGame,
   requestLiveLookups,
   setClientActivity,
@@ -26,7 +25,6 @@ import type {
   StaticPatchData,
   TimelineDto,
 } from '@pick-league/shared';
-import { silentLogger } from '../log.ts';
 import matchFixture from '../parser/fixtures/match.json';
 import timelineFixture from '../parser/fixtures/timeline.json';
 import type { PatchVerdict } from '../patches.ts';
@@ -39,7 +37,6 @@ import {
   RiotNetworkError,
 } from '../riot/client.ts';
 import { type PatchView, PlatformWorker } from './platform-worker.ts';
-import { PlayPause } from './play-pause.ts';
 
 const URL = process.env.DATABASE_URL_TEST;
 const d = URL ? describe : describe.skip;
@@ -933,16 +930,14 @@ d('PlatformWorker (Postgres)', () => {
     });
   });
 
-  describe('paused while the user plays', () => {
-    test('collection loops wait, live lookups go on, resumed after the game', async () => {
-      const pause = new PlayPause({ db, clock: fixedClock, log: silentLogger });
+  describe('while the user plays', () => {
+    test('collection goes on (only the API stats refresh waits for the end of the game)', async () => {
       const w = new PlatformWorker({
         platform: 'EUW1',
         db,
         riot,
         patches,
         clock: fixedClock,
-        pause,
         options: { idleMs: 10, live: { pollMs: 10 } },
       });
       await setClientActivity(
@@ -950,41 +945,14 @@ d('PlatformWorker (Postgres)', () => {
         { client: 'desktop', phase: 'InProgress', busyForMs: 90_000 },
         new Date(NOW),
       );
-      expect(await pause.check()).toBe(true);
-      await requestLiveLookups(db, 'EUW1', [{ puuid: 'fake-live-puuid-1', championId: 412 }]);
       const ac = new AbortController();
       const run = w.start(ac.signal);
-      for (let i = 0; i < 100; i++) {
-        const [p] = await getLiveProfiles(db, [{ puuid: 'fake-live-puuid-1', championId: 412 }]);
-        if (p?.status === 'READY') break;
-        await Bun.sleep(20);
-      }
-      // The live lookup ran; the ladder was not even read.
-      expect(riot.calls.some((c) => c.startsWith('entries:fake-live-puuid-1'))).toBe(true);
-      expect(riot.calls.some((c) => c.startsWith('league:'))).toBe(false);
-
-      await setClientActivity(
-        db,
-        { client: 'desktop', phase: 'EndOfGame', busyForMs: null },
-        new Date(NOW),
-      );
-      expect(await pause.check()).toBe(false);
       for (let i = 0; i < 100 && !riot.calls.some((c) => c.startsWith('league:')); i++) {
         await Bun.sleep(20);
       }
       expect(riot.calls.some((c) => c.startsWith('league:'))).toBe(true);
       ac.abort();
       await run;
-    });
-
-    test('the pause ends by itself when the desktop stops renewing it', async () => {
-      await setClientActivity(
-        db,
-        { client: 'desktop', phase: 'ChampSelect', busyForMs: 90_000 },
-        new Date(NOW),
-      );
-      expect((await readPlayPause(db, new Date(NOW + 60_000))).paused).toBe(true);
-      expect((await readPlayPause(db, new Date(NOW + 91_000))).paused).toBe(false);
     });
   });
 

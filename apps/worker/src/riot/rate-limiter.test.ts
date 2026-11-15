@@ -27,30 +27,6 @@ describe('parseRateLimitHeader', () => {
 });
 
 describe('HostLimiter', () => {
-  test('held priorities wait without budget, queued ones included, until the hold is lifted', async () => {
-    const clock = new FakeClock();
-    const limiter = new HostLimiter('h', clock, {
-      appLimits: [{ limit: 2, windowMs: 1000 }],
-      marginMs: 0,
-    });
-    const log: string[] = [];
-    track(limiter, 'm', 1, log, 'crawl-1');
-    limiter.holdBelow(6);
-    track(limiter, 'm', 1, log, 'crawl-2');
-    track(limiter, 'm', 6, log, 'live-1');
-    track(limiter, 'm', 6, log, 'live-2');
-    await flushMicrotasks();
-    // crawl-1 was granted before the hold; live requests get the rest of the window.
-    expect(log).toEqual(['crawl-1', 'live-1']);
-    await clock.advance(1000);
-    expect(log).toEqual(['crawl-1', 'live-1', 'live-2']);
-    await clock.advance(5000);
-    expect(log).toHaveLength(3);
-    limiter.holdBelow(null);
-    await flushMicrotasks();
-    expect(log).toEqual(['crawl-1', 'live-1', 'live-2', 'crawl-2']);
-  });
-
   test('lets requests through up to the short window, then waits for it to expire', async () => {
     const clock = new FakeClock();
     const limiter = new HostLimiter('h', clock, {
