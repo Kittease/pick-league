@@ -320,3 +320,50 @@ export interface LiveProfile {
   mastery: { level: number; points: number } | null;
   lastError: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Live games (live_games, 0014): the user's game found through spectator-v5
+// ---------------------------------------------------------------------------
+
+/** A player of a live game as spectator-v5 lists it (puuid = the Riot API's). */
+export interface LiveGameParticipant {
+  /** 100 (blue) or 200 (red). */
+  teamId: number;
+  championId: number;
+  /** Null when Riot hides who the player is: never looked up. */
+  puuid: string | null;
+}
+
+/** What the API reads back about a live game. */
+export interface LiveGame {
+  platform: Platform;
+  gameId: number;
+  status: LiveLookupStatus;
+  /** Once READY. */
+  participants: LiveGameParticipant[] | null;
+  /** The user's team (100 / 200) once READY; null if the user was not among the players. */
+  myTeamId: number | null;
+  lastError: string | null;
+}
+
+/** A PENDING live game claimed by the worker. */
+export interface LiveGameJob {
+  platform: Platform;
+  gameId: number;
+  gameName: string;
+  tagLine: string;
+  attempts: number;
+}
+
+// ---------------------------------------------------------------------------
+// Client activity (client_activity, 0014)
+// ---------------------------------------------------------------------------
+
+/** Whether a client says the user is playing (queued, champion select or in game). */
+export interface PlayPause {
+  paused: boolean;
+  /** Phase of the client that holds the pause (null when not paused). */
+  phase: string | null;
+  /** When the pause ends unless renewed (null when not paused). */
+  until: Date | null;
+}
