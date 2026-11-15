@@ -33,6 +33,7 @@ export const API_ROUTES = {
   static: (patch: PatchId | 'latest') => `/static/${patch}`,
   picks: '/recommendations/picks',
   build: '/recommendations/build',
+  draft: '/recommendations/draft',
   statsStatus: '/stats/status',
   statsRefresh: '/stats/refresh',
 } as const;
@@ -93,6 +94,8 @@ export const REASON_KINDS = [
    * `Reason.lane`). It explains, it does not score: delta = 0, games = matchups behind it.
    */
   'lane_phase',
+  /** Draft evaluation: the edge of the side (blue or red) the team plays on. */
+  'side',
 ] as const;
 export type ReasonKind = (typeof REASON_KINDS)[number];
 
@@ -487,6 +490,60 @@ export interface BuildResponse {
    * only with enough matchups. Absent when there is no lane opponent or too few matchups.
    */
   lanePhase?: Reason[];
+}
+
+// ---------------------------------------------------------------------------
+// POST /recommendations/draft
+// Win probability and damage profile of a draft in any state (draft planner, champion select).
+// ---------------------------------------------------------------------------
+
+export const DRAFT_SIDES = ['blue', 'red'] as const;
+export type DraftSide = (typeof DRAFT_SIDES)[number];
+
+export const draftRequestSchema = z.object({
+  /** "Our" team: the win probability is theirs. Champions picked so far; `role` null = unknown. */
+  allies: z.array(buildParticipantSchema).max(5).default([]),
+  /** The other team's picks so far; `role` null = unknown. */
+  enemies: z.array(buildParticipantSchema).max(5).default([]),
+  /** Side of `allies` when known: the sides do not win as often. */
+  side: z.enum(DRAFT_SIDES).nullable().default(null),
+  patch: patchIdSchema.optional(),
+});
+
+/** Parsed body of `POST /recommendations/draft` (defaults applied). */
+export type DraftRequest = z.infer<typeof draftRequestSchema>;
+export type DraftRequestInput = z.input<typeof draftRequestSchema>;
+
+/** Average damage to champions per minute of one champion, split by type. */
+export interface ChampionDamage {
+  championId: number;
+  physical: number;
+  magic: number;
+  true: number;
+}
+
+/** A team's damage: the sum of its picked champions' average damage per minute, by type. */
+export interface TeamDamage {
+  physical: number;
+  magic: number;
+  true: number;
+  champions: ChampionDamage[];
+}
+
+export interface DraftEvaluationResponse {
+  /** Current patch at request time. */
+  patch: PatchId;
+  /** Patches whose data was used (newest first); the previous one when a champion needed it. */
+  patchesUsed: PatchId[];
+  /** Probability that `allies` win (0.05–0.95), 0.5 ± the side edge with no champion picked. */
+  winProbability: number;
+  /**
+   * What moves the probability, largest first, from the allies' point of view (`delta` > 0
+   * helps them): each champion's strength (`base`), lane matchups and other enemy pairs
+   * (`matchup`), duos and other ally pairs (`duo` / `with_comp`), the side (`side`).
+   */
+  reasons: Reason[];
+  damage: { allies: TeamDamage; enemies: TeamDamage };
 }
 
 // ---------------------------------------------------------------------------
