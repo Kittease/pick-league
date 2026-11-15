@@ -12,6 +12,7 @@ import { PicksPanel } from './components/picks-panel';
 import { StatusBar } from './components/status-bar';
 import { type TierListHandle, TierListPage } from './components/tier-list';
 import { useAutoView, ViewNav } from './components/view-nav';
+import { apiDataKey } from './hooks/use-api-call';
 import { type StaticLookup, useAppState, useStatic } from './hooks/use-app';
 import { useShortcuts } from './hooks/use-shortcuts';
 import { draftEscapeAction, escapeAction } from './lib/shortcuts';
@@ -85,7 +86,13 @@ function ChampSelect({ state, lookup }: { state: AppState; lookup: StaticLookup 
   const lobbyLoading = state.lobby?.state === 'loading';
   return (
     <div className="flex min-h-0 flex-1">
-      <ChampSelectBoard view={view} lookup={lookup} mastery={state.mastery} inGame={inGame} />
+      <ChampSelectBoard
+        view={view}
+        lookup={lookup}
+        mastery={state.mastery}
+        inGame={inGame}
+        apiKey={apiDataKey(state)}
+      />
       <main className="flex min-w-0 flex-1 flex-col">
         <Tabs value={shown} onValueChange={(v) => setTab(v as Tab)} className="gap-0 px-3 pt-2">
           <TabsList variant="line">

@@ -96,7 +96,16 @@ export function LanePhaseLine({
  * One row per reason: kind, readable label, delta bar, games. Lane-phase reasons show their
  * figures instead of the label (kept as the tooltip) and only their sample (they do not score).
  */
-export function ReasonList({ reasons, className }: { reasons: Reason[]; className?: string }) {
+export function ReasonList({
+  reasons,
+  className,
+  kindLabels,
+}: {
+  reasons: Reason[];
+  className?: string;
+  /** Overrides of the kind labels (e.g. "Champion" for a draft's `base` reasons). */
+  kindLabels?: Partial<Record<Reason['kind'], string>>;
+}) {
   if (reasons.length === 0) {
     return (
       <p className={cn('text-xs text-muted-foreground', className)}>No reason given by the API.</p>
@@ -111,7 +120,7 @@ export function ReasonList({ reasons, className }: { reasons: Reason[]; classNam
           className="grid grid-cols-[92px_1fr_96px] items-center gap-3 text-xs"
         >
           <span className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
-            {REASON_KIND_LABEL[r.kind] ?? r.kind}
+            {kindLabels?.[r.kind] ?? REASON_KIND_LABEL[r.kind] ?? r.kind}
           </span>
           {r.kind === 'lane_phase' && r.lane ? (
             <LanePhaseLine lane={r.lane} title={r.label} className="line-clamp-2" />

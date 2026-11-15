@@ -8,6 +8,7 @@ import { compact, confidenceLabel, patchesText, percent, ROLE_LABEL } from '@/li
 import { cn } from '@/lib/utils';
 import type { AppState } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
+import { type RovingItemProps, useRoving } from '../hooks/use-roving';
 import { ChampionIcon } from './game-icon';
 import { Notice } from './notice';
 import { DeltaText, ReasonHeadline, ReasonList, ReasonStrip } from './reasons';
@@ -34,6 +35,7 @@ function CandidateRow({
   currentPatch,
   previewing,
   defaultOpen,
+  focus,
 }: {
   rank: number;
   candidate: PickCandidate;
@@ -42,6 +44,8 @@ function CandidateRow({
   currentPatch: string;
   previewing: boolean;
   defaultOpen: boolean;
+  /** Arrow-key navigation between rows (one tab stop for the whole list). */
+  focus: RovingItemProps;
 }) {
   // The top pick stays expanded until the user toggles it themselves.
   const [toggled, setOpen] = useState<boolean | null>(null);
@@ -55,7 +59,10 @@ function CandidateRow({
       onOpenChange={setOpen}
       className={cn('border-b border-border', open && 'bg-card')}
     >
-      <CollapsibleTrigger className="grid w-full grid-cols-[22px_44px_1fr_64px_80px_60px_16px] items-center gap-3 px-3 py-2 text-left hover:bg-accent/60 focus-visible:outline-1 focus-visible:outline-ring">
+      <CollapsibleTrigger
+        {...focus}
+        className="grid w-full grid-cols-[22px_44px_1fr_64px_80px_60px_16px] items-center gap-3 px-3 py-2 text-left hover:bg-accent/60 focus-visible:outline-1 focus-visible:outline-ring"
+      >
         <span className="num text-[11px] text-muted-foreground">{rank}</span>
         <ChampionIcon
           src={champ?.iconUrl}
@@ -127,6 +134,8 @@ export function PicksPanel({ state, lookup }: { state: AppState; lookup: StaticL
   const { picks, champSelect } = state;
   const data: PicksResponse | null = picks.status === 'idle' ? null : picks.data;
   const previewId = state.buildTarget?.preview ? state.buildTarget.championId : null;
+  const ids = (data?.candidates ?? []).map((c) => c.championId);
+  const roving = useRoving(ids, 'vertical');
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -152,7 +161,12 @@ export function PicksPanel({ state, lookup }: { state: AppState; lookup: StaticL
         />
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: arrow keys move focus between the rows (roving tabindex), the rows themselves are buttons */}
+      <div
+        ref={roving.containerRef}
+        onKeyDown={roving.onKeyDown}
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
         {!data && picks.status === 'loading' && (
           <div className="flex flex-col gap-2 p-3">
             {Array.from({ length: 6 }, (_, i) => (
@@ -176,6 +190,7 @@ export function PicksPanel({ state, lookup }: { state: AppState; lookup: StaticL
             currentPatch={data.patch}
             previewing={previewId === c.championId}
             defaultOpen={i === 0}
+            focus={roving.itemProps(c.championId)}
           />
         ))}
       </div>

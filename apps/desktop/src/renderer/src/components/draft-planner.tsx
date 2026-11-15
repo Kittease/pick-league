@@ -1,6 +1,7 @@
 import { type PickCandidate, POSITIONS, type Position } from '@pick-league/shared';
 import {
   ArrowLeftIcon,
+  ArrowLeftRightIcon,
   BanIcon,
   HammerIcon,
   Loader2Icon,
@@ -9,9 +10,8 @@ import {
   Undo2Icon,
 } from 'lucide-react';
 import {
+  type KeyboardEvent,
   type RefObject,
-  useCallback,
-  useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
@@ -20,25 +20,34 @@ import {
 import { Button } from '@/components/ui/button';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Switch } from '@/components/ui/switch';
 import { compact, confidenceLabel, patchesText, percent, ROLE_LABEL } from '@/lib/format';
 import { type DraftEscapeAction, type SearchFocus, shortcutLabel } from '@/lib/shortcuts';
 import { cn } from '@/lib/utils';
-import type { ApiResult, AppState, Loadable } from '../../../core/app-state.ts';
+import type { AppState } from '../../../core/app-state.ts';
 import {
   ban,
+  banPhase,
   championPool,
   currentTurn,
   type Draft,
+  type DraftFormat,
   type DraftTurn,
+  displacedBy,
   draftBuildRequest,
+  draftEvaluationRequest,
   draftPicksRequest,
-  EMPTY_DRAFT,
+  emptyDraft,
   isComplete,
   lastAction,
+  openRoles,
   pick,
   pickRole,
   type RankedChampion,
+  swapRoles,
   type Team,
   teamBans,
   teamPicks,
@@ -46,84 +55,40 @@ import {
   unavailableChampionIds,
   undo,
 } from '../../../core/draft.ts';
+import { apiDataKey, useApiCall } from '../hooks/use-api-call';
 import type { StaticLookup } from '../hooks/use-app';
+import { enterListFromSearch, type RovingItemProps, useRoving } from '../hooks/use-roving';
 import { IS_MAC } from '../hooks/use-shortcuts';
 import { BuildView } from './build-panel';
+import { DamageSplit, type OutlookSide, WinProbability } from './draft-outlook';
 import { ChampionIcon, GameIcon } from './game-icon';
 import { Notice } from './notice';
 import { ConfidencePips } from './picks-panel';
 import { DeltaText, ReasonList } from './reasons';
 
-/** Draft changes made in quick succession only ask the API once they settle. */
-const DEBOUNCE_MS = 250;
-/** Answers kept per call kind, so undo / redo of the same state is instant. */
-const CACHE_LIMIT = 60;
-
 const TEAM_LABEL: Record<Team, string> = { blue: 'Blue', red: 'Red' };
 const TEAM_TEXT: Record<Team, string> = { blue: 'text-[#5ba4e5]', red: 'text-[#e2555f]' };
 const TEAM_BAR: Record<Team, string> = { blue: 'bg-[#5ba4e5]', red: 'bg-[#e2555f]' };
+const OUTLOOK: Record<Team, OutlookSide> = {
+  blue: { label: 'Blue', text: TEAM_TEXT.blue, bar: TEAM_BAR.blue },
+  red: { label: 'Red', text: TEAM_TEXT.red, bar: TEAM_BAR.red },
+};
 
-/**
- * One-off API call for a request built from the draft: debounced, stale answers dropped, answers
- * cached per request (cleared when the API data changes). `keepWhileLoading` keeps showing the
- * previous answer until the new one lands.
- */
-function useDraftCall<Req, Res>(
-  request: Req | null,
-  call: (request: Req) => Promise<ApiResult<Res>>,
-  apiKey: string,
-  keepWhileLoading: boolean,
-): { result: Loadable<Res>; retry: () => void } {
-  const key = request === null ? null : JSON.stringify(request);
-  const latest = useRef({ request, call });
-  latest.current = { request, call };
-  const cache = useRef(new Map<string, Res>());
-  const lastApiKey = useRef(apiKey);
-  const [result, setResult] = useState<Loadable<Res>>({ status: 'idle' });
-  const [nonce, setNonce] = useState(0);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the request is read through `latest` (its key is the dependency); nonce re-runs the call on retry
-  useEffect(() => {
-    if (lastApiKey.current !== apiKey) {
-      cache.current.clear();
-      lastApiKey.current = apiKey;
-    }
-    const { request: body, call: send } = latest.current;
-    if (key === null || body === null) {
-      setResult({ status: 'idle' });
-      return;
-    }
-    const hit = cache.current.get(key);
-    if (hit) {
-      setResult({ status: 'ok', data: hit });
-      return;
-    }
-    setResult((prev) => ({
-      status: 'loading',
-      data: keepWhileLoading && prev.status !== 'idle' ? prev.data : null,
-    }));
-    let alive = true;
-    const timer = setTimeout(() => {
-      void send(body).then((r) => {
-        if (!alive) return;
-        if (!r.ok) {
-          setResult({ status: 'error', code: r.code, message: r.message, data: null });
-          return;
-        }
-        cache.current.set(key, r.data);
-        const oldest = cache.current.keys().next();
-        if (cache.current.size > CACHE_LIMIT && !oldest.done) cache.current.delete(oldest.value);
-        setResult({ status: 'ok', data: r.data });
-      });
-    }, DEBOUNCE_MS);
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-    };
-  }, [key, apiKey, nonce]);
-
-  const retry = useCallback(() => setNonce((n) => n + 1), []);
-  return { result, retry };
+/** The format chosen last time (per viewer convenience; solo/duo when unavailable). */
+const FORMAT_KEY = 'pickleague.draftFormat';
+function loadFormat(): DraftFormat {
+  try {
+    return localStorage.getItem(FORMAT_KEY) === 'competitive' ? 'competitive' : 'soloq';
+  } catch {
+    return 'soloq';
+  }
+}
+function saveFormat(format: DraftFormat): void {
+  try {
+    localStorage.setItem(FORMAT_KEY, format);
+  } catch {
+    // Storage unavailable: the format is only kept for this session.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +117,8 @@ function BanSlots({
       {Array.from({ length: 5 }, (_, i) => {
         const id = bans[i];
         const active = turn?.kind === 'ban' && turn.team === team && turn.number === i + 1;
+        // Competitive: a gap between the first and second ban phase.
+        const gap = draft.format === 'competitive' && i === 3 ? 'ml-1.5' : undefined;
         if (id === undefined) {
           return (
             <span
@@ -161,6 +128,7 @@ function BanSlots({
               className={cn(
                 'size-[26px] shrink-0 border border-dashed border-border',
                 active && 'animate-pulse border-primary',
+                gap,
               )}
             />
           );
@@ -171,17 +139,85 @@ function BanSlots({
               // biome-ignore lint/suspicious/noArrayIndexKey: fixed slots
               key={i}
               title="No ban"
-              className="grid size-[26px] shrink-0 place-items-center bg-secondary text-muted-foreground"
+              className={cn(
+                'grid size-[26px] shrink-0 place-items-center bg-secondary text-muted-foreground',
+                gap,
+              )}
             >
               <BanIcon className="size-3" />
             </span>
           );
         }
         const c = lookup?.champion(id);
-        // biome-ignore lint/suspicious/noArrayIndexKey: fixed slots
-        return <GameIcon key={i} src={c?.iconUrl} alt={c?.name ?? `#${id}`} size={26} dim />;
+        return (
+          // biome-ignore lint/suspicious/noArrayIndexKey: fixed slots
+          <span key={i} className={cn('shrink-0', gap)}>
+            <GameIcon src={c?.iconUrl} alt={c?.name ?? `#${id}`} size={26} dim />
+          </span>
+        );
       })}
     </div>
+  );
+}
+
+/**
+ * Moves a picked champion to another role of its team (swapping with the champion there, if
+ * any): flex picks are often placed before their lane is known.
+ */
+function RoleSwap({
+  team,
+  role,
+  name,
+  picks,
+  lookup,
+  onSwap,
+}: {
+  team: Team;
+  role: Position;
+  name: string;
+  picks: Partial<Record<Position, { championId: number }>>;
+  lookup: StaticLookup | null;
+  onSwap: (from: Position, to: Position) => void;
+}) {
+  const labels = Object.fromEntries(POSITIONS.map((p) => [p, ROLE_LABEL[p]])) as Record<
+    Position,
+    string
+  >;
+  return (
+    <Select
+      value={role}
+      items={labels}
+      onValueChange={(v) => {
+        if (typeof v === 'string' && v in labels && v !== role) onSwap(role, v as Position);
+      }}
+    >
+      <SelectTrigger
+        size="sm"
+        aria-label={`Move ${name} (${TEAM_LABEL[team]} ${ROLE_LABEL[role]}) to another role`}
+        title="Move to another role (flex pick)"
+        className="h-7 shrink-0 gap-1 border-b-transparent px-1.5 text-muted-foreground hover:text-foreground data-[size=sm]:h-7 [&>svg:last-child]:hidden"
+      >
+        <ArrowLeftRightIcon className="size-3" />
+      </SelectTrigger>
+      <SelectContent alignItemWithTrigger={false} align="end">
+        {POSITIONS.map((p) => {
+          const there = p === role ? undefined : picks[p];
+          const other = there
+            ? (lookup?.champion(there.championId)?.name ?? `#${there.championId}`)
+            : null;
+          return (
+            <SelectItem key={p} value={p} className="text-xs">
+              {ROLE_LABEL[p]}
+              {p === role ? (
+                <span className="text-muted-foreground">current</span>
+              ) : other ? (
+                <span className="text-muted-foreground">swap with {other}</span>
+              ) : null}
+            </SelectItem>
+          );
+        })}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -192,8 +228,10 @@ function TeamColumn({
   role,
   buildOf,
   lookup,
+  damage,
   onChooseRole,
   onShowBuild,
+  onSwap,
 }: {
   team: Team;
   draft: Draft;
@@ -202,8 +240,11 @@ function TeamColumn({
   role: Position | null;
   buildOf: Slot | null;
   lookup: StaticLookup | null;
+  /** The team's damage split (from the draft evaluation). */
+  damage: Parameters<typeof DamageSplit>[0]['damage'];
   onChooseRole: (role: Position) => void;
   onShowBuild: (slot: Slot) => void;
+  onSwap: (from: Position, to: Position) => void;
 }) {
   const picks = teamPicks(draft, team);
   const onTurn = turn?.team === team;
@@ -211,7 +252,7 @@ function TeamColumn({
   return (
     <aside
       className={cn(
-        'flex w-[188px] shrink-0 flex-col gap-3 overflow-y-auto border-border py-2',
+        'flex w-[200px] shrink-0 flex-col gap-3 overflow-y-auto border-border py-2',
         team === 'blue' ? 'border-r' : 'border-l',
       )}
     >
@@ -243,7 +284,13 @@ function TeamColumn({
           const shown = buildOf?.team === team && buildOf.role === p;
           const canChoose = !slot && picking;
           return (
-            <li key={p}>
+            <li
+              key={p}
+              className={cn(
+                'flex items-center pr-1.5',
+                (active || shown) && 'bg-card shadow-[inset_2px_0_0_var(--primary)]',
+              )}
+            >
               <button
                 type="button"
                 disabled={!slot && !canChoose}
@@ -256,9 +303,8 @@ function TeamColumn({
                       : undefined
                 }
                 className={cn(
-                  'group flex w-full items-center gap-2.5 px-3 py-1.5 text-left outline-none',
+                  'group flex min-w-0 flex-1 items-center gap-2.5 py-1.5 pr-1 pl-3 text-left outline-none',
                   (slot || canChoose) && 'hover:bg-accent/60 focus-visible:bg-accent/60',
-                  (active || shown) && 'bg-card shadow-[inset_2px_0_0_var(--primary)]',
                 )}
               >
                 {slot ? (
@@ -275,23 +321,34 @@ function TeamColumn({
                   <span className={cn('truncate text-[13px]', !slot && 'text-muted-foreground')}>
                     {name ?? (active ? 'Picking…' : '—')}
                   </span>
-                  <span className="text-[10px] tracking-wider text-muted-foreground uppercase">
+                  <span className="flex items-center gap-1.5 text-[10px] tracking-wider text-muted-foreground uppercase">
                     {ROLE_LABEL[p]}
+                    {slot && (
+                      <span className="num normal-case">
+                        {turnLabel({ kind: 'pick', team, number: slot.number })}
+                      </span>
+                    )}
+                    {slot && (
+                      <HammerIcon className="size-3 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" />
+                    )}
                   </span>
                 </span>
-                {slot && (
-                  <span className="ml-auto flex items-center gap-1.5 text-muted-foreground">
-                    <HammerIcon className="size-3 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" />
-                    <span className="num text-[10px]">
-                      {turnLabel({ kind: 'pick', team, number: slot.number })}
-                    </span>
-                  </span>
-                )}
               </button>
+              {slot && name && (
+                <RoleSwap
+                  team={team}
+                  role={p}
+                  name={name}
+                  picks={picks}
+                  lookup={lookup}
+                  onSwap={onSwap}
+                />
+              )}
             </li>
           );
         })}
       </ul>
+      <DamageSplit damage={damage} lookup={lookup} className="mt-auto px-3" />
     </aside>
   );
 }
@@ -350,19 +407,21 @@ function RankedTile({
   heading,
   stale,
   onChoose,
+  focus,
 }: {
   ranked: RankedChampion<PoolChampion>;
   heading: string;
   /** The ranking is being updated for the new draft state. */
   stale: boolean;
   onChoose: () => void;
+  focus: RovingItemProps;
 }) {
   const { champion, candidate, rank } = ranked;
   return (
     <HoverCard>
       <HoverCardTrigger
         delay={350}
-        render={<button type="button" onClick={onChoose} className={TILE} />}
+        render={<button type="button" onClick={onChoose} className={TILE} {...focus} />}
       >
         <GameIcon src={champion.iconUrl} alt={champion.name} size={44} />
         <span className="num absolute top-1 left-1 bg-background/85 px-1 text-[9px] leading-[14px] text-muted-foreground">
@@ -388,15 +447,18 @@ function PlainTile({
   dim,
   title,
   onChoose,
+  focus,
 }: {
   champion: PoolChampion;
   dim: boolean;
   title: string;
   onChoose: () => void;
+  focus: RovingItemProps;
 }) {
   return (
     <button
       type="button"
+      {...focus}
       onClick={onChoose}
       title={title}
       className={cn(TILE, dim && 'opacity-45 hover:opacity-100 focus-visible:opacity-100')}
@@ -436,9 +498,10 @@ const NO_PREFERENCE: Record<Team, Position | null> = { blue: null, red: null };
 const SEARCH_PLACEHOLDER = `Search champion (${shortcutLabel('k', IS_MAC)})`;
 
 /**
- * Draft planner: a ranked solo/duo draft played by hand (no League client needed). The team on
- * turn bans, then picks for a role, from a grid ordered by the pick recommendations for that
- * team and role; any drafted champion shows its build against the drafted teams.
+ * Draft planner: a ranked solo/duo or competitive draft played by hand (no League client
+ * needed). The team on turn bans, then picks for a role, from a grid ordered by the pick
+ * recommendations for that team and role; the win chance and each team's damage split follow
+ * the draft; any drafted champion shows its build against the drafted teams.
  */
 export function DraftPlanner({
   state,
@@ -449,26 +512,30 @@ export function DraftPlanner({
   lookup: StaticLookup | null;
   handleRef?: RefObject<DraftHandle | null>;
 }) {
-  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
-  /** Role last chosen per team; the first open one when it is taken. */
+  const [draft, setDraft] = useState<Draft>(() => emptyDraft(loadFormat()));
+  /**
+   * Role the user chose per team for its next pick (may be one it already has: the pick then
+   * moves that champion to an open role); cleared after each pick.
+   */
   const [preferred, setPreferred] = useState(NO_PREFERENCE);
   const [buildOf, setBuildOf] = useState<Slot | null>(null);
   const [search, setSearch] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
-  // A new API, patch or stats refresh drops the cached answers.
-  const lastRefreshedAt = state.stats.status?.lastRefreshedAt ?? null;
-  const apiKey = `${state.api.url}|${state.api.latestPatch}|${state.api.state === 'ok'}|${lastRefreshedAt}`;
+  const apiKey = apiDataKey(state);
 
   const turn = currentTurn(draft);
   const complete = isComplete(draft);
   const pickTeam = turn?.kind === 'pick' ? turn.team : null;
-  const role = pickTeam ? pickRole(draft, pickTeam, preferred[pickTeam]) : null;
+  const role = pickTeam ? pickRole(draft, pickTeam, preferred[pickTeam], true) : null;
+  // A pick for a role the team already has moves that champion to the first open role.
+  const displaced = pickTeam && role ? displacedBy(draft, pickTeam, role) : null;
+  const displacedTo = pickTeam && displaced ? (openRoles(draft, pickTeam)[0] ?? null) : null;
 
   const picksRequest = useMemo(
     () => (pickTeam && role ? draftPicksRequest(draft, pickTeam, role) : null),
     [draft, pickTeam, role],
   );
-  const { result: picks, retry: retryPicks } = useDraftCall(
+  const { result: picks, retry: retryPicks } = useApiCall(
     picksRequest,
     (r) => window.pickleague.draftPicks(r),
     apiKey,
@@ -478,12 +545,21 @@ export function DraftPlanner({
     () => (buildOf ? draftBuildRequest(draft, buildOf.team, buildOf.role) : null),
     [draft, buildOf],
   );
-  const { result: build, retry: retryBuild } = useDraftCall(
+  const { result: build, retry: retryBuild } = useApiCall(
     buildRequest,
     (r) => window.pickleague.draftBuild(r),
     apiKey,
     false,
   );
+  // Win chance (blue's point of view) and damage split of the draft as it stands.
+  const evaluationRequest = useMemo(() => draftEvaluationRequest(draft, 'blue'), [draft]);
+  const { result: evaluation, retry: retryEvaluation } = useApiCall(
+    evaluationRequest,
+    (r) => window.pickleague.evaluateDraft(r),
+    apiKey,
+    true,
+  );
+  const evaluated = evaluation.status === 'idle' ? null : evaluation.data;
   // A slot emptied by Undo / Reset closes its build.
   const shownBuild = buildOf && buildRequest ? { ...buildOf, request: buildRequest } : null;
   const buildOpen = shownBuild !== null;
@@ -494,6 +570,11 @@ export function DraftPlanner({
     () => championPool(lookup?.champions ?? [], unavailable, candidates, search),
     [lookup, unavailable, candidates, search],
   );
+  const poolIds = useMemo(
+    () => [...pool.ranked.map((r) => r.champion.id), ...pool.rest.map((c) => c.id)],
+    [pool],
+  );
+  const roving = useRoving(poolIds, 'grid');
 
   const act = (next: Draft) => {
     if (next === draft) return;
@@ -502,7 +583,10 @@ export function DraftPlanner({
   };
   const choose = (championId: number) => {
     if (turn?.kind === 'ban') act(ban(draft, championId));
-    else if (role) act(pick(draft, championId, role));
+    else if (role && pickTeam) {
+      act(pick(draft, championId, role));
+      setPreferred((p) => ({ ...p, [pickTeam]: null }));
+    }
   };
   const stepBack = () => {
     const last = lastAction(draft);
@@ -510,15 +594,29 @@ export function DraftPlanner({
     if (last?.kind === 'pick') setPreferred((p) => ({ ...p, [last.team]: last.role }));
     setDraft(undo(draft));
   };
-  const reset = () => {
-    setDraft(EMPTY_DRAFT);
+  const reset = (format: DraftFormat = draft.format) => {
+    setDraft(emptyDraft(format));
     setPreferred(NO_PREFERENCE);
     setBuildOf(null);
     setSearch('');
   };
+  const changeFormat = (competitive: boolean) => {
+    const format: DraftFormat = competitive ? 'competitive' : 'soloq';
+    saveFormat(format);
+    reset(format);
+  };
   const chooseRole = (team: Team, r: Position) => {
     setPreferred((p) => ({ ...p, [team]: r }));
     setBuildOf(null);
+  };
+  const swap = (team: Team, from: Position, to: Position) => {
+    setDraft((d) => swapRoles(d, team, from, to));
+    // The build shown follows its champion.
+    setBuildOf((b) => {
+      if (b?.team !== team) return b;
+      if (b.role === from) return { team, role: to };
+      return b.role === to ? { team, role: from } : b;
+    });
   };
   const showBuild = (slot: Slot) =>
     setBuildOf((prev) => (prev?.team === slot.team && prev.role === slot.role ? null : slot));
@@ -547,7 +645,17 @@ export function DraftPlanner({
     [buildOpen],
   );
 
+  const onSearchKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    // Tab / ArrowDown: into the grid, on the first champion; arrows move from there.
+    if (enterListFromSearch(e, roving.focusFirst)) return;
+    // Enter takes the first champion shown.
+    if (e.key !== 'Enter') return;
+    const first = pool.ranked[0]?.champion ?? pool.rest[0];
+    if (first && search.trim()) choose(first.id);
+  };
+
   const heading = pickTeam && role ? `${TEAM_LABEL[pickTeam]} ${ROLE_LABEL[role]}` : '';
+  const competitive = draft.format === 'competitive';
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -555,30 +663,22 @@ export function DraftPlanner({
         <span className="text-[10px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
           Draft planner
         </span>
-        <TurnStatus turn={turn} />
+        <TurnStatus turn={turn} draft={draft} />
+        {/* DOM order = Tab order: the search comes last, so Tab from it goes to the grid. */}
         <div className="ml-auto flex items-center gap-2">
-          <span className="flex items-center gap-2">
-            <SearchIcon className="size-3.5 text-muted-foreground" />
-            <Input
-              ref={searchRef}
-              type="search"
-              value={search}
-              disabled={complete}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setBuildOf(null);
-              }}
-              onKeyDown={(e) => {
-                // Enter takes the first champion shown.
-                if (e.key !== 'Enter') return;
-                const first = pool.ranked[0]?.champion ?? pool.rest[0];
-                if (first && search.trim()) choose(first.id);
-              }}
-              placeholder={SEARCH_PLACEHOLDER}
-              aria-label="Search champion"
-              aria-keyshortcuts={IS_MAC ? 'Meta+K Meta+F' : 'Control+K Control+F'}
-              className="h-8 w-44 text-xs md:text-xs"
+          <span
+            className="flex items-center gap-2"
+            title="Tournament draft: 3 bans each, picks B1 R1 R2 B2 B3 R3, 2 bans each, picks R4 B4 B5 R5. Changing it starts a new draft."
+          >
+            <Switch
+              id="draft-competitive"
+              checked={competitive}
+              onCheckedChange={changeFormat}
+              aria-label="Competitive draft"
             />
+            <Label htmlFor="draft-competitive" className="text-xs">
+              Competitive
+            </Label>
           </span>
           <Button
             size="xs"
@@ -593,14 +693,41 @@ export function DraftPlanner({
           <Button
             size="xs"
             variant="ghost"
-            onClick={reset}
+            onClick={() => reset()}
             disabled={draft.actions.length === 0}
             title="Start a new draft"
           >
             <RotateCcwIcon data-icon="inline-start" />
             Reset
           </Button>
+          <span className="flex items-center gap-2">
+            <SearchIcon className="size-3.5 text-muted-foreground" />
+            <Input
+              ref={searchRef}
+              type="search"
+              value={search}
+              disabled={complete}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setBuildOf(null);
+              }}
+              onKeyDown={onSearchKeyDown}
+              placeholder={SEARCH_PLACEHOLDER}
+              aria-label="Search champion"
+              aria-keyshortcuts={IS_MAC ? 'Meta+K Meta+F' : 'Control+K Control+F'}
+              className="h-8 w-44 text-xs md:text-xs"
+            />
+          </span>
         </div>
+      </div>
+
+      <div className="border-b border-border px-3 py-1.5">
+        <WinProbability
+          result={evaluation}
+          allies={OUTLOOK.blue}
+          enemies={OUTLOOK.red}
+          onRetry={retryEvaluation}
+        />
       </div>
 
       <div className="flex min-h-0 flex-1">
@@ -611,8 +738,10 @@ export function DraftPlanner({
           role={pickTeam === 'blue' ? role : null}
           buildOf={shownBuild}
           lookup={lookup}
+          damage={evaluated?.damage.allies}
           onChooseRole={(r) => chooseRole('blue', r)}
           onShowBuild={showBuild}
+          onSwap={(from, to) => swap('blue', from, to)}
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
@@ -650,7 +779,8 @@ export function DraftPlanner({
                 </span>
                 <p className="text-sm text-muted-foreground">
                   Click any of the 10 champions to see its build for this match: items, runes,
-                  spells and skill order against the drafted enemies.
+                  spells and skill order against the drafted enemies. A flex pick in the wrong lane?
+                  Move it with the ⇄ button next to it.
                 </p>
               </div>
             </div>
@@ -674,6 +804,9 @@ export function DraftPlanner({
                       team={pickTeam}
                       draft={draft}
                       role={role}
+                      lookup={lookup}
+                      displaced={displaced?.championId ?? null}
+                      displacedTo={displacedTo}
                       onChoose={(r) => chooseRole(pickTeam, r)}
                     />
                   )
@@ -712,6 +845,7 @@ export function DraftPlanner({
                     stale={picks.status === 'loading'}
                     role={role}
                     onChoose={choose}
+                    roving={roving}
                   />
                 )}
               </div>
@@ -726,18 +860,26 @@ export function DraftPlanner({
           role={pickTeam === 'red' ? role : null}
           buildOf={shownBuild}
           lookup={lookup}
+          damage={evaluated?.damage.enemies}
           onChooseRole={(r) => chooseRole('red', r)}
           onShowBuild={showBuild}
+          onSwap={(from, to) => swap('red', from, to)}
         />
       </div>
     </div>
   );
 }
 
-function TurnStatus({ turn }: { turn: DraftTurn | null }) {
+function TurnStatus({ turn, draft }: { turn: DraftTurn | null; draft: Draft }) {
   if (!turn) {
     return <span className="text-sm font-semibold">Draft complete</span>;
   }
+  const phase =
+    turn.kind === 'pick'
+      ? 'pick phase'
+      : draft.format === 'competitive'
+        ? `ban phase ${banPhase(draft, turn.number)}`
+        : 'ban phase';
   return (
     <span className="flex items-baseline gap-2">
       <span className={cn('text-sm font-semibold', TEAM_TEXT[turn.team])}>
@@ -746,45 +888,74 @@ function TurnStatus({ turn }: { turn: DraftTurn | null }) {
           : `${turnLabel(turn)} of 5`}
       </span>
       <span className="text-[11px] text-muted-foreground">
-        {turn.kind === 'ban' ? 'ban phase' : 'pick phase'}
+        {phase}
+        {draft.format === 'competitive' ? ' · competitive' : ''}
       </span>
     </span>
   );
 }
 
+/**
+ * Role the team on turn picks for. A role it already has can be chosen too (flex pick placed in
+ * the wrong lane): the new pick takes it and the champion there moves to the first open role.
+ */
 function RolePicker({
   team,
   draft,
   role,
+  lookup,
+  displaced,
+  displacedTo,
   onChoose,
 }: {
   team: Team;
   draft: Draft;
   role: Position | null;
+  lookup: StaticLookup | null;
+  /** Champion the pick would move out of `role`. */
+  displaced: number | null;
+  displacedTo: Position | null;
   onChoose: (role: Position) => void;
 }) {
   const picks = teamPicks(draft, team);
+  const name = (id: number) => lookup?.champion(id)?.name ?? `#${id}`;
   return (
-    <span className="flex items-center gap-2">
+    <span className="flex flex-wrap items-center gap-2">
       <span>
         <span className={TEAM_TEXT[team]}>{TEAM_LABEL[team]}</span> picks for
       </span>
       <span className="flex items-center" role="radiogroup" aria-label="Role picked for">
-        {POSITIONS.map((p) => (
-          <Button
-            key={p}
-            size="xs"
-            variant={p === role ? 'secondary' : 'ghost'}
-            role="radio"
-            aria-checked={p === role}
-            disabled={picks[p] !== undefined}
-            onClick={() => onChoose(p)}
-            className={cn('px-2', p === role && 'text-foreground')}
-          >
-            {ROLE_LABEL[p]}
-          </Button>
-        ))}
+        {POSITIONS.map((p) => {
+          const taken = picks[p];
+          return (
+            <Button
+              key={p}
+              size="xs"
+              variant={p === role ? 'secondary' : 'ghost'}
+              role="radio"
+              aria-checked={p === role}
+              onClick={() => onChoose(p)}
+              title={
+                taken
+                  ? `${name(taken.championId)} plays ${ROLE_LABEL[p]}: picking for it moves them to an open role`
+                  : undefined
+              }
+              className={cn(
+                'px-2',
+                p === role && 'text-foreground',
+                taken && p !== role && 'text-muted-foreground/60',
+              )}
+            >
+              {ROLE_LABEL[p]}
+            </Button>
+          );
+        })}
       </span>
+      {displaced !== null && displacedTo && (
+        <span className="text-gold">
+          {name(displaced)} moves to {ROLE_LABEL[displacedTo]}
+        </span>
+      )}
     </span>
   );
 }
@@ -797,6 +968,7 @@ function ChampionGrid({
   stale,
   role,
   onChoose,
+  roving,
 }: {
   pool: { ranked: RankedChampion<PoolChampion>[]; rest: PoolChampion[] };
   banning: boolean;
@@ -807,6 +979,8 @@ function ChampionGrid({
   stale: boolean;
   role: Position | null;
   onChoose: (championId: number) => void;
+  /** Arrow-key navigation over every tile (one tab stop for the whole grid). */
+  roving: Pick<ReturnType<typeof useRoving<number>>, 'containerRef' | 'itemProps' | 'onKeyDown'>;
 }) {
   if (loadingFirst) return <GridSkeleton />;
   const empty = pool.ranked.length === 0 && pool.rest.length === 0;
@@ -815,14 +989,17 @@ function ChampionGrid({
   }
   const verb = banning ? 'Ban' : 'Pick';
   return (
-    <div className="flex flex-col gap-2 p-2">
+    // biome-ignore lint/a11y/noStaticElementInteractions: arrow keys move focus between the tiles (roving tabindex), the tiles themselves are buttons
+    <div ref={roving.containerRef} onKeyDown={roving.onKeyDown} className="flex flex-col gap-2 p-2">
       {pool.ranked.length > 0 && (
         <>
           <div className="flex items-baseline gap-2 px-1">
             <span className="text-[10px] font-semibold tracking-[0.18em] uppercase">
               Best picks · {heading}
             </span>
-            <span className="text-[10px] text-muted-foreground">hover for the reasons</span>
+            <span className="text-[10px] text-muted-foreground">
+              hover or focus for the reasons · arrows to move
+            </span>
           </div>
           <div className={GRID}>
             {pool.ranked.map((r) => (
@@ -832,6 +1009,7 @@ function ChampionGrid({
                 heading={heading}
                 stale={stale}
                 onChoose={() => onChoose(r.champion.id)}
+                focus={roving.itemProps(r.champion.id)}
               />
             ))}
           </div>
@@ -854,6 +1032,7 @@ function ChampionGrid({
                 dim={!banning && pool.ranked.length > 0}
                 title={`${verb} ${c.name}`}
                 onChoose={() => onChoose(c.id)}
+                focus={roving.itemProps(c.id)}
               />
             ))}
           </div>

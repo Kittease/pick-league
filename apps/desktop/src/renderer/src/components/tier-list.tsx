@@ -51,6 +51,7 @@ import {
 import { cn } from '@/lib/utils';
 import type { ApiResult, AppState, Settings } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
+import { enterListFromSearch, type RovingItemProps, useRoving } from '../hooks/use-roving';
 import { IS_MAC } from '../hooks/use-shortcuts';
 import { BuildDetails } from './build-panel';
 import { ChampionIcon } from './game-icon';
@@ -309,6 +310,7 @@ function EntryRow({
   selected,
   onSelect,
   narrow,
+  focus,
 }: {
   entry: TierListEntry;
   name: string;
@@ -318,11 +320,14 @@ function EntryRow({
   selected: boolean;
   onSelect: () => void;
   narrow: boolean;
+  /** Arrow-key navigation between rows (one tab stop for the whole list). */
+  focus: RovingItemProps;
 }) {
   const merged = entry.patchesUsed.length > 1;
   return (
     <button
       type="button"
+      {...focus}
       onClick={onSelect}
       aria-pressed={selected}
       className={cn(
@@ -634,6 +639,8 @@ export function TierListPage({
   }, [data, search, ownedOnly, owned, sort, nameOf]);
 
   const selected = data?.entries.find((e) => e.championId === selectedId) ?? null;
+  const rowIds = useMemo(() => rows.map((e) => e.championId), [rows]);
+  const roving = useRoving(rowIds, 'vertical');
 
   const narrow = selected !== null;
 
@@ -725,19 +732,6 @@ export function TierListPage({
           />
         </div>
         <div className="ml-auto flex items-center gap-4">
-          <span className="flex items-center gap-2">
-            <SearchIcon className="size-3.5 text-muted-foreground" />
-            <Input
-              ref={searchRef}
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={SEARCH_PLACEHOLDER}
-              aria-label="Search champion"
-              aria-keyshortcuts={IS_MAC ? 'Meta+K Meta+F' : 'Control+K Control+F'}
-              className="h-8 w-48 text-xs md:text-xs"
-            />
-          </span>
           {owned && (
             <span className="flex items-center gap-2">
               <Switch id="tier-owned" checked={ownedOnly} onCheckedChange={setOwnedOnly} />
@@ -746,6 +740,26 @@ export function TierListPage({
               </Label>
             </span>
           )}
+          <span className="flex items-center gap-2">
+            <SearchIcon className="size-3.5 text-muted-foreground" />
+            <Input
+              ref={searchRef}
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                // Tab / ArrowDown: into the list, on the first champion; arrows move from there.
+                if (enterListFromSearch(e, roving.focusFirst)) return;
+                // Enter opens the first champion shown.
+                const first = rows[0];
+                if (e.key === 'Enter' && first && search.trim()) setSelectedId(first.championId);
+              }}
+              placeholder={SEARCH_PLACEHOLDER}
+              aria-label="Search champion"
+              aria-keyshortcuts={IS_MAC ? 'Meta+K Meta+F' : 'Control+K Control+F'}
+              className="h-8 w-48 text-xs md:text-xs"
+            />
+          </span>
         </div>
       </div>
       <div className="flex min-h-0 flex-1">
@@ -791,7 +805,12 @@ export function TierListPage({
               narrow={narrow}
             />
           )}
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: arrow keys move focus between the rows (roving tabindex), the rows themselves are buttons */}
+          <div
+            ref={roving.containerRef}
+            onKeyDown={roving.onKeyDown}
+            className="min-h-0 flex-1 overflow-y-auto"
+          >
             {tl.status === 'loading' && (
               <div className="flex flex-col gap-1.5 p-3">
                 {Array.from({ length: 10 }, (_, i) => (
@@ -821,6 +840,7 @@ export function TierListPage({
                   narrow={narrow}
                   selected={e.championId === selectedId}
                   onSelect={() => setSelectedId(e.championId === selectedId ? null : e.championId)}
+                  focus={roving.itemProps(e.championId)}
                 />
               ))}
           </div>

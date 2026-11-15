@@ -1,9 +1,18 @@
 import { ROLE_LABEL } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { AppState } from '../../../core/app-state.ts';
-import type { ChampSelectView, SelectPlayerView } from '../../../core/champ-select.ts';
+import {
+  buildDraftRequest,
+  type ChampSelectView,
+  type SelectPlayerView,
+} from '../../../core/champ-select.ts';
+import { useApiCall } from '../hooks/use-api-call';
 import type { StaticLookup } from '../hooks/use-app';
+import { DamageSplit, type OutlookSide, WinProbability } from './draft-outlook';
 import { ChampionIcon, GameIcon } from './game-icon';
+
+const ALLIES: OutlookSide = { label: 'Your team', text: 'text-up', bar: 'bg-up' };
+const ENEMIES: OutlookSide = { label: 'Enemy', text: 'text-down', bar: 'bg-down' };
 
 const PHASE_LABEL: Record<string, string> = {
   PLANNING: 'Declaring',
@@ -77,14 +86,25 @@ export function ChampSelectBoard({
   lookup,
   mastery,
   inGame,
+  apiKey,
 }: {
   view: ChampSelectView;
   lookup: StaticLookup | null;
   mastery: AppState['mastery'];
   /** Champion select is over: the teams of the game in progress. */
   inGame: boolean;
+  /** Identity of the API data (cached evaluations are dropped when it changes). */
+  apiKey: string;
 }) {
   const mine = [...view.allies, view.me].sort((a, b) => a.cellId - b.cellId);
+  // Win chance and damage split of the draft as it stands (hovered champions included).
+  const { result: evaluation, retry } = useApiCall(
+    buildDraftRequest(view),
+    (r) => window.pickleague.evaluateDraft(r),
+    apiKey,
+    true,
+  );
+  const evaluated = evaluation.status === 'idle' ? null : evaluation.data;
   return (
     <aside className="flex w-[248px] shrink-0 flex-col gap-4 overflow-y-auto border-r border-border p-3">
       <div className="flex items-baseline justify-between px-1">
@@ -103,9 +123,22 @@ export function ChampSelectBoard({
         </span>
       </div>
 
+      <WinProbability
+        result={evaluation}
+        allies={ALLIES}
+        enemies={ENEMIES}
+        onRetry={retry}
+        className="px-1"
+      />
+
       <section>
         <h3 className="mb-1 px-1 text-[10px] font-semibold tracking-[0.18em] text-up uppercase">
           Your team
+          {view.side && (
+            <span className="ml-1.5 font-normal tracking-normal text-muted-foreground normal-case">
+              {view.side} side
+            </span>
+          )}
         </h3>
         <ul className="flex flex-col">
           {mine.map((p) => (
@@ -119,6 +152,7 @@ export function ChampSelectBoard({
             />
           ))}
         </ul>
+        <DamageSplit damage={evaluated?.damage.allies} lookup={lookup} className="mt-1.5 px-2.5" />
       </section>
 
       <section>
@@ -130,6 +164,7 @@ export function ChampSelectBoard({
             <PlayerRow key={p.cellId} player={p} lookup={lookup} side="enemy" />
           ))}
         </ul>
+        <DamageSplit damage={evaluated?.damage.enemies} lookup={lookup} className="mt-1.5 px-2.5" />
       </section>
 
       <section className="flex flex-col gap-2 px-1">
