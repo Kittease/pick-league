@@ -213,9 +213,12 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(ids).not.toContain(89);
     expect(ids).not.toContain(PLANTED.matchup.opponentId);
     const reason = body.candidates[0]?.reasons.find((r) => r.kind === 'matchup');
-    expect(reason?.delta).toBeGreaterThan(0.03);
+    // Shrunk with k = 1,200: lane matchup effects are small.
+    expect(reason?.delta).toBeGreaterThan(0.01);
     expect(reason?.games).toBeGreaterThan(50);
-    expect(reason?.label).toMatch(/^\+\d+\.\d% vs Janna \(likely lane, support, [\d,]+ games\)$/);
+    expect(reason?.label).toMatch(
+      /^\+\d+\.\d% vs Janna compared with other supports \(likely lane, support, [\d,]+ games\)$/,
+    );
   });
 
   test('picks: duo synergy and previous patch added for a rare pick', async () => {
@@ -226,7 +229,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     const body = (await res.json()) as PicksResponse;
     const lulu = body.candidates.find((c) => c.championId === PLANTED.duo.championId);
     const duo = lulu?.reasons.find((r) => r.kind === 'duo');
-    expect(duo?.delta).toBeGreaterThan(0.03);
+    expect(duo?.delta).toBeGreaterThan(0);
     expect(body.candidates.slice(0, 2).map((c) => c.championId)).toContain(PLANTED.duo.championId);
 
     const braum = body.candidates.find((c) => c.championId === PLANTED.rareOnCurrent);
@@ -310,8 +313,9 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       WHERE d.patch = ${CUR} AND d.champion_id = ${championId} AND d.position = 'UTILITY'
       GROUP BY d.kind, d.choice, d.partner_position`;
     expect(duos.length).toBeGreaterThan(0);
+    expect(duos.some((r) => r.kind === 'items_done')).toBe(true);
     for (const r of duos) {
-      expect(r.kind).toBe('item');
+      expect(['item', 'items_done']).toContain(r.kind);
       expect(r.games).toBe(r.total ?? -1);
     }
     const partners = await db<{ position: string }[]>`
@@ -321,7 +325,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     const withPartner = await repo.loadChoiceDuos(db, [CUR], championId, 'UTILITY', [allyId]);
     expect(withPartner.length).toBeGreaterThan(0);
 
-    // Ally traits: items only, each within the champion's games with that trait and its item rows.
+    // Ally traits: items (and the build stage), each within the champion's games with that trait and its item rows.
     const traits = await db<
       { kind: string; trait: string; games: number; item_games: number; trait_games: number }[]
     >`
@@ -336,7 +340,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       WHERE t.patch = ${CUR} AND t.position = 'UTILITY'`;
     expect(traits.length).toBeGreaterThan(0);
     for (const r of traits) {
-      expect(r.kind).toBe('item');
+      expect(['item', 'items_done']).toContain(r.kind);
       expect(r.games).toBeLessThanOrEqual(Math.min(r.item_games, r.trait_games));
     }
 
@@ -368,7 +372,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(b.items.questUpgrade?.itemId).toBe(3869);
     const base = b.items.questUpgrade?.reasons.find((r) => r.kind === 'base');
     expect(base?.games).toBeGreaterThan(b.games / 2);
-    expect(base?.label).toStartWith('Most successful quest upgrade (Celestial Opposition)');
+    expect(base?.label).toStartWith('Most played quest upgrade (Celestial Opposition)');
     const listed = [...b.items.starting, ...b.items.early, ...b.items.core].map((i) => i.itemId);
     expect(listed).not.toContain(3869);
 

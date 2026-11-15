@@ -5,7 +5,7 @@ import { buildTierListChampion, type TierListChampionData } from './tierlist-cha
 
 const CUR = '15.22';
 const PREV = '15.21';
-const K = ENGINE_CONFIG.picks.shrinkK;
+const K = ENGINE_CONFIG.tierList.shrinkK;
 
 function data(overrides: Partial<TierListChampionData> = {}): TierListChampionData {
   return {
@@ -103,7 +103,7 @@ describe('buildTierListChampion', () => {
     expect(ids(d.synergies)).toEqual([64, 122, 103]);
     expect(d.synergies.map((r) => r.role)).toEqual(['JUNGLE', 'TOP', 'MIDDLE']);
     // Synergies use the pairwise prior strength.
-    expect(d.synergies[0]?.delta).toBeCloseTo((0.1 * 300) / (300 + K.pair), 4);
+    expect(d.synergies[0]?.delta).toBeCloseTo((0.1 * 300) / (300 + K.synergy), 4);
   });
 
   test('jungle: mid and top allies are duos, bot lane allies are synergies', () => {

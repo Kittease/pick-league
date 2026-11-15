@@ -37,7 +37,7 @@ export type TierListChampionDetail = Omit<TierListChampionResponse, 'filters' | 
 };
 
 const TL = ENGINE_CONFIG.tierList;
-const K = ENGINE_CONFIG.picks.shrinkK;
+const K = ENGINE_CONFIG.tierList.shrinkK;
 
 /** Best first; ties: bigger sample, then champion id (stable output). */
 const byDelta = (a: TierListRelation, b: TierListRelation) =>
@@ -109,7 +109,7 @@ export function buildTierListChampion(
       allies.filter((r) => !isDuo(r) && r.allyPosition !== role),
       patches,
       baseWr,
-      K.pair,
+      K.synergy,
       ally.id,
       ally.role,
     ),

@@ -38,6 +38,7 @@ import {
   round,
   sampleConfidence,
   shrink,
+  sumStats,
   winRate,
 } from './math.ts';
 import { sideTraits } from './picks.ts';
@@ -106,26 +107,38 @@ const B = ENGINE_CONFIG.build;
  */
 const byKey = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
+type ShrinkKey = keyof typeof B.shrinkK;
+
+/** Prior strength of a choice kind (or a rune/core step). */
+export function kOf(kind: ChoiceKind | ShrinkKey): number {
+  return (B.shrinkK as Record<string, number>)[kind] ?? B.shrinkK.default;
+}
+
 interface Scored {
   row: ChoiceRow;
   delta: number;
   share: number;
 }
 
-/** Best choice of a kind: max(shrunk delta vs baseline + popularity bonus) among choices with enough games. */
+/**
+ * Best choice among `rows` (filtered): max(shrunk delta + popularity bonus) among choices with
+ * enough games. Delta and share are relative to the candidates pooled, i.e. the games where that
+ * choice exists: a 3-item path is compared with the other 3-item paths (games that reached 3
+ * items win far more than average), not with every game of the champion.
+ */
 export function bestChoice(
   rows: readonly ChoiceRow[],
-  baseline: GamesWins,
+  k: number,
   filter: (r: ChoiceRow) => boolean = () => true,
 ): Scored | null {
   const candidates = rows.filter(filter);
   if (candidates.length === 0) return null;
-  const total = baseline.games > 0 ? baseline.games : candidates.reduce((s, r) => s + r.games, 0);
-  const baseWr = winRate(baseline);
+  const pooled = sumStats(candidates);
+  const refWr = winRate(pooled);
   const scored = candidates.map((row) => ({
     row,
-    delta: shrink(winRate(row) - baseWr, row.games, B.shrinkK),
-    share: total > 0 ? row.games / total : 0,
+    delta: shrink(winRate(row) - refWr, row.games, k),
+    share: pooled.games > 0 ? row.games / pooled.games : 0,
   }));
   const eligible = scored.filter((s) => s.row.games >= B.minChoiceGames);
   if (eligible.length === 0) {
@@ -170,18 +183,43 @@ interface ContextResult {
   context: Context;
 }
 
-/** Delta of `choice` within a context vs the champion's record in that context. */
+/**
+ * Delta of `choice` within a context vs the other choices of its kind there (the games of that
+ * kind in the context: every game for spells, games with completed boots for boots…).
+ */
 function contextDelta(
   ctx: Context,
   kind: ChoiceKind,
   choice: string,
 ): { delta: number; games: number } {
   const row = ctx.rows.find((r) => r.kind === kind && r.choice === choice);
-  if (!row || ctx.total.games === 0) return { delta: 0, games: 0 };
+  const pooled = sumStats(ctx.rows.filter((r) => r.kind === kind));
+  if (!row || pooled.games === 0) return { delta: 0, games: 0 };
   return {
-    delta: shrink(winRate(row) - winRate(ctx.total), row.games, B.shrinkK),
+    delta: shrink(winRate(row) - winRate(pooled), row.games, kOf(kind)),
     games: row.games,
   };
+}
+
+/**
+ * Games and wins of the players who completed at least `avgPos` items (interpolated between the
+ * two whole counts around it), from the `items_done` rows of a context: the fair comparison for
+ * an item usually bought at that point of the build. Players who complete more items win far
+ * more (≈ 37 % with one item, 61 % with five on 16.22), so an item compared with every game
+ * looked better the later it is bought. Null without `items_done` rows (stats predating 0015).
+ */
+export function stageReference(
+  rows: readonly (GamesWins & { kind: ChoiceKind; choice: string })[],
+  avgPos: number,
+): GamesWins | null {
+  const done = rows.filter((r) => r.kind === 'items_done');
+  if (done.length === 0) return null;
+  const atLeast = (n: number) => sumStats(done.filter((r) => Number(r.choice) >= n));
+  const lo = Math.max(0, Math.floor(avgPos));
+  const f = Math.max(0, avgPos - lo);
+  const a = atLeast(lo);
+  const b = atLeast(Math.min(lo + 1, 6));
+  return { games: (1 - f) * a.games + f * b.games, wins: (1 - f) * a.wins + f * b.wins };
 }
 
 /** Best alternative of `kind` in the context; `switched` when it beats the base by `switchMinGain`. */
@@ -307,16 +345,9 @@ export function recommendBuild(req: BuildRequest, data: BuildData): BuildRespons
   const damage: 'physical' | 'magic' =
     (selfTraits?.physicalShare ?? 0.5) >= (selfTraits?.magicShare ?? 0.5) ? 'physical' : 'magic';
 
-  const runes = recommendRunes(byKind, baseline, primaryMatchup, names, fallback);
-  const summonerSpells = recommendSpells(
-    byKind,
-    baseline,
-    matchupContexts,
-    traitContexts,
-    names,
-    fallback,
-  );
-  const skillOrder = recommendSkills(byKind, baseline, primaryMatchup, fallback);
+  const runes = recommendRunes(byKind, primaryMatchup, names, fallback);
+  const summonerSpells = recommendSpells(byKind, matchupContexts, traitContexts, names, fallback);
+  const skillOrder = recommendSkills(byKind, primaryMatchup, fallback);
   const items = recommendItems({
     byKind,
     baseline,
@@ -453,44 +484,114 @@ export function parseRunePage(key: string): ParsedPage | null {
   };
 }
 
+/** Rows grouped by a derived key, games and wins summed (rows whose key is null are left out). */
+function groupChoices(
+  rows: readonly ChoiceRow[],
+  keyOf: (r: ChoiceRow) => string | null,
+): ChoiceRow[] {
+  const out = new Map<string, ChoiceRow>();
+  for (const r of rows) {
+    const key = keyOf(r);
+    if (key === null) continue;
+    const seen = out.get(key);
+    out.set(
+      key,
+      seen
+        ? { ...seen, games: seen.games + r.games, wins: seen.wins + r.wins }
+        : { kind: r.kind, choice: key, games: r.games, wins: r.wins, avgPos: null },
+    );
+  }
+  return [...out.values()];
+}
+
+/**
+ * The page is built step by step, each step among the pages of the chosen keystone: whole pages
+ * (with shards) are too fragmented to pick at once (the most successful one was usually a page
+ * seen in a few dozen games). Keystone (primary tree included) first, possibly adapted to the
+ * lane opponent; then the secondary tree with its two runes, each primary minor rune (no
+ * measurable difference on 16.22: popularity decides) and each stat shard.
+ */
 function recommendRunes(
   byKind: (k: ChoiceKind) => ChoiceRow[],
-  baseline: GamesWins,
   matchup: Context | undefined,
   names: NameLookup,
   fallback: Reason[],
 ): RunesRecommendation {
-  const pages = byKind('rune_page');
-  let chosen = bestChoice(pages, baseline);
-  const keystoneOf = (r: ChoiceRow) => parseRunePage(r.choice)?.runeIds[0];
+  const pages = byKind('rune_page').flatMap((row) => {
+    const page = parseRunePage(row.choice);
+    return page && page.runeIds.length === 6 && page.statShardIds.length === 3
+      ? [{ row, page }]
+      : [];
+  });
+  const keystoneRows = groupChoices(
+    pages.map((p) => p.row),
+    (r) => {
+      const page = parseRunePage(r.choice);
+      return page ? `${page.primaryTreeId}|${page.runeIds[0]}` : null;
+    },
+  );
+  let keystone = bestChoice(keystoneRows, kOf('keystone'));
+  const keystoneId = (s: Scored | null) => Number(s?.row.choice.split('|')[1] ?? 0);
   const reasons: Reason[] = [
     ...fallback,
-    ...baseReason(
-      chosen,
-      `Most successful page (${names.rune(keystoneOf(chosen?.row ?? (pages[0] as ChoiceRow)) ?? 0)})`,
-    ),
+    ...baseReason(keystone, `Most successful keystone (${names.rune(keystoneId(keystone))})`),
   ];
-  if (chosen && matchup) {
-    const baseKeystone = String(keystoneOf(chosen.row) ?? '');
-    const res = adjustInContext(matchup, 'keystone', baseKeystone);
+  if (keystone && matchup) {
+    const res = adjustInContext(matchup, 'keystone', String(keystoneId(keystone)));
     if (res.switched) {
-      const alt = bestChoice(pages, baseline, (r) => String(keystoneOf(r)) === res.choice);
-      if (alt) chosen = alt;
+      const alt = bestChoice(
+        keystoneRows,
+        kOf('keystone'),
+        (r) => r.choice.split('|')[1] === res.choice,
+      );
+      if (alt) keystone = alt;
     }
     const reason = contextReason(res, names.rune(Number(res.choice)));
     if (reason) reasons.unshift(reason);
   }
-  const page = chosen ? parseRunePage(chosen.row.choice) : null;
-  const runeIds = page?.runeIds ?? [];
-  const statShardIds = page?.statShardIds ?? [];
+  const [primaryTree = '0', keystoneKey = '0'] = keystone?.row.choice.split('|') ?? [];
+  const mine = pages.filter(
+    (p) =>
+      String(p.page.primaryTreeId) === primaryTree && String(p.page.runeIds[0]) === keystoneKey,
+  );
+  const step = (key: (p: ParsedPage) => string, k: number, among = mine) =>
+    bestChoice(
+      groupChoices(
+        among.map((p) => p.row),
+        (r) => {
+          const page = parseRunePage(r.choice);
+          return page ? key(page) : null;
+        },
+      ),
+      k,
+    )?.row.choice ?? null;
+  const secondary = step(
+    (p) => `${p.secondaryTreeId}|${p.runeIds[4]},${p.runeIds[5]}`,
+    kOf('runeSecondary'),
+  );
+  const minors = [1, 2, 3].map((i) => step((p) => String(p.runeIds[i]), kOf('runeMinor')));
+  const shards = [0, 1, 2].map((i) => step((p) => String(p.statShardIds[i]), kOf('runeShard')));
+  const [secondaryTree, secondaryRunes = ''] = secondary?.split('|') ?? [];
+  const runeIds = keystone
+    ? [Number(keystoneKey), ...minors.map(Number), ...parseIntList(secondaryRunes)]
+    : [];
+  const statShardIds = keystone ? shards.map(Number) : [];
+  if (keystone && mine.length > 0) {
+    reasons.push({
+      kind: 'popularity',
+      label: `Secondary tree, minor runes and shards: most successful in each slot among the ${formatGames(keystone.row.games)} with ${names.rune(Number(keystoneKey))}`,
+      delta: 0,
+      games: keystone.row.games,
+    });
+  }
   return {
-    primaryTreeId: page?.primaryTreeId ?? 0,
-    secondaryTreeId: page?.secondaryTreeId ?? 0,
+    primaryTreeId: Number(primaryTree),
+    secondaryTreeId: Number(secondaryTree ?? 0),
     runeIds,
     statShardIds,
     selectedPerkIds: [...runeIds, ...statShardIds],
-    games: chosen?.row.games ?? 0,
-    winRate: round(winRate(chosen?.row)),
+    games: keystone?.row.games ?? 0,
+    winRate: round(winRate(keystone?.row)),
     reasons,
   };
 }
@@ -503,14 +604,13 @@ const FLASH = 4;
 
 function recommendSpells(
   byKind: (k: ChoiceKind) => ChoiceRow[],
-  baseline: GamesWins,
   matchups: readonly Context[],
   traits: readonly Context[],
   names: NameLookup,
   fallback: Reason[],
 ): SummonerSpellsRecommendation {
   const rows = byKind('spells');
-  const base = bestChoice(rows, baseline);
+  const base = bestChoice(rows, kOf('spells'));
   const pairName = (key: string) =>
     parseIntList(key)
       .map((id) => names.summonerSpell(id))
@@ -552,13 +652,12 @@ const skillName = (list: readonly number[], sep: string) =>
 
 function recommendSkills(
   byKind: (k: ChoiceKind) => ChoiceRow[],
-  baseline: GamesWins,
   matchup: Context | undefined,
   fallback: Reason[],
 ): SkillOrderRecommendation {
   const reasons: Reason[] = [...fallback];
-  const first = bestChoice(byKind('skill_first3'), baseline);
-  const max = bestChoice(byKind('skill_max'), baseline);
+  const first = bestChoice(byKind('skill_first3'), kOf('skill_first3'));
+  const max = bestChoice(byKind('skill_max'), kOf('skill_max'));
   let firstKey = first?.row.choice ?? '';
   let maxKey = max?.row.choice ?? '';
   reasons.push(...baseReason(max, `Max ${skillName(parseIntList(maxKey), ' > ')}`));
@@ -643,22 +742,42 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
   const itemRow = new Map(itemRows.map((r) => [Number(r.choice), r]));
   const isBoots = (id: number) => data.items.get(id)?.isBoots ?? false;
 
+  /**
+   * Delta of building an item (its row `r` among `rows`) vs not building it, among the players
+   * at the same point of their build (`stageReference` at the item's usual slot); among every
+   * game of `total` when the stats have no `items_done` rows. Null without a comparison group.
+   */
+  const builtDelta = (
+    r: GamesWins,
+    id: number,
+    rows: Context['rows'],
+    total: GamesWins,
+  ): number | null => {
+    const avgPos = itemRow.get(id)?.avgPos ?? null;
+    const pool = (avgPos !== null ? stageReference(rows, avgPos) : null) ?? total;
+    const restGames = pool.games - r.games;
+    if (restGames < 1) return null;
+    const restWr = Math.min(1, Math.max(0, (pool.wins - r.wins) / restGames));
+    return shrink(winRate(r) - restWr, r.games, kOf('item'));
+  };
+  const hasStages = data.choices.some((r) => r.kind === 'items_done');
   // Overall delta of building an item vs not building it.
   const itemDelta = (id: number): number => {
     const r = itemRow.get(id);
-    if (!r) return 0;
-    const rest = { games: baseline.games - r.games, wins: baseline.wins - r.wins };
-    return rest.games > 0 ? shrink(winRate(r) - winRate(rest), r.games, B.shrinkK) : 0;
+    return r ? (builtDelta(r, id, data.choices, baseline) ?? 0) : 0;
   };
   const itemReason = (id: number): Reason[] => {
     const r = itemRow.get(id);
     if (!r) return [];
     const share = baseline.games > 0 ? r.games / baseline.games : 0;
+    const delta = itemDelta(id);
     return [
       {
         kind: 'popularity',
-        label: `Built in ${formatRate(share)} of games, ${formatRate(winRate(r))} win rate (${formatGames(r.games)})`,
-        delta: round(shrink(winRate(r) - baseWr, r.games, B.shrinkK)),
+        label: hasStages
+          ? `Built in ${formatRate(share)} of games, ${formatDelta(delta)} vs players at the same point of their build (${formatGames(r.games)})`
+          : `Built in ${formatRate(share)} of games, ${formatRate(winRate(r))} win rate (${formatGames(r.games)})`,
+        delta: round(hasStages ? delta : shrink(winRate(r) - baseWr, r.games, kOf('item'))),
         games: r.games,
         itemId: id,
       },
@@ -666,7 +785,7 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
   };
 
   // Starting items.
-  const starterBase = bestChoice(byKind('starter'), baseline);
+  const starterBase = bestChoice(byKind('starter'), kOf('starter'));
   let starterKey = starterBase?.row.choice ?? '';
   const starterReasons: Reason[] = [...baseReason(starterBase, 'Most successful start')];
   if (primaryMatchup && starterKey) {
@@ -683,9 +802,33 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
     reasons: starterReasons,
   }));
 
-  // Core: best first-3 path, completed with the most built items.
-  const core3 = bestChoice(byKind('core3'), baseline);
-  const coreIds = core3 ? parseIntList(core3.row.choice) : [];
+  // Core: the first three items one at a time among the games with 3 completed items (first
+  // item, then the second after it, then the third), since whole 3-item paths are too
+  // fragmented to pick at once; completed with the most built items.
+  const paths = byKind('core3').filter((r) => parseIntList(r.choice).length === 3);
+  const coreIds: number[] = [];
+  for (let i = 0; i < 3; i++) {
+    const among = paths.filter((r) => {
+      const ids = parseIntList(r.choice);
+      return coreIds.every((id, j) => ids[j] === id);
+    });
+    const next = bestChoice(
+      groupChoices(among, (r) => String(parseIntList(r.choice)[i])),
+      i === 0 ? kOf('coreFirst') : kOf('coreNext'),
+    );
+    if (!next) break;
+    coreIds.push(Number(next.row.choice));
+  }
+  const pathRow = paths.find((r) => r.choice === coreIds.join(','));
+  const allPaths = sumStats(paths);
+  const core3: Scored | null =
+    pathRow && allPaths.games > 0
+      ? {
+          row: pathRow,
+          delta: shrink(winRate(pathRow) - winRate(allPaths), pathRow.games, kOf('coreNext')),
+          share: pathRow.games / allPaths.games,
+        }
+      : null;
   const extra = itemRows
     .filter((r) => !coreIds.includes(Number(r.choice)) && !isBoots(Number(r.choice)))
     .filter((r) => (r.avgPos ?? 0) >= coreIds.length - 0.5)
@@ -704,7 +847,7 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
 
   // Boots, adjusted for the lane opponent and enemy traits, inserted at their usual slot.
   const bootsRows = byKind('boots');
-  const bootsBase = bestChoice(bootsRows, baseline);
+  const bootsBase = bestChoice(bootsRows, kOf('boots'));
   if (bootsBase) {
     const reasons: Reason[] = [
       ...baseReason(
@@ -732,14 +875,16 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
   const questGames = questRows.reduce((s, r) => s + r.games, 0);
   const questBase =
     baseline.games > 0 && questGames / baseline.games >= B.questItemMinShare
-      ? bestChoice(questRows, baseline)
+      ? bestChoice(questRows, kOf('quest_item'))
       : null;
   let questUpgrade: RecommendedItem | undefined;
   if (questBase) {
     const reasons: Reason[] = [
       ...baseReason(
         questBase,
-        `Most successful quest upgrade (${names.item(Number(questBase.row.choice))})`,
+        // With no measurable difference between upgrades (infinite k) popularity decides, and
+        // no context ever switches it.
+        `${Number.isFinite(kOf('quest_item')) ? 'Most successful' : 'Most played'} quest upgrade (${names.item(Number(questBase.row.choice))})`,
       ),
     ];
     const sw = bestSwitch(
@@ -802,9 +947,8 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
   const contextGain = (ctx: Context, r: Context['rows'][number]): number | null => {
     const id = Number(r.choice);
     if (r.kind !== 'item' || r.games < B.minContextGames || isBoots(id)) return null;
-    const rest = { games: ctx.total.games - r.games, wins: ctx.total.wins - r.wins };
-    if (rest.games <= 0) return null;
-    const delta = shrink(winRate(r) - winRate(rest), r.games, B.shrinkK);
+    const delta = builtDelta(r, id, ctx.rows, ctx.total);
+    if (delta === null) return null;
     return delta > 0 && delta - itemDelta(id) >= B.swapMinGain ? delta : null;
   };
   const dataSwap = (ctx: Context): { itemId: number; delta: number; games: number } | null => {

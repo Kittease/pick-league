@@ -39,11 +39,19 @@ describe('recommendPicks', () => {
     const result = recommendPicks(
       req({ role: 'UTILITY', allies: [{ championId: 222, role: 'BOTTOM' }], enemies: [40] }),
       data({
-        // Nautilus +6 % vs Janna; Lulu +6 % with Jinx; same sample sizes.
-        vs: [vs(CUR, 111, 40, 'UTILITY', 1000, 560), vs(CUR, 117, 40, 'UTILITY', 1000, 500)],
+        // Nautilus +6 % vs Janna; Lulu +6 % with Jinx; same sample sizes. The other supports do
+        // as usual, so supports usually get +1.5 % vs Janna and with Jinx.
+        vs: [
+          vs(CUR, 111, 40, 'UTILITY', 1000, 560),
+          vs(CUR, 117, 40, 'UTILITY', 1000, 500),
+          vs(CUR, 412, 40, 'UTILITY', 1000, 500),
+          vs(CUR, 89, 40, 'UTILITY', 1000, 500),
+        ],
         with: [
           withAlly(CUR, 117, 222, 'BOTTOM', 1000, 560),
           withAlly(CUR, 111, 222, 'BOTTOM', 1000, 500),
+          withAlly(CUR, 412, 222, 'BOTTOM', 1000, 500),
+          withAlly(CUR, 89, 222, 'BOTTOM', 1000, 500),
         ],
       }),
     );
@@ -54,11 +62,57 @@ describe('recommendPicks', () => {
     const naut = result.candidates[0];
     const matchup = naut?.reasons.find((r) => r.kind === 'matchup');
     expect(matchup?.games).toBe(1000);
-    expect(matchup?.delta).toBeCloseTo((0.06 * 1000) / 1120, 3);
-    expect(matchup?.label).toBe('+5.4% vs Janna (likely lane, support, 1,000 games)');
+    // 6 % − the usual 1.5 %, shrunk with k = 1,200.
+    expect(matchup?.delta).toBeCloseTo((0.045 * 1000) / 2200, 3);
+    expect(matchup?.label).toBe(
+      '+2.0% vs Janna compared with other supports (likely lane, support, 1,000 games)',
+    );
     expect(matchup?.championIds).toEqual([40]);
     const duo = result.candidates[1]?.reasons.find((r) => r.kind === 'duo');
-    expect(duo?.label).toBe('+5.4% with Jinx (bot duo, 1,000 games)');
+    expect(duo?.label).toBe('+1.7% with Jinx compared with other supports (bot duo, 1,000 games)');
+  });
+
+  test("an enemy's own strength does not favour candidates with small samples", () => {
+    // Janna beats every support by 5 %: Nautilus (2,000 games) and Lulu (40 games) both do as
+    // usual vs her, so neither gets a matchup edge.
+    const result = recommendPicks(
+      req({ role: 'UTILITY', enemies: [40] }),
+      data({
+        vs: [
+          vs(CUR, 111, 40, 'UTILITY', 2000, 900),
+          vs(CUR, 117, 40, 'UTILITY', 40, 18),
+          vs(CUR, 412, 40, 'UTILITY', 2000, 900),
+        ],
+      }),
+    );
+    for (const id of [111, 117]) {
+      const c = result.candidates.find((x) => x.championId === id);
+      expect(c?.reasons.find((r) => r.kind === 'matchup')?.delta).toBeCloseTo(0, 4);
+    }
+  });
+
+  test("the champion's own strength counts as much as its matchup", () => {
+    // Thresh: 54 % overall, as usual vs Janna. Leona: 50 % overall, +4 % vs Janna (500 games).
+    const result = recommendPicks(
+      req({ role: 'UTILITY', enemies: [40] }),
+      data({
+        roleStats: [
+          role(CUR, 412, 'UTILITY', 2000, 1080),
+          role(CUR, 89, 'UTILITY', 2000, 1000),
+          role(CUR, 111, 'UTILITY', 2000, 1000),
+          role(CUR, 40, 'UTILITY', 2000, 1000),
+        ],
+        vs: [
+          vs(CUR, 412, 40, 'UTILITY', 500, 270),
+          vs(CUR, 89, 40, 'UTILITY', 500, 270),
+          vs(CUR, 111, 40, 'UTILITY', 2000, 1000),
+        ],
+      }),
+    );
+    expect(result.candidates[0]?.championId).toBe(412);
+    const base = result.candidates[0]?.reasons.find((r) => r.kind === 'base');
+    // 54 % vs the role average (Janna included), shrunk with k = 250.
+    expect(base?.delta).toBeCloseTo(((0.54 - 4080 / 8000) * 2000) / 2250, 4);
   });
 
   test('shrinkage keeps tiny samples from dominating', () => {
@@ -68,6 +122,8 @@ describe('recommendPicks', () => {
         vs: [
           vs(CUR, 111, 40, 'UTILITY', 10, 10), // +50 % on 10 games
           vs(CUR, 117, 40, 'UTILITY', 2000, 1200), // +10 % on 2,000 games
+          vs(CUR, 412, 40, 'UTILITY', 2000, 1000), // as usual
+          vs(CUR, 89, 40, 'UTILITY', 2000, 1000),
         ],
       }),
     );

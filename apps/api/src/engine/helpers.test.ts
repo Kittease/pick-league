@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { stageReference } from './build.ts';
 import { thresholds, traitsOf } from './fixtures.ts';
 import { choosePatches, formatDelta, formatGames, patchesLabel, shrink, sumByKey } from './math.ts';
 import { assignRoles, rolePlayRates } from './roles.ts';
@@ -143,5 +144,22 @@ describe('skills', () => {
     expect(seq).toHaveLength(18);
     expect([seq[5], seq[10], seq[15]]).toEqual([4, 4, 4]);
     expect(skillMaxOrder(seq)).toEqual([3, 2, 1]);
+  });
+});
+
+describe('stageReference', () => {
+  const done = (choice: string, games: number, wins: number) => ({
+    kind: 'items_done' as const,
+    choice,
+    games,
+    wins,
+  });
+  test('players with at least that many items, interpolated between whole counts', () => {
+    const rows = [done('2', 100, 40), done('3', 100, 50), done('4', 100, 60)];
+    expect(stageReference(rows, 3)).toEqual({ games: 200, wins: 110 });
+    expect(stageReference(rows, 3.5)).toEqual({ games: 150, wins: 85 });
+  });
+  test('null without items_done rows', () => {
+    expect(stageReference([], 2)).toBeNull();
   });
 });

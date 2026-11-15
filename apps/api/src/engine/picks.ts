@@ -1,7 +1,13 @@
 /**
- * Pick recommendations: for each candidate champion in the requested role, a weighted sum of
- * shrunk win-rate deltas vs the champion's own baseline, in priority order
- * lane matchup > duo synergy > vs enemy composition > with ally composition (+ small base term).
+ * Pick recommendations: for each candidate champion in the requested role, an estimate of its
+ * win-rate difference, summed from shrunk deltas: its own strength vs the role average, then each
+ * enemy and ally (lane matchup, duo synergy, other pairs) and the composition traits.
+ *
+ * A pair delta is the candidate's win rate vs/with that champion minus its own baseline, minus
+ * what the role usually gets vs/with it (games-weighted over every candidate): a strong enemy
+ * lowers everyone's win rate, which says nothing about which candidate to pick. Without that,
+ * popular candidates (whose big samples keep the enemy's strength after shrinkage) were
+ * penalised vs strong enemies and favoured vs weak ones.
  */
 import type {
   CompTrait,
@@ -12,7 +18,14 @@ import type {
   Position,
   Reason,
 } from '@pick-league/shared';
-import { DUO_ROLES, ENGINE_CONFIG, LANE_ROLES, ROLE_LABELS, TRAIT_LABELS } from './config.ts';
+import {
+  DUO_ROLES,
+  ENGINE_CONFIG,
+  LANE_ROLES,
+  ROLE_LABELS,
+  ROLE_PLURALS,
+  TRAIT_LABELS,
+} from './config.ts';
 import { lanePhaseDiff, lanePhaseReason, lanePhaseRowsOf } from './lane-phase.ts';
 import {
   choosePatches,
@@ -168,6 +181,51 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
     return withTrait.games > 0 && all.games > 0 ? winRate(withTrait) - winRate(all) : 0;
   });
 
+  // Role baseline on the patches used.
+  const roleWinRate = memo((scope: string) => {
+    const patches = scope.split('+');
+    return winRate(
+      sumStats(data.roleStats.filter((r) => patches.includes(r.patch) && r.position === role)),
+    );
+  });
+  const baselineOn = (championId: number, patches: readonly string[]): GamesWins =>
+    sumStats(patches.flatMap((p) => roleRow.get(`${p}|${championId}|${role}`) ?? []));
+
+  // What the role usually gets vs/with a champion: games-weighted mean of (win rate with that
+  // pair − own baseline) over every candidate, on the patches used. `exact` = only rows with
+  // the other champion in the guessed role (same choice as the candidate's own rows).
+  const usualDelta = memo((key: string) => {
+    const [side, scope = '', otherId, otherRole, exact] = key.split('|');
+    const patches = scope.split('+');
+    const rows: (GamesWins & {
+      championId: number;
+      position: Position;
+      otherPosition: Position;
+    })[] =
+      side === 'vs'
+        ? data.vs
+            .filter((r) => r.enemyId === Number(otherId) && patches.includes(r.patch))
+            .map((r) => ({ ...r, otherPosition: r.enemyPosition }))
+        : data.with
+            .filter((r) => r.allyId === Number(otherId) && patches.includes(r.patch))
+            .map((r) => ({ ...r, otherPosition: r.allyPosition }));
+    const perCandidate = new Map<number, GamesWins>();
+    for (const r of rows) {
+      if (r.position !== role || (exact === '1' && r.otherPosition !== otherRole)) continue;
+      const s = perCandidate.get(r.championId) ?? { games: 0, wins: 0 };
+      perCandidate.set(r.championId, { games: s.games + r.games, wins: s.wins + r.wins });
+    }
+    let games = 0;
+    let sum = 0;
+    for (const [championId, s] of perCandidate) {
+      const base = baselineOn(championId, patches);
+      if (base.games === 0 || s.games === 0) continue;
+      sum += (winRate(s) - winRate(base)) * s.games;
+      games += s.games;
+    }
+    return games > 0 ? sum / games : 0;
+  });
+
   const championIds = new Set(
     data.roleStats.filter((r) => r.position === role).map((r) => r.championId),
   );
@@ -188,17 +246,15 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
     // Rows of a key on every patch used (one row, or one per patch when they are combined).
     const onPatches = <T>(index: ReadonlyMap<string, T[]>, key: string): T[] =>
       pc.patches.flatMap((p) => index.get(`${p}|${key}`) ?? []);
-    const base = sumStats(
-      pc.patches.flatMap((p) => roleRow.get(`${p}|${championId}|${role}`) ?? []),
-    );
+    const base = baselineOn(championId, pc.patches);
     if (base.games < ENGINE_CONFIG.minCandidateGames) continue;
     const scope = pc.patches.join('+');
     const baseWr = winRate(base);
     const champName = names.champion(championId);
     const components: Component[] = [];
 
-    // Base
-    const baseDelta = shrink(baseWr - 0.5, base.games, K.base);
+    // Base: own strength vs the role average.
+    const baseDelta = shrink(baseWr - roleWinRate(scope), base.games, K.base);
     components.push({
       reason: {
         kind: 'base',
@@ -222,8 +278,11 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
       const rows = onPatches(vsIndex, `${championId}|${enemy.championId}`);
       const exact = sumStats(rows.filter((r) => r.enemyPosition === enemy.role));
       const stats: GamesWins = exact.games > 0 ? exact : sumStats(rows);
-      const delta = stats.games > 0 ? winRate(stats) - baseWr : 0;
-      const k = isLane || isLaneSecondary ? K.matchup : K.pair;
+      const usual = usualDelta(
+        `vs|${scope}|${enemy.championId}|${enemy.role}|${exact.games > 0 ? 1 : 0}`,
+      );
+      const delta = stats.games > 0 ? winRate(stats) - baseWr - usual : 0;
+      const k = isLane ? K.matchup : isLaneSecondary ? K.laneSecondary : K.otherEnemy;
       const shrunk = shrink(delta, stats.games, k);
       const where = describeEnemyRole(enemy, isLane || isLaneSecondary);
       components.push({
@@ -231,7 +290,7 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
           kind: 'matchup',
           label:
             stats.games > 0
-              ? `${formatDelta(shrunk)} vs ${names.champion(enemy.championId)} (${where}, ${formatGames(stats.games)})`
+              ? `${formatDelta(shrunk)} vs ${names.champion(enemy.championId)} compared with other ${ROLE_PLURALS[role]} (${where}, ${formatGames(stats.games)})`
               : `No games vs ${names.champion(enemy.championId)} yet (${where})`,
           delta: round(shrunk),
           games: stats.games,
@@ -278,15 +337,18 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
       const rows = onPatches(withIndex, `${championId}|${ally.championId}`);
       const exact = sumStats(rows.filter((r) => r.allyPosition === ally.role));
       const stats: GamesWins = exact.games > 0 ? exact : sumStats(rows);
-      const delta = stats.games > 0 ? winRate(stats) - baseWr : 0;
-      const shrunk = shrink(delta, stats.games, isDuo ? K.duo : K.pair);
+      const usual = usualDelta(
+        `with|${scope}|${ally.championId}|${ally.role}|${exact.games > 0 ? 1 : 0}`,
+      );
+      const delta = stats.games > 0 ? winRate(stats) - baseWr - usual : 0;
+      const shrunk = shrink(delta, stats.games, isDuo ? K.duo : K.otherAlly);
       const where = isDuo ? `${duoLabel(role, ally.role)} duo` : ROLE_LABELS[ally.role];
       components.push({
         reason: {
           kind: isDuo ? 'duo' : 'with_comp',
           label:
             stats.games > 0
-              ? `${formatDelta(shrunk)} with ${names.champion(ally.championId)} (${where}, ${formatGames(stats.games)})`
+              ? `${formatDelta(shrunk)} with ${names.champion(ally.championId)} compared with other ${ROLE_PLURALS[role]} (${where}, ${formatGames(stats.games)})`
               : `No games with ${names.champion(ally.championId)} yet (${where})`,
           delta: round(shrunk),
           games: stats.games,

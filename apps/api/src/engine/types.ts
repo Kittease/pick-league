@@ -87,7 +87,9 @@ export type ChoiceKind =
   | 'item'
   | 'early_item'
   /** Support quest upgrade picked when the support item's quest completes. */
-  | 'quest_item';
+  | 'quest_item'
+  /** Completed items of the player (choice = count, 0–6): the build stage of an item (0015). */
+  | 'items_done';
 
 /** stats_choices */
 export interface ChoiceRow extends GamesWins {

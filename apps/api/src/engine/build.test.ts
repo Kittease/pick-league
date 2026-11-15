@@ -127,6 +127,121 @@ describe('recommendBuild', () => {
     expect(reason?.label).toMatch(/^\+\d+\.\d% vs Thresh with Glacial Augment \(100 games\)$/);
   });
 
+  test('rune page built slot by slot: a rare lucky variant does not win', () => {
+    // Same page with another first shard: 20 wins in 25 games.
+    const lucky = '8400|8300|8439,8401,8473,8242,8345,8347|5008,5010,5011';
+    const b = recommendBuild(
+      req(LEONA),
+      data({
+        choices: [
+          ...data().choices.filter((r) => r.kind !== 'rune_page'),
+          c('rune_page', PAGE_AFTERSHOCK, 700, 350),
+          c('rune_page', lucky, 25, 20),
+          c('rune_page', PAGE_GLACIAL, 300, 150),
+        ],
+      }),
+    );
+    expect(b?.runes).toMatchObject({
+      primaryTreeId: 8400,
+      secondaryTreeId: 8300,
+      runeIds: [8439, 8401, 8473, 8242, 8345, 8347],
+      statShardIds: [5007, 5010, 5011],
+      // Stats of the keystone (every Aftershock page).
+      games: 725,
+    });
+    expect(b?.runes.reasons.map((r) => r.kind)).toEqual(['base', 'popularity']);
+  });
+
+  test('first three items picked one at a time, among games with three items', () => {
+    const b = recommendBuild(
+      req(LEONA),
+      data({
+        choices: [
+          ...data().choices.filter((r) => r.kind !== 'core3'),
+          c('core3', '3190,3050,3065', 30, 24), // 80 % on 30 games
+          c('core3', '3190,3050,3109', 300, 165),
+          c('core3', '3075,3050,3065', 400, 216),
+        ],
+      }),
+    );
+    const nonBoots = b?.items.core.map((i) => i.itemId).filter((id) => id !== 3047);
+    expect(nonBoots?.slice(0, 3)).toEqual([3190, 3050, 3109]);
+  });
+
+  describe('items compared with players at the same point of their build', () => {
+    const done = (choice: string, games: number, wins: number) =>
+      c('items_done', choice, games, wins);
+    // Leona: players with 4+ items win 65 %; Chemtech Putrifier is a 4th item (50 % overall).
+    const choices = [
+      ...data().choices.filter((r) => r.kind !== 'item' || r.choice !== '3011'),
+      c('item', '3011', 60, 30, 4),
+      done('1', 200, 70),
+      done('2', 300, 140),
+      done('3', 300, 160),
+      done('4', 150, 95),
+      done('5', 50, 35),
+    ];
+    const t = (kind: ChoiceKind, choice: string, games: number, wins: number): ChoiceTraitRow => ({
+      trait: 'HIGH_HEALING',
+      kind,
+      choice,
+      games,
+      wins,
+    });
+    const healing = (ctxDone: ChoiceTraitRow[]) =>
+      recommendBuild(
+        req({
+          ...LEONA,
+          enemies: [
+            { championId: 16, role: 'UTILITY' },
+            { championId: 19, role: 'JUNGLE' },
+          ],
+        }),
+        data({
+          choices,
+          championTraits: [
+            traitsOf(CUR, 89),
+            traitsOf(CUR, 16, { healingPerMin: 120 }),
+            traitsOf(CUR, 19, { healingPerMin: 60 }),
+          ],
+          compTraits: [
+            {
+              patch: CUR,
+              position: 'UTILITY',
+              championId: 89,
+              side: 'enemy',
+              trait: 'HIGH_HEALING',
+              games: 300,
+              wins: 150,
+            },
+          ],
+          // 75 % when built vs heal-heavy teams.
+          choiceTraits: [t('item', '3011', 60, 45), ...ctxDone],
+        }),
+      );
+
+    test('no swap when the item only wins as much as players that far into their build', () => {
+      // Vs heal-heavy teams, players with 4+ items win 77.5 %.
+      const b = healing([t('items_done', '1', 220, 88), t('items_done', '4', 80, 62)]);
+      expect(b?.items.situational.map((s) => s.itemId)).not.toContain(3011);
+    });
+
+    test('a swap when it beats them', () => {
+      // Vs heal-heavy teams, players with 4+ items win 62.5 %.
+      const b = healing([t('items_done', '1', 140, 50), t('items_done', '4', 160, 100)]);
+      const swap = b?.items.situational.find((s) => s.itemId === 3011);
+      expect(swap?.reasons[0]).toMatchObject({ kind: 'item_swap', games: 60 });
+    });
+
+    test('item reasons say how the item does vs that stage', () => {
+      const b = recommendBuild(req(LEONA), data({ choices }));
+      const item = b?.items.core.find((i) => i.itemId === 3109);
+      expect(item?.reasons.at(-1)?.label).toMatch(
+        /^Built in 80\.0% of games, [+−]?\d+\.\d% vs players at the same point of their build \(800 games\)$/,
+      );
+    });
+  });
+
   test('data-backed item swap vs an enemy trait', () => {
     const t = (choice: string, games: number, wins: number): ChoiceTraitRow => ({
       trait: 'HIGH_HEALING',
@@ -498,26 +613,26 @@ describe('recommendBuild', () => {
     });
   });
 
-  test('support quest upgrade: most successful one, with its reasons', () => {
-    const quest = [c('quest_item', '3869', 600, 330), c('quest_item', '3876', 350, 160)];
+  test('support quest upgrade: the most played one (no measurable difference), with its reasons', () => {
+    // The less played upgrade wins more, but upgrades show no real difference: popularity decides.
+    const quest = [c('quest_item', '3869', 600, 300), c('quest_item', '3876', 350, 200)];
     const b = recommendBuild(req(LEONA), data({ choices: [...data().choices, ...quest] }));
     expect(b?.items.questUpgrade?.itemId).toBe(3869);
     expect(b?.items.questUpgrade?.reasons).toEqual([
       {
         kind: 'base',
         label:
-          'Most successful quest upgrade (Celestial Opposition): 55.0% win rate, picked in 60.0% of games (600 games)',
-        delta: expect.any(Number),
+          'Most played quest upgrade (Celestial Opposition): 50.0% win rate, picked in 63.2% of games (600 games)',
+        delta: 0,
         games: 600,
       },
     ]);
-    expect(b?.items.questUpgrade?.reasons[0]?.delta).toBeGreaterThan(0);
     // Not in the other item lists.
     const listed = [...(b?.items.starting ?? []), ...(b?.items.core ?? [])].map((i) => i.itemId);
     expect(listed).not.toContain(3869);
   });
 
-  test('support quest upgrade adapts to the lane opponent', () => {
+  test('support quest upgrade does not switch with the lane opponent', () => {
     const m = (choice: string, games: number, wins: number): ChoiceMatchupRow => ({
       opponentId: 412,
       opponentPosition: 'UTILITY',
@@ -535,10 +650,8 @@ describe('recommendBuild', () => {
         choiceMatchups: [m('3869', 200, 80), m('3876', 100, 70)],
       }),
     );
-    expect(b?.items.questUpgrade?.itemId).toBe(3876);
-    const reason = b?.items.questUpgrade?.reasons[0];
-    expect(reason).toMatchObject({ kind: 'matchup', games: 100, championIds: [412] });
-    expect(reason?.label).toMatch(/^\+\d+\.\d% vs Thresh with Solstice Sleigh \(100 games\)$/);
+    expect(b?.items.questUpgrade?.itemId).toBe(3869);
+    expect(b?.items.questUpgrade?.reasons.map((r) => r.kind)).toEqual(['base']);
   });
 
   test("no quest upgrade when few of the role's games had one", () => {

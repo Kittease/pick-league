@@ -9,7 +9,8 @@ export function winRate(s: GamesWins | undefined): number {
 
 /** Empirical-Bayes style shrinkage toward 0: `delta * n / (n + k)`. */
 export function shrink(delta: number, games: number, k: number): number {
-  if (games <= 0) return 0;
+  // k = Infinity: no measurable difference, every delta is 0 (never -0).
+  if (games <= 0 || !Number.isFinite(k)) return 0;
   return (delta * games) / (games + k);
 }
 

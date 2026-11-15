@@ -4,6 +4,11 @@
  * Deltas are win-rate differences (0.028 = +2.8 points). Each delta is shrunk toward 0 with
  * `delta * n / (n + k)` (empirical-Bayes style), where `k` is the "prior strength" below: a delta
  * backed by `k` games keeps half of its value.
+ *
+ * The `k` values come from the data (patch 16.22, ~122k matches, Nov 2026): for each kind of delta,
+ * the spread that is real (variance of the observed deltas minus their binomial noise, τ²) gives
+ * `k = p(1 − p) / τ²`. A held-out check (stats from 80 % of the matches, scored on the other 20 %)
+ * found the resulting pick score predicts wins ~4× better than the previous hand-set one.
  */
 import type { CompTrait, Position } from '@pick-league/shared';
 
@@ -18,34 +23,46 @@ export const ENGINE_CONFIG = {
 
   picks: {
     /**
-     * Weight of each reason kind in the score, in the user's priority order:
-     * lane matchup > duo synergy > vs enemy composition > with ally composition.
+     * Score = sum of weight × shrunk delta: an estimate of the candidate's win-rate difference.
+     * With the `k` below calibrated on the data, every weight is 1: the held-out fit put the
+     * champion's own strength and the lane matchup at ~1 and no other weighting did reliably
+     * better. The champion's own strength is the largest real effect (±3.3 points between the
+     * champions of a role), lane matchups come next (±1.4), then duo synergy (±1.1) and the other
+     * pairs (≤ ±0.7). Reasons are still listed lane > duo > comp > base.
      */
     weights: {
       /** Enemy in the same role (the lane opponent). */
-      matchup: 1.0,
+      matchup: 1,
       /** Bot lane: the other enemy of the 2v2 (support vs ADC, ADC vs support). */
-      laneSecondary: 0.6,
+      laneSecondary: 1,
       /** Duo partner (UTILITY↔BOTTOM, MIDDLE↔JUNGLE, TOP↔JUNGLE). */
-      duo: 0.8,
+      duo: 1,
       /** Enemy composition traits (shared across active traits). */
-      vsComp: 0.5,
+      vsComp: 1,
       /** Ally composition traits (shared across active traits). */
-      withComp: 0.35,
+      withComp: 1,
       /** Each non-lane enemy (pairwise). */
-      otherEnemy: 0.15,
+      otherEnemy: 1,
       /** Each non-duo ally (pairwise). */
-      otherAlly: 0.1,
-      /** Champion's own win rate in the role vs 50 %. */
-      base: 0.3,
+      otherAlly: 1,
+      /** Champion's own win rate in the role vs the role average. */
+      base: 1,
     },
-    /** Shrinkage prior strength per kind (games). */
+    /**
+     * Shrinkage prior strength per kind (games). Pair deltas (matchup, duo, other enemies and
+     * allies) are measured against what the role usually does vs/with that champion (the other
+     * champion's own strength is the same for every candidate), so these `k` fit that interaction
+     * alone: it is small, hence the large values.
+     */
     shrinkK: {
-      base: 300,
-      matchup: 120,
-      duo: 120,
-      comp: 400,
-      pair: 150,
+      base: 250,
+      matchup: 1200,
+      laneSecondary: 2500,
+      duo: 1600,
+      otherEnemy: 5000,
+      otherAlly: 4700,
+      /** No measurable effect of enemy traits on 16.22, a small one for ally traits (k ≈ 2,800). */
+      comp: 3000,
     },
     /** Number of candidates returned by default. */
     defaultLimit: 20,
@@ -61,10 +78,38 @@ export const ENGINE_CONFIG = {
     minChoiceGames: 10,
     /** Bonus per unit of play share when ranking choices (0.05 → a 100 % share is worth +5 points). */
     popularityWeight: 0.05,
-    /** Prior strength for choice deltas. */
-    shrinkK: 80,
+    /**
+     * Prior strength for choice deltas, per kind (measured on 16.22). Each choice is compared
+     * with the other choices of its kind, i.e. the games where that kind exists (a 3-item path
+     * only exists in games with 3 completed items), not with every game of the champion.
+     */
+    shrinkK: {
+      keystone: 700,
+      /** Secondary tree + its two runes, given the keystone. */
+      runeSecondary: 1000,
+      /** Primary minor runes given the keystone: no measurable difference, popularity decides. */
+      runeMinor: 9000,
+      /** Stat shards, given the keystone. */
+      runeShard: 2000,
+      spells: 800,
+      starter: 1200,
+      boots: 300,
+      /** First completed item (among games with 3 completed items). */
+      coreFirst: 1200,
+      /** Second and third completed items, given the previous ones. */
+      coreNext: 250,
+      skill_first3: 450,
+      skill_max: 300,
+      /** Items vs players at the same point of their build (see `stageReference`). */
+      item: 200,
+      early_item: 450,
+      /** Support quest upgrades: no measurable difference, popularity decides. */
+      quest_item: Number.POSITIVE_INFINITY,
+      /** Anything else. */
+      default: 400,
+    },
     /** A matchup/trait-driven choice replaces the base one if its shrunk delta is higher by at least this. */
-    switchMinGain: 0.015,
+    switchMinGain: 0.01,
     /** Minimum games of a choice vs a lane opponent / trait before it can be considered. */
     minContextGames: 15,
     /** Minimum (trait-specific delta − overall delta) for a data-backed item swap. */
@@ -91,7 +136,7 @@ export const ENGINE_CONFIG = {
 
   /**
    * Tier list (GET /tierlist). Score = (champion win rate − role average win rate) shrunk with
-   * `picks.shrinkK.base`; matchups/duos use `picks.shrinkK.matchup` / `.duo`. Champions under
+   * `picks.shrinkK.base`; matchups/duos/synergies use `tierList.shrinkK`. Champions under
    * `minCandidateGames` are left out.
    *
    * Tiers come from the score percentile within the role (midpoint rank `(i + 0.5) / n`, ties
@@ -106,13 +151,17 @@ export const ENGINE_CONFIG = {
     nonPositiveBestTier: 'B',
     /**
      * A champion's matchups, duos and synergies (GET /tierlist/champion) are all listed from this
-     * many games, sorted by shrunk delta (`picks.shrinkK.matchup` / `.duo` / `.pair`). The
-     * shrinkage is what keeps small samples from topping the lists: a 5–0 record is worth at most
-     * +2.0 points with k = 120, below a +6-point delta over 100 games (+2.7). The floor only
-     * drops 1–4 game rows (pure noise). With ~50k matches over two patches, the median champion
-     * gets ~15–30 lane matchups at 5 games (1–2 at 15 games).
+     * many games, sorted by shrunk delta (`shrinkK` below). The shrinkage is what keeps small
+     * samples from topping the lists: a 5–0 record is worth at most +0.5 points with k = 550,
+     * below a +6-point delta over 300 games (+2.1). The floor only drops 1–4 game rows.
      */
     minRelationGames: 5,
+    /**
+     * Prior strength of the listed relations. Unlike the picks score, these deltas keep the other
+     * champion's own strength ("Leona vs Thresh" includes Thresh being strong), so their real
+     * spread is larger and `k` smaller (measured on 16.22).
+     */
+    shrinkK: { matchup: 550, duo: 650, synergy: 900 },
   },
 
   /**
@@ -163,6 +212,15 @@ export const ROLE_LABELS: Record<Position, string> = {
   MIDDLE: 'mid',
   BOTTOM: 'ADC',
   UTILITY: 'support',
+};
+
+/** "compared with other supports" */
+export const ROLE_PLURALS: Record<Position, string> = {
+  TOP: 'top laners',
+  JUNGLE: 'junglers',
+  MIDDLE: 'mid laners',
+  BOTTOM: 'ADCs',
+  UTILITY: 'supports',
 };
 
 export const TRAIT_LABELS: Record<CompTrait, string> = {
