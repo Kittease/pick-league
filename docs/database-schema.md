@@ -29,7 +29,9 @@ players ─┬── ladder_entries          (tracked set: current Challenger/GM
 
 player_enrichment_queue               (low-priority mastery/rank fetches for non-ladder players)
 
+live_games                            (the user's live game, found through spectator-v5: its players' puuids)
 live_player_profiles ─< live_player_masteries   (players of the user's live game, looked up on request)
+client_activity                       (the user is queued / in champion select / in game: collection paused)
 
 match_fetch_queue                     (worker backlog, survives restarts)
 worker_runs                           (monitoring)
@@ -463,6 +465,51 @@ CREATE TABLE live_player_masteries (
   as it has it (rank first) and marks the row READY once nothing is missing. Previous data stays
   readable while a stale profile is fetched again.
 - **Failures**: `attempts` counts failed attempts of the current request; FAILED after a few.
+
+The League client's player ids are not the Riot API's (Riot answers 400 to them), so the desktop
+sends no player id at all: only the user's own Riot ID and the game id. The worker finds the game
+and its players' API puuids (`0014_live_games_and_play_pause.sql`):
+
+```sql
+CREATE TABLE live_games (
+  platform     platform           NOT NULL,
+  game_id      bigint             NOT NULL,
+  game_name    text               NOT NULL,  -- the user's own Riot ID, never another player's
+  tag_line     text               NOT NULL,
+  status       live_lookup_status NOT NULL DEFAULT 'PENDING',
+  participants jsonb,                         -- READY: [{teamId, championId, puuid|null}] (spectator-v5)
+  my_team_id   smallint,                      -- the user's team (100 / 200)
+  attempts     smallint           NOT NULL DEFAULT 0,
+  last_error   text,                          -- 'not_found: …' when Riot has no such game
+  requested_at timestamptz        NOT NULL DEFAULT now(),
+  updated_at   timestamptz        NOT NULL DEFAULT now(),
+  PRIMARY KEY (platform, game_id)
+);
+CREATE INDEX live_games_pending_idx ON live_games (platform, requested_at) WHERE status = 'PENDING';
+CREATE INDEX live_games_requested_at_idx ON live_games (requested_at);
+```
+
+- The worker resolves a PENDING game with account-v1 (by Riot ID), then spectator-v5 (active game
+  by puuid). Riot not showing the game yet is retried for about two minutes, then FAILED with a
+  `not_found:` error. A FAILED game asked about again a minute later is tried again.
+- The API matches the requested players to the participants by team and champion, then queues
+  their lookups (`live_player_profiles`). Deleted a day after the last request, as the lookups.
+
+## Client activity
+
+```sql
+CREATE TABLE client_activity (
+  client     text        PRIMARY KEY,  -- 'desktop'
+  phase      text        NOT NULL,     -- League client gameflow phase
+  busy_until timestamptz,              -- the user plays until then (renewed by the desktop)
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
+From queue start to the end of the game the desktop renews `busy_until` every few seconds (a
+closed app releases it by itself within a minute and a half). Meanwhile the worker sends no
+collection request (live lookups only, with the whole rate limit) and the API neither starts nor
+keeps running a stats refresh: it runs once the game is over.
 
 ## Stats views (owned by apps/api)
 
