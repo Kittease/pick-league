@@ -130,7 +130,13 @@ export function createApp(deps: AppDeps): Hono<Env> {
     await next();
   });
   app.use('*', async (c, next) => {
-    if (limiter && c.req.path !== API_ROUTES.health) {
+    // The gateway's shared, cached reads (token, no visitor IP) are bounded by its cache, not by
+    // a per-IP bucket: they would all share the gateway's own address.
+    const gatewayShared =
+      apiToken !== undefined &&
+      !c.req.header('x-client-ip')?.trim() &&
+      hasBearerToken(c.req.header('authorization'), apiToken);
+    if (limiter && c.req.path !== API_ROUTES.health && !gatewayShared) {
       const decision = limiter.take(ipOf(c));
       if (!decision.allowed) {
         c.header('Retry-After', String(decision.retryAfterS));

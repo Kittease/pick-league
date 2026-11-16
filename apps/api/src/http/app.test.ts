@@ -152,6 +152,16 @@ describe('gateway token (API_TOKEN)', () => {
     expect((await visitor('203.0.113.2')).status).toBe(200);
   });
 
+  test("the gateway's shared reads (token, no X-Client-IP) are not rate limited", async () => {
+    const app = make(TOKEN, 1);
+    for (let i = 0; i < 3; i++)
+      expect((await get(app, '/stats/status', bearer(TOKEN))).status).toBe(200);
+  });
+
+  test('a wrong token without X-Client-IP is still refused', async () => {
+    expect((await get(make(TOKEN, 1), '/stats/status', bearer('nope'))).status).toBe(401);
+  });
+
   test('without the token, X-Client-IP is ignored', async () => {
     const app = make(undefined, 1);
     const call = (ip: string) => get(app, '/stats/status', { 'x-client-ip': ip });
