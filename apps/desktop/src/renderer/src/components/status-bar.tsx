@@ -1,5 +1,5 @@
+import { compact } from '@pick-league/ui/lib/format';
 import { cn } from '@pick-league/ui/lib/utils';
-import { compact } from '@/lib/format';
 import type { AppState } from '../../../core/app-state.ts';
 import { SettingsSheet } from './settings-sheet';
 import { CollectionBanner, StatsFreshness } from './stats-freshness';

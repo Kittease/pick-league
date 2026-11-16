@@ -1,7 +1,7 @@
 import { cn } from '@pick-league/ui/lib/utils';
+import { autoView, type View } from '@pick-league/ui/lib/views';
 import { LayoutGridIcon, ListOrderedIcon, SwordsIcon } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { autoView, type View } from '@/lib/views';
 
 export type { View };
 

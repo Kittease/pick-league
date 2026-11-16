@@ -5,8 +5,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@pick-league/ui/components/ui/select';
-import { MIN_CONFIDENCE_LABEL } from '@/lib/confidence';
-import { useMinConfidence } from '../hooks/use-min-confidence';
+import { useMinConfidence } from '@pick-league/ui/hooks/use-min-confidence';
+import { MIN_CONFIDENCE_LABEL } from '@pick-league/ui/lib/confidence';
 
 /** A compact select of a filter (server, rank, confidence), its options in `labels` order. */
 export function FilterSelect<T extends string>({

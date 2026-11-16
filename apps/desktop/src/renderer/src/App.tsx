@@ -1,6 +1,9 @@
 import { Toaster } from '@pick-league/ui/components/ui/sonner';
 import { Tabs, TabsList, TabsTrigger } from '@pick-league/ui/components/ui/tabs';
 import { TooltipProvider } from '@pick-league/ui/components/ui/tooltip';
+import { apiDataKey } from '@pick-league/ui/hooks/use-api-call';
+import { useShortcuts } from '@pick-league/ui/hooks/use-shortcuts';
+import { draftEscapeAction, escapeAction } from '@pick-league/ui/lib/shortcuts';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { AppState } from '../../core/app-state.ts';
@@ -11,10 +14,7 @@ import { PicksPanel } from './components/picks-panel';
 import { StatusBar } from './components/status-bar';
 import { type TierListHandle, TierListPage } from './components/tier-list';
 import { useAutoView, ViewNav } from './components/view-nav';
-import { apiDataKey } from './hooks/use-api-call';
 import { type StaticLookup, useAppState, useStatic } from './hooks/use-app';
-import { useShortcuts } from './hooks/use-shortcuts';
-import { draftEscapeAction, escapeAction } from './lib/shortcuts';
 
 type Tab = 'picks' | 'build';
 

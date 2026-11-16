@@ -1,12 +1,12 @@
+import { useApiCall } from '@pick-league/ui/hooks/use-api-call';
+import { ROLE_LABEL } from '@pick-league/ui/lib/format';
 import { cn } from '@pick-league/ui/lib/utils';
-import { ROLE_LABEL } from '@/lib/format';
 import type { AppState } from '../../../core/app-state.ts';
 import {
   buildDraftRequest,
   type ChampSelectView,
   type SelectPlayerView,
 } from '../../../core/champ-select.ts';
-import { useApiCall } from '../hooks/use-api-call';
 import type { StaticLookup } from '../hooks/use-app';
 import { DamageSplit, type OutlookSide, WinProbability } from './draft-outlook';
 import { ChampionIcon, GameIcon } from './game-icon';

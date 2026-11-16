@@ -1,5 +1,5 @@
+import { isMacPlatform, type Shortcut, shortcutOf } from '@pick-league/ui/lib/shortcuts';
 import { useEffect, useRef } from 'react';
-import { isMacPlatform, type Shortcut, shortcutOf } from '@/lib/shortcuts';
 
 /** Popups that handle Escape (and keep keyboard focus) themselves: dialogs, sheets, selects, menus. */
 const OVERLAY = ':is([role="dialog"], [role="alertdialog"], [role="listbox"], [role="menu"])';

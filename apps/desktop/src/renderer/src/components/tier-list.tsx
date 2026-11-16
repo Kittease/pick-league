@@ -17,6 +17,27 @@ import { Label } from '@pick-league/ui/components/ui/label';
 import { Skeleton } from '@pick-league/ui/components/ui/skeleton';
 import { Switch } from '@pick-league/ui/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger } from '@pick-league/ui/components/ui/tabs';
+import { useMinConfidence } from '@pick-league/ui/hooks/use-min-confidence';
+import {
+  enterListFromSearch,
+  type RovingItemProps,
+  useRoving,
+} from '@pick-league/ui/hooks/use-roving';
+import { IS_MAC } from '@pick-league/ui/hooks/use-shortcuts';
+import { type ConfidenceLevel, meetsConfidence } from '@pick-league/ui/lib/confidence';
+import {
+  compact,
+  confidenceLabel,
+  patchesText,
+  percent,
+  ROLE_LABEL,
+} from '@pick-league/ui/lib/format';
+import {
+  type EscapeAction,
+  type SearchFocus,
+  shortcutLabel,
+  type TierListLayer,
+} from '@pick-league/ui/lib/shortcuts';
 import { cn } from '@pick-league/ui/lib/utils';
 import {
   ArrowDownIcon,
@@ -35,19 +56,8 @@ import {
   useRef,
   useState,
 } from 'react';
-import { type ConfidenceLevel, meetsConfidence } from '@/lib/confidence';
-import { compact, confidenceLabel, patchesText, percent, ROLE_LABEL } from '@/lib/format';
-import {
-  type EscapeAction,
-  type SearchFocus,
-  shortcutLabel,
-  type TierListLayer,
-} from '@/lib/shortcuts';
 import type { ApiResult, AppState, Settings } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
-import { useMinConfidence } from '../hooks/use-min-confidence';
-import { enterListFromSearch, type RovingItemProps, useRoving } from '../hooks/use-roving';
-import { IS_MAC } from '../hooks/use-shortcuts';
 import { BuildDetails } from './build-panel';
 import { ConfidenceFilter, FilterSelect } from './filter-select';
 import { ChampionIcon } from './game-icon';

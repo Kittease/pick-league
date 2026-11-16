@@ -4,10 +4,10 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from '@pick-league/ui/components/ui/hover-card';
+import { compact, patchesText } from '@pick-league/ui/lib/format';
+import { damageLabel, damageShares, roundedShares } from '@pick-league/ui/lib/outlook';
 import { cn } from '@pick-league/ui/lib/utils';
 import { Loader2Icon } from 'lucide-react';
-import { compact, patchesText } from '@/lib/format';
-import { damageLabel, damageShares, roundedShares } from '@/lib/outlook';
 import type { Loadable } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
 import { ReasonList } from './reasons';

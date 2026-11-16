@@ -1,5 +1,5 @@
+import type { ApiResult, Loadable } from '@pick-league/ui/lib/types';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ApiResult, Loadable } from '../../../core/app-state.ts';
 
 /** Changes made in quick succession only ask the API once they settle. */
 const DEBOUNCE_MS = 250;

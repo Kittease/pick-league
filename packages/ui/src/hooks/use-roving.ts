@@ -1,5 +1,5 @@
+import { type RovingOrientation, rovingTarget } from '@pick-league/ui/lib/roving';
 import { type KeyboardEvent, useCallback, useRef, useState } from 'react';
-import { type RovingOrientation, rovingTarget } from '@/lib/roving';
 
 const ATTR = 'data-roving-key';
 

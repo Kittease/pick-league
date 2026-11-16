@@ -17,8 +17,11 @@ import type {
   TierListFilters,
   TierListResponse,
 } from '@pick-league/shared';
+import type { ApiResult, Loadable, MasteryEntry } from '@pick-league/ui/lib/types';
 import type { ChampSelectView } from './champ-select.ts';
 import type { FlashKey } from './spells.ts';
+
+export type { ApiResult, Loadable, MasteryEntry };
 
 export interface Settings {
   /** PickLeague API base URL, e.g. http://localhost:3000 or http://<vps-ip>:3000. */
@@ -58,12 +61,6 @@ export interface StatsState {
   refreshing: boolean;
 }
 
-export type Loadable<T> =
-  | { status: 'idle' }
-  | { status: 'loading'; data: T | null }
-  | { status: 'ok'; data: T }
-  | { status: 'error'; message: string; code: string | null; data: T | null };
-
 export interface ApplyStatus {
   state: 'idle' | 'applying' | 'done' | 'warning' | 'error';
   /** One line per step, e.g. "Runes → PickLeague page (replaced)". */
@@ -71,11 +68,6 @@ export interface ApplyStatus {
   auto: boolean;
   championId: number | null;
   at: string | null;
-}
-
-export interface MasteryEntry {
-  level: number;
-  points: number;
 }
 
 export interface AppState {
@@ -131,11 +123,6 @@ export interface WindowState {
   customControls: boolean;
   maximized: boolean;
 }
-
-/** Result of a one-off API call made for the renderer (errors are plain data over IPC). */
-export type ApiResult<T> =
-  | { ok: true; data: T }
-  | { ok: false; code: string | null; message: string };
 
 /** `window.pickleague` in the renderer. */
 export interface PickLeagueBridge {

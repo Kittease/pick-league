@@ -1,5 +1,9 @@
+import {
+  type ConfidenceLevel,
+  DEFAULT_MIN_CONFIDENCE,
+  toConfidenceLevel,
+} from '@pick-league/ui/lib/confidence';
 import { useSyncExternalStore } from 'react';
-import { type ConfidenceLevel, DEFAULT_MIN_CONFIDENCE, toConfidenceLevel } from '@/lib/confidence';
 
 const STORAGE_KEY = 'pickleague.minConfidence';
 
@@ -29,6 +33,11 @@ function set(level: ConfidenceLevel): void {
   for (const listener of listeners) listener();
 }
 
+/** Server render (Next.js): no storage there, the default until the client hydrates. */
+function getServer(): ConfidenceLevel {
+  return DEFAULT_MIN_CONFIDENCE;
+}
+
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -36,8 +45,8 @@ function subscribe(listener: () => void): () => void {
 
 /**
  * Minimum confidence of the champions shown, one choice for the tier list (and its matchups),
- * the champion select picks and the draft planner; remembered in this renderer's local storage.
+ * the champion select picks and the draft planner; remembered in this browser's local storage.
  */
 export function useMinConfidence() {
-  return [useSyncExternalStore(subscribe, get), set] as const;
+  return [useSyncExternalStore(subscribe, get, getServer), set] as const;
 }

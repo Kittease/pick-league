@@ -11,9 +11,15 @@ import {
   HoverCardTrigger,
 } from '@pick-league/ui/components/ui/hover-card';
 import { Skeleton } from '@pick-league/ui/components/ui/skeleton';
+import {
+  compact,
+  confidenceLabel,
+  patchesText,
+  percent,
+  SKILL_KEY,
+} from '@pick-league/ui/lib/format';
 import { cn } from '@pick-league/ui/lib/utils';
 import { ArrowRightIcon, CheckIcon, Loader2Icon, WandSparklesIcon } from 'lucide-react';
-import { compact, confidenceLabel, patchesText, percent, SKILL_KEY } from '@/lib/format';
 import type { AppState, Loadable, MasteryEntry } from '../../../core/app-state.ts';
 import { arrangeSpells, type FlashKey } from '../../../core/spells.ts';
 import type { StaticLookup } from '../hooks/use-app';

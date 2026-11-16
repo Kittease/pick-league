@@ -6,20 +6,26 @@ import {
   CollapsibleTrigger,
 } from '@pick-league/ui/components/ui/collapsible';
 import { Skeleton } from '@pick-league/ui/components/ui/skeleton';
-import { cn } from '@pick-league/ui/lib/utils';
-import { ChevronDownIcon, HammerIcon } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMinConfidence } from '@pick-league/ui/hooks/use-min-confidence';
+import { type RovingItemProps, useRoving } from '@pick-league/ui/hooks/use-roving';
 import {
   type ConfidenceLevel,
   confidenceLevel,
   MIN_CONFIDENCE_LABEL,
   meetsConfidence,
-} from '@/lib/confidence';
-import { compact, confidenceLabel, patchesText, percent, ROLE_LABEL } from '@/lib/format';
+} from '@pick-league/ui/lib/confidence';
+import {
+  compact,
+  confidenceLabel,
+  patchesText,
+  percent,
+  ROLE_LABEL,
+} from '@pick-league/ui/lib/format';
+import { cn } from '@pick-league/ui/lib/utils';
+import { ChevronDownIcon, HammerIcon } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import type { AppState } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
-import { useMinConfidence } from '../hooks/use-min-confidence';
-import { type RovingItemProps, useRoving } from '../hooks/use-roving';
 import { ConfidenceFilter } from './filter-select';
 import { ChampionIcon } from './game-icon';
 import { Notice } from './notice';
