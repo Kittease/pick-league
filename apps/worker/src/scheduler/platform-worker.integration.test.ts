@@ -3,20 +3,14 @@ import {
   createDb,
   type Db,
   enqueueMatchIds,
-  getLiveGame,
-  getLiveProfiles,
   getMatchesSyncedUntil,
   listWorkerStatus,
   migrate,
-  requestLiveGame,
-  requestLiveLookups,
-  setClientActivity,
   upsertPatchStaticData,
 } from '@pick-league/db';
 import type {
   AccountDto,
   ChampionMasteryDto,
-  CurrentGameInfoDto,
   LadderTier,
   LeagueEntryDto,
   LeagueListDto,
@@ -111,11 +105,8 @@ class FakeRiot implements RiotApi {
     const start = q.start ?? 0;
     return all.slice(start, start + (q.count ?? 100));
   }
-  /** Priority each match was fetched with (undefined = the client's default). */
-  matchPriorities = new Map<string, Priority | undefined>();
-  async getMatch(_p: Platform, id: string, _signal?: AbortSignal, priority?: Priority) {
+  async getMatch(_p: Platform, id: string) {
     this.calls.push(`match:${id}`);
-    this.matchPriorities.set(id, priority);
     this.maybeThrow(`match:${id}`);
     return this.matches.get(id)?.match ?? null;
   }
@@ -168,45 +159,6 @@ class FakeRiot implements RiotApi {
         inactive: false,
       },
     ];
-  }
-  /** The game spectator-v5 shows for the fake user (null = 404). */
-  activeGame: CurrentGameInfoDto | null = null;
-  async getAccountByRiotId(
-    _p: Platform,
-    gameName: string,
-    tagLine: string,
-    priority: Priority,
-  ): Promise<AccountDto | null> {
-    this.calls.push(`riot-id:${gameName}#${tagLine}:${priority}`);
-    if (gameName !== 'FakePlayer') return null;
-    return { puuid: 'fake-api-me', gameName, tagLine };
-  }
-  async getActiveGame(
-    _p: Platform,
-    puuid: string,
-    priority: Priority,
-  ): Promise<CurrentGameInfoDto | null> {
-    this.calls.push(`active-game:${puuid}:${priority}`);
-    this.maybeThrow('active-game');
-    return this.activeGame;
-  }
-  async getChampionMastery(
-    _p: Platform,
-    puuid: string,
-    championId: number,
-    priority: Priority,
-  ): Promise<ChampionMasteryDto | null> {
-    this.calls.push(`champion-mastery:${puuid}:${championId}:${priority}`);
-    if (championId !== 412) return null;
-    return {
-      puuid,
-      championId,
-      championLevel: 12,
-      championPoints: 123_456,
-      lastPlayTime: NOW - DAY,
-      championPointsSinceLastLevel: 0,
-      championPointsUntilNextLevel: 0,
-    };
   }
 }
 
@@ -746,8 +698,6 @@ d('PlatformWorker (Postgres)', () => {
         heartbeatMs: 60_000,
         maxTransientBackoffMs: 3_000,
         concurrency: { listing: 0, match: 1, daily: 0, enrichment: 0 },
-        // Its 1 s poll would read as a backoff here.
-        live: { pollMs: 60_000 },
       },
     });
     const ids = Array.from({ length: 4 }, (_, i) => `EUW1_70000008${String(i).padStart(2, '0')}`);
@@ -860,250 +810,5 @@ d('PlatformWorker (Postgres)', () => {
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({ platform: 'EUW1', matches_added: 1, players_polled: 2 });
     expect(runs[0]?.finished_at).not.toBeNull();
-  });
-
-  describe('live games', () => {
-    const me = { platform: 'EUW1' as const, gameName: 'FakePlayer', tagLine: 'TEST' };
-
-    test("found from the user's Riot ID (spectator-v5), its players queued and looked up", async () => {
-      riot.activeGame = {
-        gameId: 9001,
-        participants: [
-          { teamId: 200, championId: 412, puuid: 'fake-api-me' },
-          { teamId: 200, championId: 21, puuid: 'fake-api-ally' },
-          { teamId: 100, championId: 89, puuid: 'fake-api-enemy' },
-          { teamId: 100, championId: 1, puuid: null, bot: true },
-          // Hidden by Riot: kept without an id, never looked up.
-          { teamId: 100, championId: 2, puuid: null, bot: false },
-        ],
-      };
-      await requestLiveGame(db, { ...me, gameId: 9001 });
-      await worker.processLiveLookups();
-      expect(riot.calls).toEqual(['riot-id:FakePlayer#TEST:6', 'active-game:fake-api-me:6']);
-      expect(await getLiveGame(db, 'EUW1', 9001)).toMatchObject({
-        status: 'READY',
-        myTeamId: 200,
-        participants: [
-          { teamId: 200, championId: 412, puuid: 'fake-api-me' },
-          { teamId: 200, championId: 21, puuid: 'fake-api-ally' },
-          { teamId: 100, championId: 89, puuid: 'fake-api-enemy' },
-          { teamId: 100, championId: 2, puuid: null },
-        ],
-      });
-      // Every participant queued at once, with the champion they play; looked up next.
-      expect(
-        (await db`SELECT puuid FROM live_player_profiles ORDER BY puuid`).map((r) => r.puuid),
-      ).toEqual(['fake-api-ally', 'fake-api-enemy', 'fake-api-me']);
-      riot.calls = [];
-      expect(await worker.processLiveLookups()).toBe(3);
-      expect(riot.calls).toContain('champion-mastery:fake-api-enemy:89:6');
-
-      // Another game of the same user: the account is not asked for again.
-      riot.calls = [];
-      riot.activeGame = { ...riot.activeGame, gameId: 9002 };
-      await requestLiveGame(db, { ...me, gameId: 9002 });
-      await worker.processLiveLookups();
-      expect(riot.calls[0]).toBe('active-game:fake-api-me:6');
-    });
-
-    test('not shown by Riot: asked again, then not found; unknown Riot ID: not found', async () => {
-      const w = new PlatformWorker({
-        platform: 'EUW1',
-        db,
-        riot,
-        patches,
-        clock: fixedClock,
-        options: { idleMs: 10, live: { gameNotFoundRetryMs: 0, gameNotFoundAttempts: 2 } },
-      });
-      await requestLiveGame(db, { ...me, gameId: 9003 });
-      await w.processLiveLookups();
-      expect(await getLiveGame(db, 'EUW1', 9003)).toMatchObject({ status: 'PENDING' });
-      await w.processLiveLookups();
-      expect(await getLiveGame(db, 'EUW1', 9003)).toMatchObject({
-        status: 'FAILED',
-        lastError: 'not_found: Riot does not show this game',
-      });
-
-      await requestLiveGame(db, { ...me, gameName: 'Nobody', gameId: 9004 });
-      await w.processLiveLookups();
-      expect((await getLiveGame(db, 'EUW1', 9004))?.lastError).toStartWith('not_found');
-    });
-  });
-
-  describe('while the user plays', () => {
-    test('collection goes on (only the API stats refresh waits for the end of the game)', async () => {
-      const w = new PlatformWorker({
-        platform: 'EUW1',
-        db,
-        riot,
-        patches,
-        clock: fixedClock,
-        options: { idleMs: 10, live: { pollMs: 10 } },
-      });
-      await setClientActivity(
-        db,
-        { client: 'desktop', phase: 'InProgress', busyForMs: 90_000 },
-        new Date(NOW),
-      );
-      const ac = new AbortController();
-      const run = w.start(ac.signal);
-      for (let i = 0; i < 100 && !riot.calls.some((c) => c.startsWith('league:')); i++) {
-        await Bun.sleep(20);
-      }
-      expect(riot.calls.some((c) => c.startsWith('league:'))).toBe(true);
-      ac.abort();
-      await run;
-    });
-  });
-
-  describe('live lookups', () => {
-    const LIVE = 'fake-live-puuid-1';
-    const DUO = 'fake-live-puuid-2';
-    const fixtureChampion = (matchFixture as unknown as MatchDto).info.participants[0]
-      ?.championId as number;
-
-    test('rank and mastery, then recent matches: stored ones reused, none added to the stats', async () => {
-      // One of the player's recent matches is already stored by the crawler.
-      riot.matches.set('EUW1_7000000500', makeMatch('EUW1_7000000500', '15.22.715.1234', LIVE));
-      await worker.processMatch({ matchId: 'EUW1_7000000500', platform: 'EUW1', attempts: 0 });
-      riot.calls = [];
-      // Another one is not (and from an older patch: any patch is fine for a lookup).
-      const fetched = makeMatch('EUW1_7000000600', '15.21.1.1', LIVE);
-      const duoSeat = fetched.match.info.participants[1];
-      if (duoSeat) duoSeat.puuid = DUO;
-      riot.matches.set('EUW1_7000000600', fetched);
-      riot.matchIds.set(LIVE, ['EUW1_7000000600', 'EUW1_7000000500']);
-      riot.matchIds.set(DUO, ['EUW1_7000000600']);
-
-      await requestLiveLookups(db, 'EUW1', [
-        { puuid: LIVE, championId: 412 },
-        { puuid: DUO, championId: 12 },
-      ]);
-      expect(await worker.processLiveLookups()).toBe(2);
-
-      expect([...riot.calls].sort()).toEqual(
-        [
-          `entries:${LIVE}:6`,
-          `champion-mastery:${LIVE}:412:6`,
-          `ids:${LIVE}:0`,
-          'match:EUW1_7000000600',
-          `entries:${DUO}:6`,
-          `champion-mastery:${DUO}:12:6`,
-          `ids:${DUO}:0`,
-        ].sort(),
-      );
-      // The duo partner's match was fetched once, for both of them.
-      expect(riot.matchPriorities.get('EUW1_7000000600')).toBe(6);
-      expect(riot.idQueries.map((q) => [q.count, q.priority])).toEqual([
-        [10, 6],
-        [10, 6],
-      ]);
-      expect(await count(db, 'matches')).toBe(1);
-      expect(await count(db, 'participants')).toBe(10);
-      expect(await count(db, 'match_fetch_queue')).toBe(0);
-      expect((await db`SELECT 1 FROM players WHERE puuid LIKE 'fake-live-%'`).length).toBe(1);
-
-      const profiles = await getLiveProfiles(db, [
-        { puuid: LIVE, championId: 412 },
-        { puuid: DUO, championId: 12 },
-      ]);
-      const live = profiles.find((p) => p.puuid === LIVE);
-      expect(live).toMatchObject({
-        status: 'READY',
-        rankLoaded: true,
-        rank: { tier: 'DIAMOND', division: 2, lp: 42, wins: 100, losses: 90 },
-        mastery: { level: 12, points: 123_456 },
-      });
-      expect(live?.recent?.map((m) => [m.matchId, m.championId, m.position, m.remake])).toEqual([
-        ['EUW1_7000000600', fixtureChampion, 'TOP', false],
-        ['EUW1_7000000500', fixtureChampion, 'TOP', false],
-      ]);
-      expect(profiles.find((p) => p.puuid === DUO)).toMatchObject({
-        status: 'READY',
-        mastery: { level: 0, points: 0 },
-        recent: [expect.objectContaining({ matchId: 'EUW1_7000000600', position: 'JUNGLE' })],
-      });
-
-      // Asked again within 30 minutes: nothing is fetched.
-      riot.calls = [];
-      await requestLiveLookups(db, 'EUW1', [{ puuid: LIVE, championId: 412 }], {
-        now: new Date(NOW),
-      });
-      expect(await worker.processLiveLookups()).toBe(0);
-      expect(riot.calls).toEqual([]);
-    });
-
-    test('errors: retried, then FAILED with a message that does not contain the puuid', async () => {
-      const w = new PlatformWorker({
-        platform: 'EUW1',
-        db,
-        riot,
-        patches,
-        clock: fixedClock,
-        options: { idleMs: 10, live: { retryMs: 0 } },
-      });
-      const badRequest = () =>
-        new RiotHttpError(
-          400,
-          'league-v4.entries-by-puuid',
-          `/lol/league/v4/entries/by-puuid/${LIVE}`,
-        );
-      riot.errors.set(`entries:${LIVE}`, [badRequest(), badRequest()]);
-      await requestLiveLookups(db, 'EUW1', [{ puuid: LIVE, championId: 412 }]);
-
-      await w.processLiveLookups();
-      let [p] = await getLiveProfiles(db, [{ puuid: LIVE, championId: 412 }]);
-      // The mastery fetched alongside is kept; the lookup waits for its retry.
-      expect(p).toMatchObject({ status: 'PENDING', mastery: { level: 12, points: 123_456 } });
-
-      await w.processLiveLookups();
-      [p] = await getLiveProfiles(db, [{ puuid: LIVE, championId: 412 }]);
-      expect(p?.status).toBe('FAILED');
-      expect(p?.lastError).toContain('/by-puuid/<puuid>');
-      expect(p?.lastError).not.toContain(LIVE);
-      // Only the rank was asked for again.
-      expect(riot.calls.filter((c) => c.startsWith('champion-mastery:'))).toHaveLength(1);
-      for (let i = 0; i < 50 && !(await listWorkerStatus(db))[0]?.lastError; i++) {
-        await Bun.sleep(10);
-      }
-      const status = (await listWorkerStatus(db))[0];
-      expect(status?.lastError).toStartWith('lookup:');
-      expect(status?.lastError).not.toContain(LIVE);
-    });
-
-    test('an auth error keeps the lookup pending and pauses the worker', async () => {
-      riot.errors.set(`entries:${LIVE}`, [new RiotAuthError(401, 'league-v4', '/x')]);
-      await requestLiveLookups(db, 'EUW1', [{ puuid: LIVE, championId: 412 }]);
-      await worker.processLiveLookups();
-      const [p] = await getLiveProfiles(db, [{ puuid: LIVE, championId: 412 }]);
-      expect(p).toMatchObject({ status: 'PENDING', lastError: null });
-      for (let i = 0; i < 50 && !(await listWorkerStatus(db))[0]?.authRejectedSince; i++) {
-        await Bun.sleep(10);
-      }
-      expect((await listWorkerStatus(db))[0]?.authRejectedSince).toEqual(new Date(NOW));
-    });
-
-    test('start(): a lookup requested while the worker runs is done without waiting', async () => {
-      riot.matchIds.set(LIVE, ['EUW1_7000000600']);
-      riot.matches.set('EUW1_7000000600', makeMatch('EUW1_7000000600', '15.22.1.1', LIVE));
-      const w = new PlatformWorker({
-        platform: 'EUW1',
-        db,
-        riot,
-        patches,
-        clock: fixedClock,
-        options: { idleMs: 10, concurrency: { listing: 0, match: 0, daily: 0, enrichment: 0 } },
-      });
-      const ac = new AbortController();
-      const running = w.start(ac.signal);
-      await requestLiveLookups(db, 'EUW1', [{ puuid: LIVE, championId: 412 }]);
-      const ready = async () =>
-        (await getLiveProfiles(db, [{ puuid: LIVE, championId: 412 }]))[0]?.status === 'READY';
-      for (let i = 0; i < 200 && !(await ready()); i++) await Bun.sleep(20);
-      ac.abort();
-      await running;
-      expect(await ready()).toBe(true);
-      expect((await w.progress()).liveReady).toBe(1);
-    });
   });
 });

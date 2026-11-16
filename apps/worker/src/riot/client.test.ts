@@ -56,26 +56,6 @@ describe('RiotClient', () => {
     expect(client.requestsFor('EUW1')).toBe(2);
   });
 
-  test('live lookups: mastery of one champion, and match ids / matches above the ladder', async () => {
-    const { client, clock, calls } = setup(() => json([]), { appLimit: '1:1' });
-    await client.getChampionMastery('KR', 'fake-puuid', 412, PRIORITY.LIVE_LOOKUP);
-    expect(calls[0]?.url).toBe(
-      'https://kr.api.riotgames.com/lol/champion-mastery/v4/champion-masteries/by-puuid/fake-puuid/by-champion/412',
-    );
-    await client.getMatch('KR', 'KR_0');
-    client.getMatch('KR', 'KR_1');
-    client.getMatchIds('KR', 'ladder', {});
-    client.getMatch('KR', 'KR_2', undefined, PRIORITY.LIVE_LOOKUP);
-    client.getMatchIds('KR', 'live', { count: 10, priority: PRIORITY.LIVE_LOOKUP });
-    for (let i = 0; i < 5; i++) await clock.advance(1000);
-    expect(calls.slice(2).map((c) => c.url.split('/').slice(-2).join('/'))).toEqual([
-      'matches/KR_2',
-      'live/ids?queue=420&type=ranked&start=0&count=10',
-      'ladder/ids?queue=420&type=ranked&start=0&count=100',
-      'matches/KR_1',
-    ]);
-  });
-
   test('404 resolves to null', async () => {
     const { client } = setup(() => new Response('{}', { status: 404 }));
     expect(await client.getMatch('EUW1', 'EUW1_1')).toBeNull();

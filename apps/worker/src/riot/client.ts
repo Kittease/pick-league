@@ -14,7 +14,6 @@ import {
   type AccountDto,
   accountBaseUrl,
   type ChampionMasteryDto,
-  type CurrentGameInfoDto,
   type LadderTier,
   type LeagueEntryDto,
   type LeagueListDto,
@@ -33,8 +32,6 @@ import { HostLimiter, type HostLimiterOptions, type HostLimiterStats } from './r
 
 /** Priority levels of docs/architecture.md (higher = served first). */
 export const PRIORITY = {
-  /** Players of a live game the desktop asked about (someone is waiting for them). */
-  LIVE_LOOKUP: 6,
   LADDER: 5,
   MATCH_IDS: 4,
   MATCH: 3,
@@ -83,8 +80,6 @@ export interface MatchIdsQuery {
   start?: number;
   /** 1..100 */
   count?: number;
-  /** Default: MATCH_IDS. */
-  priority?: Priority;
 }
 
 /** What the scheduler needs from Riot (a fake implements it in tests). */
@@ -96,13 +91,7 @@ export interface RiotApi {
     query: MatchIdsQuery,
     signal?: AbortSignal,
   ): Promise<MatchIdsDto>;
-  /** `priority` defaults to MATCH. */
-  getMatch(
-    platform: Platform,
-    matchId: string,
-    signal?: AbortSignal,
-    priority?: Priority,
-  ): Promise<MatchDto | null>;
+  getMatch(platform: Platform, matchId: string, signal?: AbortSignal): Promise<MatchDto | null>;
   getTimeline(
     platform: Platform,
     matchId: string,
@@ -126,29 +115,6 @@ export interface RiotApi {
     priority: Priority,
     signal?: AbortSignal,
   ): Promise<LeagueEntryDto[] | null>;
-  /** Mastery of one champion; null when the player never played it (404). */
-  getChampionMastery(
-    platform: Platform,
-    puuid: string,
-    championId: number,
-    priority: Priority,
-    signal?: AbortSignal,
-  ): Promise<ChampionMasteryDto | null>;
-  /** Account by Riot ID (`gameName#tagLine`); null when there is none (404). */
-  getAccountByRiotId(
-    platform: Platform,
-    gameName: string,
-    tagLine: string,
-    priority: Priority,
-    signal?: AbortSignal,
-  ): Promise<AccountDto | null>;
-  /** The game the player is in (spectator-v5); null when not in one, or not shown yet (404). */
-  getActiveGame(
-    platform: Platform,
-    puuid: string,
-    priority: Priority,
-    signal?: AbortSignal,
-  ): Promise<CurrentGameInfoDto | null>;
 }
 
 export interface RiotClientOptions {
@@ -213,19 +179,19 @@ export class RiotClient implements RiotApi {
       matchBaseUrl(platform),
       'match-v5.ids-by-puuid',
       `/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?${params}`,
-      q.priority ?? PRIORITY.MATCH_IDS,
+      PRIORITY.MATCH_IDS,
       signal,
     );
     return ids ?? [];
   }
 
-  getMatch(platform: Platform, matchId: string, signal?: AbortSignal, priority?: Priority) {
+  getMatch(platform: Platform, matchId: string, signal?: AbortSignal) {
     return this.request<MatchDto>(
       platform,
       matchBaseUrl(platform),
       'match-v5.match',
       `/lol/match/v5/matches/${encodeURIComponent(matchId)}`,
-      priority ?? PRIORITY.MATCH,
+      PRIORITY.MATCH,
       signal,
     );
   }
@@ -269,51 +235,6 @@ export class RiotClient implements RiotApi {
       platformBaseUrl(platform),
       'league-v4.entries-by-puuid',
       `/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`,
-      priority,
-      signal,
-    );
-  }
-
-  getChampionMastery(
-    platform: Platform,
-    puuid: string,
-    championId: number,
-    priority: Priority,
-    signal?: AbortSignal,
-  ) {
-    return this.request<ChampionMasteryDto>(
-      platform,
-      platformBaseUrl(platform),
-      'champion-mastery-v4.by-puuid-by-champion',
-      `/lol/champion-mastery/v4/champion-masteries/by-puuid/${encodeURIComponent(puuid)}/by-champion/${Math.trunc(championId)}`,
-      priority,
-      signal,
-    );
-  }
-
-  getAccountByRiotId(
-    platform: Platform,
-    gameName: string,
-    tagLine: string,
-    priority: Priority,
-    signal?: AbortSignal,
-  ) {
-    return this.request<AccountDto>(
-      platform,
-      accountBaseUrl(platform),
-      'account-v1.by-riot-id',
-      `/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(gameName)}/${encodeURIComponent(tagLine)}`,
-      priority,
-      signal,
-    );
-  }
-
-  getActiveGame(platform: Platform, puuid: string, priority: Priority, signal?: AbortSignal) {
-    return this.request<CurrentGameInfoDto>(
-      platform,
-      platformBaseUrl(platform),
-      'spectator-v5.active-game',
-      `/lol/spectator/v5/active-games/by-summoner/${encodeURIComponent(puuid)}`,
       priority,
       signal,
     );

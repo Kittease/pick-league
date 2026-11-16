@@ -1,9 +1,7 @@
 /**
- * One platform's crawler. Six kinds of work run concurrently and all wait on the same per-host
+ * One platform's crawler. Five kinds of work run concurrently and all wait on the same per-host
  * rate limiters, which serve the highest priority first (docs/architecture.md, "Worker"):
  *
- * 0. live game lookups asked for by the desktop (rank + mastery, then recent matches)
- *                                       → platform host + match cluster, priority 6
  * 1. ladder refresh (hourly, and when Master grows) → platform host, priority 5
  * 2. match-id listing of "played" players → match cluster, priority 4
  * 3. match + timeline fetch             → match cluster, priority 3
@@ -69,7 +67,6 @@ import type { PatchVerdict } from '../patches.ts';
 import { PRIORITY, type RiotApi, RiotAuthError } from '../riot/client.ts';
 import { toSoloRank } from '../riot/ranks.ts';
 import { classifyError, DeterministicError } from './errors.ts';
-import { type LiveLookupOptions, LiveLookups } from './live-lookup.ts';
 import { WorkSource } from './work-source.ts';
 
 const HOUR = 3_600_000;
@@ -117,8 +114,6 @@ export interface SchedulerOptions {
   /** A match deferred this many times by transient errors becomes FAILED (default 10). */
   maxTransientErrors: number;
   concurrency: { listing: number; match: number; daily: number; enrichment: number };
-  /** Live game lookups (see live-lookup.ts for the defaults). */
-  live: Partial<LiveLookupOptions>;
 }
 
 export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
@@ -137,7 +132,6 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   maxTransientBackoffMs: 5 * 60_000,
   maxTransientErrors: 10,
   concurrency: { listing: 2, match: 3, daily: 1, enrichment: 2 },
-  live: {},
 };
 
 /** What the worker needs to know about patches (only the latest is collected). */
@@ -176,10 +170,6 @@ export interface PlatformProgress {
   playedToList: number;
   pendingMatches: number;
   enrichmentQueue: number;
-  /** Live game lookups running now, done and failed since the start. */
-  liveActive: number;
-  liveReady: number;
-  liveFailed: number;
   matchesAdded: number;
   playersPolled: number;
   matchesSkipped: number;
@@ -283,7 +273,6 @@ export class PlatformWorker {
   private readonly matchSource: WorkSource<QueuedMatch>;
   private readonly dailySource: WorkSource<DailyRefreshCandidate>;
   private readonly enrichmentSource: WorkSource<QueuedEnrichment>;
-  private readonly live: LiveLookups;
 
   private readonly counters = {
     matchesAdded: 0,
@@ -315,16 +304,6 @@ export class PlatformWorker {
       ...deps.options,
       concurrency: { ...DEFAULT_SCHEDULER_OPTIONS.concurrency, ...deps.options?.concurrency },
     };
-    this.live = new LiveLookups({
-      platform: this.platform,
-      db: this.db,
-      riot: this.riot,
-      clock: this.clock,
-      log: this.log,
-      options: this.opts.live,
-      onAuthError: (err) => this.recordError('lookup', err),
-      onError: (message) => this.noteError('lookup', message),
-    });
 
     this.matchSource = new WorkSource(
       async (exclude) => {
@@ -805,37 +784,6 @@ export class PlatformWorker {
   }
 
   // -------------------------------------------------------------------------
-  // Level 0: live game lookups
-  // -------------------------------------------------------------------------
-
-  /** Starts every PENDING live lookup and waits for them (the loop polls without waiting). */
-  async processLiveLookups(signal?: AbortSignal): Promise<number> {
-    const started = await this.live.poll(signal);
-    await this.live.drain();
-    return started;
-  }
-
-  /**
-   * Polls for live lookups every `live.pollMs` (1 s): a lookup starts as soon as it is seen, so a
-   * new game is never stuck behind one being fetched.
-   */
-  private async liveLoop(signal: AbortSignal): Promise<void> {
-    while (!signal.aborted) {
-      try {
-        await this.waitForAuth(signal);
-        await this.live.poll(signal);
-      } catch (err) {
-        if (isAbortError(err)) break;
-        this.recordError('lookup', err);
-        if (!(await this.sleep(this.opts.idleMs, signal))) break;
-        continue;
-      }
-      if (!(await this.sleep(this.live.options.pollMs, signal))) break;
-    }
-    await this.live.drain();
-  }
-
-  // -------------------------------------------------------------------------
   // Loops
   // -------------------------------------------------------------------------
 
@@ -845,11 +793,7 @@ export class PlatformWorker {
     await this.loadPendingListings();
     await this.openRun();
     const c = this.opts.concurrency;
-    const loops: Promise<void>[] = [
-      this.heartbeatLoop(signal),
-      this.liveLoop(signal),
-      this.ladderLoop(signal),
-    ];
+    const loops: Promise<void>[] = [this.heartbeatLoop(signal), this.ladderLoop(signal)];
     for (let i = 0; i < c.listing; i++) {
       loops.push(
         this.workLoop(
@@ -924,9 +868,6 @@ export class PlatformWorker {
       playedToList: new Set([...this.played, ...this.listingInFlight]).size,
       pendingMatches: await countPendingMatches(this.db, this.platform),
       enrichmentQueue: await countEnrichmentQueue(this.db, this.platform),
-      liveActive: this.live.active,
-      liveReady: this.live.counters.ready,
-      liveFailed: this.live.counters.failed,
       ...this.counters,
     };
   }
@@ -1078,9 +1019,6 @@ export class PlatformWorker {
       getAccount: (...a) => ok(riot.getAccount(...a)),
       getMasteries: (...a) => ok(riot.getMasteries(...a)),
       getLeagueEntries: (...a) => ok(riot.getLeagueEntries(...a)),
-      getChampionMastery: (...a) => ok(riot.getChampionMastery(...a)),
-      getAccountByRiotId: (...a) => ok(riot.getAccountByRiotId(...a)),
-      getActiveGame: (...a) => ok(riot.getActiveGame(...a)),
     };
   }
 
