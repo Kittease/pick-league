@@ -7,7 +7,8 @@ import { UPSTREAM_TIMEOUT_MS, upstreamConfig, upstreamHeaders } from './upstream
 
 /**
  * Server-side calls to the PickLeague API (Server Components and Server Actions). Every call
- * carries the gateway token and the visitor's IP (the API rate-limits per visitor). Failures come
+ * carries the gateway token; uncached ones also carry the visitor's IP (the API rate-limits per
+ * visitor). Failures come
  * back as `{ ok: false }`, never thrown, so they cross to the client as plain data.
  */
 
@@ -21,7 +22,11 @@ const NOT_CONFIGURED: ApiResult<never> = {
   message: 'The PickLeague server is not configured (API_URL)',
 };
 
-/** Cached GET: answers are reused for `revalidate` seconds by the server's data cache. */
+/**
+ * Cached GET: answers are reused for `revalidate` seconds by the server's data cache, shared by
+ * every visitor. So no visitor IP is sent (it would be part of the cache key); the API does not
+ * rate-limit these token-carrying shared reads.
+ */
 export async function apiGet<T>(
   path: string,
   cache: { revalidate: number; tags: string[] },
@@ -30,7 +35,7 @@ export async function apiGet<T>(
   if (!config) return NOT_CONFIGURED;
   try {
     const res = await fetch(`${config.url}${path}`, {
-      headers: upstreamHeaders(config, await visitorIp(), false),
+      headers: upstreamHeaders(config, null, false),
       next: { revalidate: cache.revalidate, tags: cache.tags },
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
