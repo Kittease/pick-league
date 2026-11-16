@@ -1,3 +1,9 @@
+import {
+  DamageSplit,
+  type OutlookSide,
+  WinProbability,
+} from '@pick-league/ui/components/draft-outlook';
+import { ChampionIcon, GameIcon } from '@pick-league/ui/components/game-icon';
 import { useApiCall } from '@pick-league/ui/hooks/use-api-call';
 import { ROLE_LABEL } from '@pick-league/ui/lib/format';
 import { cn } from '@pick-league/ui/lib/utils';
@@ -8,8 +14,6 @@ import {
   type SelectPlayerView,
 } from '../../../core/champ-select.ts';
 import type { StaticLookup } from '../hooks/use-app';
-import { DamageSplit, type OutlookSide, WinProbability } from './draft-outlook';
-import { ChampionIcon, GameIcon } from './game-icon';
 
 const ALLIES: OutlookSide = { label: 'Your team', text: 'text-up', bar: 'bg-up' };
 const ENEMIES: OutlookSide = { label: 'Enemy', text: 'text-down', bar: 'bg-down' };

@@ -1,3 +1,5 @@
+'use client';
+
 import {
   type BuildResponse,
   DEFAULT_TIER_LIST_FILTERS,
@@ -11,6 +13,14 @@ import {
   type TierListResponse,
   toTierListFilters,
 } from '@pick-league/shared';
+import { BuildDetails } from '@pick-league/ui/components/build-view';
+import { ConfidencePips } from '@pick-league/ui/components/confidence-pips';
+import { usePickLeagueData } from '@pick-league/ui/components/data-provider';
+import { ConfidenceFilter, FilterSelect } from '@pick-league/ui/components/filter-select';
+import { ChampionIcon } from '@pick-league/ui/components/game-icon';
+import { Notice } from '@pick-league/ui/components/notice';
+import { DeltaText } from '@pick-league/ui/components/reasons';
+import { ChampionRelations } from '@pick-league/ui/components/tier-list-relations';
 import { Button } from '@pick-league/ui/components/ui/button';
 import { Input } from '@pick-league/ui/components/ui/input';
 import { Label } from '@pick-league/ui/components/ui/label';
@@ -38,6 +48,9 @@ import {
   shortcutLabel,
   type TierListLayer,
 } from '@pick-league/ui/lib/shortcuts';
+import type { FlashKey } from '@pick-league/ui/lib/spells';
+import type { StaticLookup } from '@pick-league/ui/lib/static-lookup';
+import type { ApiResult, MasteryEntry } from '@pick-league/ui/lib/types';
 import { cn } from '@pick-league/ui/lib/utils';
 import {
   ArrowDownIcon,
@@ -56,15 +69,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { ApiResult, AppState, Settings } from '../../../core/app-state.ts';
-import type { StaticLookup } from '../hooks/use-app';
-import { BuildDetails } from './build-panel';
-import { ConfidenceFilter, FilterSelect } from './filter-select';
-import { ChampionIcon } from './game-icon';
-import { Notice } from './notice';
-import { ConfidencePips } from './picks-panel';
-import { DeltaText } from './reasons';
-import { ChampionRelations } from './tier-list-relations';
 
 /** A role's tier list is re-fetched after this long (the API refreshes its stats hourly, or on demand). */
 const CACHE_MS = 5 * 60_000;
@@ -79,6 +83,7 @@ type Loaded<T> =
  * API changes.
  */
 function useTierList(role: Position, filters: TierListFilters, apiKey: string) {
+  const api = usePickLeagueData();
   const cache = useRef(new Map<string, { at: number; result: ApiResult<TierListResponse> }>());
   const [state, setState] = useState<Loaded<TierListResponse>>({ status: 'loading' });
   const [nonce, setNonce] = useState(0);
@@ -107,7 +112,7 @@ function useTierList(role: Position, filters: TierListFilters, apiKey: string) {
         ? prev
         : { status: 'loading' },
     );
-    void window.pickleague.getTierList(role, { platform, rank }).then((result) => {
+    void api.getTierList(role, { platform, rank }).then((result) => {
       if (!alive) return;
       cache.current.set(key, { at: Date.now(), result });
       setState(result.ok ? { status: 'ok', data: result.data } : { status: 'error', ...result });
@@ -115,7 +120,7 @@ function useTierList(role: Position, filters: TierListFilters, apiKey: string) {
     return () => {
       alive = false;
     };
-  }, [key, apiKey, nonce]);
+  }, [key, apiKey, nonce, api]);
 
   const retry = useCallback(() => {
     cache.current.delete(key);
@@ -288,7 +293,7 @@ function EntryRow({
   entry: TierListEntry;
   name: string;
   lookup: StaticLookup | null;
-  mastery: AppState['mastery'];
+  mastery: Record<number, MasteryEntry> | undefined;
   currentPatch: string;
   selected: boolean;
   onSelect: () => void;
@@ -318,7 +323,7 @@ function EntryRow({
           src={lookup?.champion(entry.championId)?.iconUrl}
           name={name}
           size={32}
-          mastery={mastery[entry.championId]}
+          mastery={mastery?.[entry.championId]}
         />
         <span className="flex min-w-0 flex-col leading-tight">
           <span className="truncate text-sm font-medium">{name}</span>
@@ -384,7 +389,7 @@ function DetailPanel({
   role: Position;
   currentPatch: string;
   lookup: StaticLookup | null;
-  mastery: AppState['mastery'];
+  mastery: Record<number, MasteryEntry> | undefined;
   filters: TierListFilters;
   minConfidence: ConfidenceLevel;
   /** Identity of the API data (URL, patch, last stats refresh). */
@@ -402,7 +407,7 @@ function DetailPanel({
           src={champ?.iconUrl}
           name={name}
           size={44}
-          mastery={mastery[entry.championId]}
+          mastery={mastery?.[entry.championId]}
         />
         <div className="flex min-w-0 flex-col leading-tight">
           <span className="truncate text-lg font-semibold">{name}</span>
@@ -472,12 +477,13 @@ function GenericBuild({
   championId: number;
   role: Position;
   lookup: StaticLookup | null;
-  mastery: AppState['mastery'];
-  flashKey: Settings['flashKey'];
+  mastery: Record<number, MasteryEntry> | undefined;
+  flashKey: FlashKey | undefined;
   onBack: () => void;
   /** Changes when the API's stats were refreshed: re-fetch the build. */
   refreshKey: string;
 }) {
+  const api = usePickLeagueData();
   const [state, setState] = useState<Loaded<BuildResponse>>({ status: 'loading' });
   const [nonce, setNonce] = useState(0);
   // biome-ignore lint/correctness/useExhaustiveDependencies: nonce and refreshKey re-run the fetch
@@ -488,13 +494,13 @@ function GenericBuild({
         ? prev
         : { status: 'loading' },
     );
-    void window.pickleague.getGenericBuild(championId, role).then((r) => {
+    void api.getGenericBuild(championId, role).then((r) => {
       if (alive) setState(r.ok ? { status: 'ok', data: r.data } : { status: 'error', ...r });
     });
     return () => {
       alive = false;
     };
-  }, [championId, role, nonce, refreshKey]);
+  }, [championId, role, nonce, refreshKey, api]);
   const champ = lookup?.champion(championId);
   const name = champ?.name ?? `#${championId}`;
   const data = state.status === 'ok' ? state.data : null;
@@ -506,7 +512,7 @@ function GenericBuild({
           Tier list
         </Button>
         <span className="h-6 w-px bg-border" />
-        <ChampionIcon src={champ?.iconUrl} name={name} size={40} mastery={mastery[championId]} />
+        <ChampionIcon src={champ?.iconUrl} name={name} size={40} mastery={mastery?.[championId]} />
         <div className="flex flex-col leading-tight">
           <span className="flex items-baseline gap-2">
             <span className="text-lg font-semibold">{name}</span>
@@ -560,28 +566,47 @@ export interface TierListHandle {
 
 const SEARCH_PLACEHOLDER = `Search champion (${shortcutLabel('k', IS_MAC)})`;
 
+/**
+ * Tier list of a role with server / rank / confidence filters, a champion's details (matchups,
+ * duos, synergies) and its generic build. API calls go through `PickLeagueDataProvider`.
+ */
 export function TierListPage({
-  state,
   lookup,
+  dataKey = '',
+  initialRole = 'MIDDLE',
+  mastery,
+  ownedChampionIds,
+  flashKey,
   onBusyChange,
   handleRef,
 }: {
-  state: AppState;
   lookup: StaticLookup | null;
+  /**
+   * Identity of the API data (e.g. API URL, patch, last stats refresh): a new value drops the
+   * cached tier lists and re-fetches the shown ones.
+   */
+  dataKey?: string;
+  /** Role shown first. */
+  initialRole?: Position;
+  /** The user's mastery per champion (League client only): badges on the icons when given. */
+  mastery?: Record<number, MasteryEntry>;
+  /** Champions the user can play (League client only): an "Owned only" switch when given. */
+  ownedChampionIds?: readonly number[] | null;
+  /** Key Flash goes on in the build's spells (F by default). */
+  flashKey?: FlashKey;
   /** True while the user is looking at a champion (details or build open). */
   onBusyChange?: (busy: boolean) => void;
   /** Filled with what the keyboard shortcuts drive. */
   handleRef?: RefObject<TierListHandle | null>;
 }) {
-  const [role, setRole] = useState<Position>(state.settings.fallbackRole);
+  const [role, setRole] = useState<Position>(initialRole);
   const [search, setSearch] = useState('');
   const [ownedOnly, setOwnedOnly] = useState(false);
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: 'score', desc: true });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [buildOf, setBuildOf] = useState<number | null>(null);
   // A new API, patch or stats refresh (manual or background) drops the cached tier lists.
-  const lastRefreshedAt = state.stats.status?.lastRefreshedAt ?? null;
-  const apiKey = `${state.api.url}|${state.api.latestPatch}|${state.api.state === 'ok'}|${lastRefreshedAt}`;
+  const apiKey = dataKey;
   const [filters, setFilters] = useTierListFilters();
   const [minConfidence] = useMinConfidence();
   const { state: tl, retry } = useTierList(role, filters, apiKey);
@@ -592,8 +617,8 @@ export function TierListPage({
 
   const data = tl.status === 'ok' ? tl.data : null;
   const owned = useMemo(
-    () => (state.ownedChampionIds ? new Set(state.ownedChampionIds) : null),
-    [state.ownedChampionIds],
+    () => (ownedChampionIds ? new Set(ownedChampionIds) : null),
+    [ownedChampionIds],
   );
   const nameOf = useCallback((id: number) => lookup?.champion(id)?.name ?? `#${id}`, [lookup]);
 
@@ -667,10 +692,10 @@ export function TierListPage({
         championId={buildOf}
         role={role}
         lookup={lookup}
-        mastery={state.mastery}
+        mastery={mastery}
         onBack={() => setBuildOf(null)}
         refreshKey={apiKey}
-        flashKey={state.settings.flashKey}
+        flashKey={flashKey}
       />
     );
   }
@@ -814,7 +839,7 @@ export function TierListPage({
                   entry={e}
                   name={nameOf(e.championId)}
                   lookup={lookup}
-                  mastery={state.mastery}
+                  mastery={mastery}
                   currentPatch={data.patch}
                   narrow={narrow}
                   selected={e.championId === selectedId}
@@ -830,7 +855,7 @@ export function TierListPage({
             role={role}
             currentPatch={data.patch}
             lookup={lookup}
-            mastery={state.mastery}
+            mastery={mastery}
             filters={filters}
             minConfidence={minConfidence}
             apiKey={apiKey}

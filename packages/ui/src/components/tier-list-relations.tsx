@@ -1,9 +1,15 @@
+'use client';
+
 import type {
   Position,
   TierListChampionResponse,
   TierListFilters,
   TierListRelation,
 } from '@pick-league/shared';
+import { usePickLeagueData } from '@pick-league/ui/components/data-provider';
+import { ChampionIcon } from '@pick-league/ui/components/game-icon';
+import { Notice } from '@pick-league/ui/components/notice';
+import { DeltaBar, DeltaText } from '@pick-league/ui/components/reasons';
 import { Button } from '@pick-league/ui/components/ui/button';
 import { Skeleton } from '@pick-league/ui/components/ui/skeleton';
 import {
@@ -20,14 +26,11 @@ import {
   percent,
   ROLE_LABEL,
 } from '@pick-league/ui/lib/format';
+import type { StaticLookup } from '@pick-league/ui/lib/static-lookup';
+import type { ApiResult } from '@pick-league/ui/lib/types';
 import { cn } from '@pick-league/ui/lib/utils';
 import { ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import type { ApiResult } from '../../../core/app-state.ts';
-import type { StaticLookup } from '../hooks/use-app';
-import { ChampionIcon } from './game-icon';
-import { Notice } from './notice';
-import { DeltaBar, DeltaText } from './reasons';
 
 /** A champion's relations are re-fetched after this long (like the tier list). */
 const CACHE_MS = 5 * 60_000;
@@ -49,6 +52,7 @@ function useTierListChampion(
   filters: TierListFilters,
   apiKey: string,
 ) {
+  const api = usePickLeagueData();
   const [state, setState] = useState<Loaded>({ status: 'loading' });
   const [nonce, setNonce] = useState(0);
   const { platform, rank } = filters;
@@ -68,22 +72,18 @@ function useTierListChampion(
         ? prev
         : { status: 'loading' },
     );
-    void window.pickleague
-      .getTierListChampion(role, championId, { platform, rank })
-      .then((result) => {
-        const now = Date.now();
-        for (const [k, v] of cache) if (now - v.at >= CACHE_MS) cache.delete(k);
-        cache.set(key, { at: now, result });
-        if (alive) {
-          setState(
-            result.ok ? { status: 'ok', data: result.data } : { status: 'error', ...result },
-          );
-        }
-      });
+    void api.getTierListChampion(role, championId, { platform, rank }).then((result) => {
+      const now = Date.now();
+      for (const [k, v] of cache) if (now - v.at >= CACHE_MS) cache.delete(k);
+      cache.set(key, { at: now, result });
+      if (alive) {
+        setState(result.ok ? { status: 'ok', data: result.data } : { status: 'error', ...result });
+      }
+    });
     return () => {
       alive = false;
     };
-  }, [key, nonce]);
+  }, [key, nonce, api]);
 
   const retry = useCallback(() => {
     cache.delete(key);

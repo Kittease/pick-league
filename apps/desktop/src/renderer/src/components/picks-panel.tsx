@@ -1,4 +1,14 @@
 import type { PickCandidate, PicksResponse } from '@pick-league/shared';
+import { ConfidencePips } from '@pick-league/ui/components/confidence-pips';
+import { ConfidenceFilter } from '@pick-league/ui/components/filter-select';
+import { ChampionIcon } from '@pick-league/ui/components/game-icon';
+import { Notice } from '@pick-league/ui/components/notice';
+import {
+  DeltaText,
+  ReasonHeadline,
+  ReasonList,
+  ReasonStrip,
+} from '@pick-league/ui/components/reasons';
 import { Button } from '@pick-league/ui/components/ui/button';
 import {
   Collapsible,
@@ -8,12 +18,7 @@ import {
 import { Skeleton } from '@pick-league/ui/components/ui/skeleton';
 import { useMinConfidence } from '@pick-league/ui/hooks/use-min-confidence';
 import { type RovingItemProps, useRoving } from '@pick-league/ui/hooks/use-roving';
-import {
-  type ConfidenceLevel,
-  confidenceLevel,
-  MIN_CONFIDENCE_LABEL,
-  meetsConfidence,
-} from '@pick-league/ui/lib/confidence';
+import { MIN_CONFIDENCE_LABEL, meetsConfidence } from '@pick-league/ui/lib/confidence';
 import {
   compact,
   confidenceLabel,
@@ -26,26 +31,6 @@ import { ChevronDownIcon, HammerIcon } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { AppState } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
-import { ConfidenceFilter } from './filter-select';
-import { ChampionIcon } from './game-icon';
-import { Notice } from './notice';
-import { DeltaText, ReasonHeadline, ReasonList, ReasonStrip } from './reasons';
-
-const PIPS: Record<ConfidenceLevel, number> = { LOW: 1, MEDIUM: 2, HIGH: 3 };
-
-export function ConfidencePips({ confidence }: { confidence: number }) {
-  const filled = PIPS[confidenceLevel(confidence)];
-  return (
-    <span className="flex gap-0.5" title={`${confidenceLabel(confidence)} confidence`}>
-      {[1, 2, 3].map((i) => (
-        <span
-          key={i}
-          className={cn('h-2.5 w-1', i <= filled ? 'bg-foreground/70' : 'bg-secondary')}
-        />
-      ))}
-    </span>
-  );
-}
 
 function CandidateRow({
   rank,

@@ -1,10 +1,12 @@
+'use client';
+
+import type { StatsStatusResponse } from '@pick-league/shared';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@pick-league/ui/components/ui/tooltip';
 import { type CollectionWarning, collectionWarning } from '@pick-league/ui/lib/collection';
 import { compact, timeAgo } from '@pick-league/ui/lib/format';
 import { cn } from '@pick-league/ui/lib/utils';
 import { RefreshCwIcon, TriangleAlertIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import type { AppState } from '../../../core/app-state.ts';
 
 /** Re-renders every `ms` so relative times stay current. */
 function useNow(ms: number): number {
@@ -16,10 +18,9 @@ function useNow(ms: number): number {
   return now;
 }
 
-/** Collection stopped (rejected Riot key, worker down), when the API is up and says so. */
-function warningOf(state: AppState): CollectionWarning | null {
-  if (state.api.state !== 'ok') return null;
-  return collectionWarning(state.stats.status?.collection);
+/** Collection stopped (rejected Riot key, worker down), when the API answered and says so. */
+function warningOf(status: StatsStatusResponse | null): CollectionWarning | null {
+  return status ? collectionWarning(status.collection) : null;
 }
 
 function stoppedAgo(warning: CollectionWarning, now: number): string | null {
@@ -37,9 +38,12 @@ function WarningText({ warning }: { warning: CollectionWarning }) {
   );
 }
 
-/** Full-width line under the header while collection is stopped (nothing otherwise). */
-export function CollectionBanner({ state }: { state: AppState }) {
-  const warning = warningOf(state);
+/**
+ * Full-width line under the header while collection is stopped (nothing otherwise). `status`:
+ * the API's `GET /stats/status` answer, null while unknown or when the API is not reachable.
+ */
+export function CollectionBanner({ status }: { status: StatsStatusResponse | null }) {
+  const warning = warningOf(status);
   const now = useNow(30_000);
   if (!warning) return null;
   const ago = stoppedAgo(warning, now);
@@ -76,13 +80,22 @@ function CollectionBadge({ warning, now }: { warning: CollectionWarning; now: nu
   );
 }
 
-/** Header item: how fresh the API's stats are (the API refreshes them every hour). */
-export function StatsFreshness({ state }: { state: AppState }) {
-  const warning = warningOf(state);
-  const { status, refreshing } = state.stats;
+/**
+ * Header item: how fresh the API's stats are (the API refreshes them every hour). `status`: the
+ * API's `GET /stats/status` answer, null while unknown or when the API is not reachable (nothing
+ * shown then); `refreshing`: a refresh of the stats is running.
+ */
+export function StatsFreshness({
+  status,
+  refreshing = false,
+}: {
+  status: StatsStatusResponse | null;
+  refreshing?: boolean;
+}) {
+  const warning = warningOf(status);
   const now = useNow(30_000);
 
-  if (state.api.state !== 'ok' || !status) return null;
+  if (!status) return null;
   const pending = status.pendingMatches;
   const label = refreshing
     ? 'updating…'

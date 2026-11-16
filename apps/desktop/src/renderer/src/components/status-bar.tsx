@@ -1,8 +1,8 @@
+import { CollectionBanner, StatsFreshness } from '@pick-league/ui/components/stats-freshness';
 import { compact } from '@pick-league/ui/lib/format';
 import { cn } from '@pick-league/ui/lib/utils';
 import type { AppState } from '../../../core/app-state.ts';
 import { SettingsSheet } from './settings-sheet';
-import { CollectionBanner, StatsFreshness } from './stats-freshness';
 import { useWindowState, WindowControls } from './window-controls';
 
 function Dot({ tone }: { tone: 'ok' | 'warn' | 'bad' | 'idle' }) {
@@ -22,6 +22,8 @@ function Dot({ tone }: { tone: 'ok' | 'warn' | 'bad' | 'idle' }) {
 export function StatusBar({ state }: { state: AppState }) {
   const { lcu, api } = state;
   const chrome = useWindowState();
+  // Stats freshness and collection warnings only while the API answers.
+  const statsStatus = api.state === 'ok' ? state.stats.status : null;
   const lcuTone = lcu.state === 'connected' ? 'ok' : 'idle';
   const apiTone =
     api.state === 'ok'
@@ -65,7 +67,7 @@ export function StatusBar({ state }: { state: AppState }) {
           </span>
         </span>
 
-        <StatsFreshness state={state} />
+        <StatsFreshness status={statsStatus} refreshing={state.stats.refreshing} />
 
         <span className="ml-auto flex shrink-0 items-center gap-3">
           <span className="hidden text-muted-foreground xl:inline">
@@ -75,7 +77,7 @@ export function StatusBar({ state }: { state: AppState }) {
         </span>
         {chrome?.customControls && <WindowControls maximized={chrome.maximized} />}
       </header>
-      <CollectionBanner state={state} />
+      <CollectionBanner status={statsStatus} />
     </>
   );
 }

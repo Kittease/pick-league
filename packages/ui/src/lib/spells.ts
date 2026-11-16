@@ -42,3 +42,6 @@ export function arrangeSpells(
   }
   return slots;
 }
+
+/** Flash's key when the host app has no setting for it. */
+export const DEFAULT_FLASH_KEY: FlashKey = 'F';

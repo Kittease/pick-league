@@ -4,19 +4,13 @@
  */
 
 import type {
-  BuildRequestInput,
   BuildResponse,
-  DraftEvaluationResponse,
-  DraftRequestInput,
-  PicksRequestInput,
   PicksResponse,
   Position,
   StaticDataResponse,
   StatsStatusResponse,
-  TierListChampionResponse,
-  TierListFilters,
-  TierListResponse,
 } from '@pick-league/shared';
+import type { PickLeagueData } from '@pick-league/ui/lib/data';
 import type { ApiResult, Loadable, MasteryEntry } from '@pick-league/ui/lib/types';
 import type { ChampSelectView } from './champ-select.ts';
 import type { FlashKey } from './spells.ts';
@@ -124,8 +118,8 @@ export interface WindowState {
   maximized: boolean;
 }
 
-/** `window.pickleague` in the renderer. */
-export interface PickLeagueBridge {
+/** `window.pickleague` in the renderer: the shared views' API calls (`PickLeagueData`) and more. */
+export interface PickLeagueBridge extends PickLeagueData {
   getState(): Promise<AppState>;
   getStatic(): Promise<StaticDataResponse | null>;
   updateSettings(patch: Partial<Settings>): Promise<AppState>;
@@ -142,21 +136,5 @@ export interface PickLeagueBridge {
     close(): void;
     onState(listener: (state: WindowState) => void): () => void;
   };
-  /** Tier list of a role (latest patch), filtered by server and rank (default: all, Master+). */
-  getTierList(role: Position, filters?: TierListFilters): Promise<ApiResult<TierListResponse>>;
-  /** Matchups, duos and synergies of a tier list champion (fetched when it is selected). */
-  getTierListChampion(
-    role: Position,
-    championId: number,
-    filters?: TierListFilters,
-  ): Promise<ApiResult<TierListChampionResponse>>;
-  /** Build of a champion in a role with no allies/enemies (tier list "View build"). */
-  getGenericBuild(championId: number, role: Position): Promise<ApiResult<BuildResponse>>;
-  /** Draft planner: pick recommendations for a simulated draft (no League client involved). */
-  draftPicks(request: PicksRequestInput): Promise<ApiResult<PicksResponse>>;
-  /** Draft planner: build of a drafted champion against the simulated teams. */
-  draftBuild(request: BuildRequestInput): Promise<ApiResult<BuildResponse>>;
-  /** Win probability and damage split of a draft (draft planner or champion select). */
-  evaluateDraft(request: DraftRequestInput): Promise<ApiResult<DraftEvaluationResponse>>;
   onState(listener: (state: AppState) => void): () => void;
 }

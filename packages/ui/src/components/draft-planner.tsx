@@ -1,4 +1,18 @@
+'use client';
+
 import { type PickCandidate, POSITIONS, type Position } from '@pick-league/shared';
+import { BuildView } from '@pick-league/ui/components/build-view';
+import { ConfidencePips } from '@pick-league/ui/components/confidence-pips';
+import { usePickLeagueData } from '@pick-league/ui/components/data-provider';
+import {
+  DamageSplit,
+  type OutlookSide,
+  WinProbability,
+} from '@pick-league/ui/components/draft-outlook';
+import { ConfidenceFilter } from '@pick-league/ui/components/filter-select';
+import { ChampionIcon, GameIcon } from '@pick-league/ui/components/game-icon';
+import { Notice } from '@pick-league/ui/components/notice';
+import { DeltaText, ReasonList } from '@pick-league/ui/components/reasons';
 import { Button } from '@pick-league/ui/components/ui/button';
 import {
   HoverCard,
@@ -15,7 +29,7 @@ import {
 } from '@pick-league/ui/components/ui/select';
 import { Skeleton } from '@pick-league/ui/components/ui/skeleton';
 import { Switch } from '@pick-league/ui/components/ui/switch';
-import { apiDataKey, useApiCall } from '@pick-league/ui/hooks/use-api-call';
+import { useApiCall } from '@pick-league/ui/hooks/use-api-call';
 import { useMinConfidence } from '@pick-league/ui/hooks/use-min-confidence';
 import {
   enterListFromSearch,
@@ -63,6 +77,9 @@ import {
   type SearchFocus,
   shortcutLabel,
 } from '@pick-league/ui/lib/shortcuts';
+import type { FlashKey } from '@pick-league/ui/lib/spells';
+import type { StaticLookup } from '@pick-league/ui/lib/static-lookup';
+import type { MasteryEntry } from '@pick-league/ui/lib/types';
 import { cn } from '@pick-league/ui/lib/utils';
 import {
   ArrowLeftIcon,
@@ -82,15 +99,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { AppState } from '../../../core/app-state.ts';
-import type { StaticLookup } from '../hooks/use-app';
-import { BuildView } from './build-panel';
-import { DamageSplit, type OutlookSide, WinProbability } from './draft-outlook';
-import { ConfidenceFilter } from './filter-select';
-import { ChampionIcon, GameIcon } from './game-icon';
-import { Notice } from './notice';
-import { ConfidencePips } from './picks-panel';
-import { DeltaText, ReasonList } from './reasons';
 
 const TEAM_LABEL: Record<Team, string> = { blue: 'Blue', red: 'Red' };
 const TEAM_TEXT: Record<Team, string> = { blue: 'text-[#5ba4e5]', red: 'text-[#e2555f]' };
@@ -530,14 +538,22 @@ const SEARCH_PLACEHOLDER = `Search champion (${shortcutLabel('k', IS_MAC)})`;
  * the draft; any drafted champion shows its build against the drafted teams.
  */
 export function DraftPlanner({
-  state,
   lookup,
+  dataKey = '',
+  mastery,
+  flashKey,
   handleRef,
 }: {
-  state: AppState;
   lookup: StaticLookup | null;
+  /** Identity of the API data (e.g. API URL, patch, last stats refresh): a new value drops the cached answers. */
+  dataKey?: string;
+  /** The user's mastery per champion (League client only): a badge on the build's champion. */
+  mastery?: Record<number, MasteryEntry>;
+  /** Key Flash goes on in the builds' spells (F by default). */
+  flashKey?: FlashKey;
   handleRef?: RefObject<DraftHandle | null>;
 }) {
+  const api = usePickLeagueData();
   const [draft, setDraft] = useState<Draft>(() => emptyDraft(loadFormat()));
   /**
    * Role the user chose per team for its next pick (may be one it already has: the pick then
@@ -547,7 +563,7 @@ export function DraftPlanner({
   const [buildOf, setBuildOf] = useState<Slot | null>(null);
   const [search, setSearch] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
-  const apiKey = apiDataKey(state);
+  const apiKey = dataKey;
 
   const turn = currentTurn(draft);
   const complete = isComplete(draft);
@@ -563,7 +579,7 @@ export function DraftPlanner({
   );
   const { result: picks, retry: retryPicks } = useApiCall(
     picksRequest,
-    (r) => window.pickleague.draftPicks(r),
+    (r) => api.draftPicks(r),
     apiKey,
     true,
   );
@@ -573,7 +589,7 @@ export function DraftPlanner({
   );
   const { result: build, retry: retryBuild } = useApiCall(
     buildRequest,
-    (r) => window.pickleague.draftBuild(r),
+    (r) => api.draftBuild(r),
     apiKey,
     false,
   );
@@ -581,7 +597,7 @@ export function DraftPlanner({
   const evaluationRequest = useMemo(() => draftEvaluationRequest(draft, 'blue'), [draft]);
   const { result: evaluation, retry: retryEvaluation } = useApiCall(
     evaluationRequest,
-    (r) => window.pickleague.evaluateDraft(r),
+    (r) => api.evaluateDraft(r),
     apiKey,
     true,
   );
@@ -780,7 +796,7 @@ export function DraftPlanner({
               championId={shownBuild.request.championId}
               build={build}
               lookup={lookup}
-              mastery={state.mastery[shownBuild.request.championId]}
+              mastery={mastery?.[shownBuild.request.championId]}
               badge={`${TEAM_LABEL[shownBuild.team]} ${ROLE_LABEL[shownBuild.role]} · ${complete ? 'draft' : 'draft so far'}`}
               badgeTone="muted"
               leading={
@@ -799,7 +815,7 @@ export function DraftPlanner({
               }
               onRetry={retryBuild}
               mySpells={null}
-              flashKey={state.settings.flashKey}
+              flashKey={flashKey}
             />
           ) : complete ? (
             <div className="grid flex-1 place-items-center p-8 text-center">

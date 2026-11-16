@@ -1,3 +1,6 @@
+import { PickLeagueDataProvider } from '@pick-league/ui/components/data-provider';
+import { type DraftHandle, DraftPlanner } from '@pick-league/ui/components/draft-planner';
+import { type TierListHandle, TierListPage } from '@pick-league/ui/components/tier-list';
 import { Toaster } from '@pick-league/ui/components/ui/sonner';
 import { Tabs, TabsList, TabsTrigger } from '@pick-league/ui/components/ui/tabs';
 import { TooltipProvider } from '@pick-league/ui/components/ui/tooltip';
@@ -9,10 +12,8 @@ import { toast } from 'sonner';
 import type { AppState } from '../../core/app-state.ts';
 import { BuildPanel } from './components/build-panel';
 import { ChampSelectBoard } from './components/champ-select-board';
-import { type DraftHandle, DraftPlanner } from './components/draft-planner';
 import { PicksPanel } from './components/picks-panel';
 import { StatusBar } from './components/status-bar';
-import { type TierListHandle, TierListPage } from './components/tier-list';
 import { useAutoView, ViewNav } from './components/view-nav';
 import { type StaticLookup, useAppState, useStatic } from './hooks/use-app';
 
@@ -151,41 +152,53 @@ export function App() {
 
   if (!state) return <div className="h-full bg-background" />;
   return (
-    <TooltipProvider>
-      <div className="flex h-full flex-col bg-background text-foreground">
-        <StatusBar state={state} />
-        <div className="flex min-h-0 flex-1">
-          <ViewNav
-            view={view}
-            onChange={setView}
-            liveSelect={state.champSelect !== null}
-            inGame={state.inGame}
-          />
-          {/* Kept mounted so role, filters and selection survive a trip to champ select. */}
-          <div className={view === 'tierlist' ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}>
-            <TierListPage
-              state={state}
-              lookup={lookup}
-              onBusyChange={setBusy}
-              handleRef={tierList}
+    <PickLeagueDataProvider value={window.pickleague}>
+      <TooltipProvider>
+        <div className="flex h-full flex-col bg-background text-foreground">
+          <StatusBar state={state} />
+          <div className="flex min-h-0 flex-1">
+            <ViewNav
+              view={view}
+              onChange={setView}
+              liveSelect={state.champSelect !== null}
+              inGame={state.inGame}
             />
-          </div>
-          {/* Kept mounted too: the draft survives a trip to the other views. */}
-          <div className={view === 'draft' ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}>
-            <DraftPlanner state={state} lookup={lookup} handleRef={draft} />
-          </div>
-          {view === 'select' && (
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              {state.champSelect ? (
-                <ChampSelect state={state} lookup={lookup} />
-              ) : (
-                <Waiting state={state} />
-              )}
+            {/* Kept mounted so role, filters and selection survive a trip to champ select. */}
+            <div className={view === 'tierlist' ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}>
+              <TierListPage
+                lookup={lookup}
+                dataKey={apiDataKey(state)}
+                initialRole={state.settings.fallbackRole}
+                mastery={state.mastery}
+                ownedChampionIds={state.ownedChampionIds}
+                flashKey={state.settings.flashKey}
+                onBusyChange={setBusy}
+                handleRef={tierList}
+              />
             </div>
-          )}
+            {/* Kept mounted too: the draft survives a trip to the other views. */}
+            <div className={view === 'draft' ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}>
+              <DraftPlanner
+                lookup={lookup}
+                dataKey={apiDataKey(state)}
+                mastery={state.mastery}
+                flashKey={state.settings.flashKey}
+                handleRef={draft}
+              />
+            </div>
+            {view === 'select' && (
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                {state.champSelect ? (
+                  <ChampSelect state={state} lookup={lookup} />
+                ) : (
+                  <Waiting state={state} />
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-      <Toaster theme="dark" position="bottom-right" />
-    </TooltipProvider>
+        <Toaster theme="dark" position="bottom-right" />
+      </TooltipProvider>
+    </PickLeagueDataProvider>
   );
 }

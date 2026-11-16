@@ -1,5 +1,5 @@
+import type { MasteryEntry } from '@pick-league/ui/lib/types';
 import { cn } from '@pick-league/ui/lib/utils';
-import type { MasteryEntry } from '../../../core/app-state.ts';
 
 interface GameIconProps {
   src: string | undefined;

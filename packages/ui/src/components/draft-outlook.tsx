@@ -1,4 +1,7 @@
+'use client';
+
 import type { DraftEvaluationResponse, Reason, TeamDamage } from '@pick-league/shared';
+import { ReasonList } from '@pick-league/ui/components/reasons';
 import {
   HoverCard,
   HoverCardContent,
@@ -6,11 +9,10 @@ import {
 } from '@pick-league/ui/components/ui/hover-card';
 import { compact, patchesText } from '@pick-league/ui/lib/format';
 import { damageLabel, damageShares, roundedShares } from '@pick-league/ui/lib/outlook';
+import type { StaticLookup } from '@pick-league/ui/lib/static-lookup';
+import type { Loadable } from '@pick-league/ui/lib/types';
 import { cn } from '@pick-league/ui/lib/utils';
 import { Loader2Icon } from 'lucide-react';
-import type { Loadable } from '../../../core/app-state.ts';
-import type { StaticLookup } from '../hooks/use-app';
-import { ReasonList } from './reasons';
 
 /** Draft reasons read better with their own names. */
 const DRAFT_KIND_LABELS: Partial<Record<Reason['kind'], string>> = {
