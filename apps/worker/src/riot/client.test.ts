@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { FakeClock, flushMicrotasks } from '../clock.ts';
-import { PRIORITY, RiotAuthError, RiotClient, RiotHttpError, RiotNetworkError } from './client.ts';
+import { createLogger } from '../log.ts';
+import {
+  PRIORITY,
+  RiotAuthError,
+  RiotClient,
+  RiotHttpError,
+  RiotNetworkError,
+  redactPuuid,
+} from './client.ts';
 
 const KEY = 'RGAPI-00000000-0000-0000-0000-000000000000';
 
@@ -54,6 +62,60 @@ describe('RiotClient', () => {
       expect((c.init.headers as Record<string, string>)['X-Riot-Token']).toBe(KEY);
     }
     expect(client.requestsFor('EUW1')).toBe(2);
+  });
+
+  test('puuids never reach an error message or a log line', async () => {
+    const puuid = 'fake-puuid/with+special=chars';
+    const encoded = encodeURIComponent(puuid);
+    const lines: string[] = [];
+    const log = createLogger('debug', {}, (line) => lines.push(line));
+    const errors: Error[] = [];
+    const call = async (status: number | 'network', run: (c: RiotClient) => Promise<unknown>) => {
+      const clock = new FakeClock();
+      const client = new RiotClient({
+        apiKey: KEY,
+        clock,
+        log,
+        limiter: { marginMs: 0 },
+        fetch: async (url) => {
+          if (status === 'network') throw new TypeError(`Unable to connect: ${url}`);
+          return new Response('', { status });
+        },
+      });
+      const done = run(client).catch((e: Error) => errors.push(e));
+      for (let i = 0; i < 10; i++) await clock.advance(10_000);
+      await done;
+    };
+    await call(400, (c) => c.getMatchIds('EUW1', puuid, {}));
+    await call(400, (c) => c.getAccount('EUW1', puuid, PRIORITY.DAILY_REFRESH));
+    await call(503, (c) => c.getMasteries('EUW1', puuid, PRIORITY.DAILY_REFRESH));
+    await call(403, (c) => c.getLeagueEntries('EUW1', puuid, PRIORITY.ENRICHMENT));
+    await call('network', (c) => c.getAccount('EUW1', puuid, PRIORITY.DAILY_REFRESH));
+    expect(errors).toHaveLength(5);
+    expect(errors[0]).toBeInstanceOf(RiotHttpError);
+    expect((errors[0] as RiotHttpError).path).toStartWith(
+      '/lol/match/v5/matches/by-puuid/<puuid>/ids?',
+    );
+    expect(errors[0]?.message).toContain('by-puuid/<puuid>/ids');
+    expect(errors[4]).toBeInstanceOf(RiotNetworkError);
+    expect(errors[4]?.message).toContain('/riot/account/v1/accounts/by-puuid/<puuid>');
+    expect(lines.length).toBeGreaterThan(0);
+    for (const text of [
+      ...errors.map((e) => `${e.message} ${(e as RiotHttpError).path}`),
+      ...lines,
+    ]) {
+      expect(text).not.toContain(puuid);
+      expect(text).not.toContain(encoded);
+    }
+  });
+
+  test('redactPuuid removes the raw and the URL-encoded puuid', () => {
+    const puuid = 'fake-puuid/with+special=chars';
+    const encoded = encodeURIComponent(puuid);
+    expect(redactPuuid(`HTTP 400 (/by-puuid/${encoded}) for ${puuid}`, puuid)).toBe(
+      'HTTP 400 (/by-puuid/<puuid>) for <puuid>',
+    );
+    expect(redactPuuid('nothing to hide', puuid)).toBe('nothing to hide');
   });
 
   test('404 resolves to null', async () => {

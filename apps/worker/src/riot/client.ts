@@ -8,7 +8,9 @@
  *   RiotNetworkError.
  * - 401/403 → RiotAuthError (bad or expired key), not retried.
  *
- * The API key only ever goes into the `X-Riot-Token` header: it is never logged.
+ * The API key only ever goes into the `X-Riot-Token` header: it is never logged. Puuids are never
+ * logged either: the request's puuid is redacted from every error (path and message) and log line
+ * here, so whatever logs or stores a Riot error downstream never sees one.
  */
 import {
   type AccountDto,
@@ -39,6 +41,15 @@ export const PRIORITY = {
   ENRICHMENT: 1,
 } as const;
 export type Priority = (typeof PRIORITY)[keyof typeof PRIORITY];
+
+/** Replaces a puuid (raw or URL-encoded) in a message: Riot request paths carry them. */
+export function redactPuuid(message: string, puuid: string): string {
+  let out = message;
+  for (const s of new Set([puuid, encodeURIComponent(puuid)])) {
+    if (s) out = out.split(s).join('<puuid>');
+  }
+  return out;
+}
 
 export class RiotHttpError extends Error {
   override name = 'RiotHttpError';
@@ -181,6 +192,7 @@ export class RiotClient implements RiotApi {
       `/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?${params}`,
       PRIORITY.MATCH_IDS,
       signal,
+      puuid,
     );
     return ids ?? [];
   }
@@ -215,6 +227,7 @@ export class RiotClient implements RiotApi {
       `/riot/account/v1/accounts/by-puuid/${encodeURIComponent(puuid)}`,
       priority,
       signal,
+      puuid,
     );
   }
 
@@ -226,6 +239,7 @@ export class RiotClient implements RiotApi {
       `/lol/champion-mastery/v4/champion-masteries/by-puuid/${encodeURIComponent(puuid)}`,
       priority,
       signal,
+      puuid,
     );
   }
 
@@ -237,6 +251,7 @@ export class RiotClient implements RiotApi {
       `/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`,
       priority,
       signal,
+      puuid,
     );
   }
 
@@ -286,6 +301,7 @@ export class RiotClient implements RiotApi {
     return res;
   }
 
+  /** `puuid`: the player the path names, redacted from every error and log line. */
   private async request<T>(
     platform: Platform,
     baseUrl: string,
@@ -293,7 +309,10 @@ export class RiotClient implements RiotApi {
     path: string,
     priority: number,
     signal?: AbortSignal,
+    puuid?: string,
   ): Promise<T | null> {
+    const redact = (message: string) => (puuid ? redactPuuid(message, puuid) : message);
+    const shownPath = redact(path);
     const limiter = this.limiterFor(baseUrl);
     const counters = this.hostCounters.get(limiter.host) as {
       rateLimited: number;
@@ -319,13 +338,15 @@ export class RiotClient implements RiotApi {
         if (signal?.aborted) throw abortError();
         serverFailures++;
         if (serverFailures > (this.options.maxServerRetries ?? 4)) {
-          throw new RiotNetworkError(method, path, err);
+          const error = new RiotNetworkError(method, shownPath, err);
+          error.message = redact(error.message);
+          throw error;
         }
         const wait = base * 2 ** (serverFailures - 1);
         this.log.warn('riot network error, retrying', {
           host: limiter.host,
           method,
-          error: isAbortError(err) ? 'timeout' : String(err),
+          error: isAbortError(err) ? 'timeout' : redact(String(err)),
           retryInMs: wait,
         });
         await this.clock.sleep(wait, signal);
@@ -347,7 +368,7 @@ export class RiotClient implements RiotApi {
         counters.rateLimited++;
         rateLimited++;
         if (rateLimited > (this.options.maxRateLimitRetries ?? 8)) {
-          throw new RiotHttpError(429, method, path);
+          throw new RiotHttpError(429, method, shownPath);
         }
         const type = res.headers.get('x-rate-limit-type') ?? 'service';
         const retryAfter = Number(res.headers.get('retry-after'));
@@ -367,14 +388,14 @@ export class RiotClient implements RiotApi {
       }
       if (res.status === 401 || res.status === 403) {
         await res.body?.cancel();
-        throw new RiotAuthError(res.status, method, path);
+        throw new RiotAuthError(res.status, method, shownPath);
       }
       if (res.status >= 500) {
         await res.body?.cancel();
         counters.serverErrors++;
         serverFailures++;
         if (serverFailures > (this.options.maxServerRetries ?? 4)) {
-          throw new RiotHttpError(res.status, method, path);
+          throw new RiotHttpError(res.status, method, shownPath);
         }
         const wait = base * 2 ** (serverFailures - 1);
         this.log.warn('riot server error, retrying', {
@@ -387,7 +408,7 @@ export class RiotClient implements RiotApi {
         continue;
       }
       await res.body?.cancel();
-      throw new RiotHttpError(res.status, method, path);
+      throw new RiotHttpError(res.status, method, shownPath);
     }
   }
 }

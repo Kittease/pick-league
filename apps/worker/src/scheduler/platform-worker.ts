@@ -534,7 +534,7 @@ export class PlatformWorker {
     await finishListing(this.db, puuid, new Date(now - this.opts.listingOverlapMs), new Date(now));
     this.counters.playersPolled++;
     if (this.run) this.run.players++;
-    this.log.debug('match ids listed', { puuid, added, firstTime: since === null });
+    this.log.debug('match ids listed', { added, firstTime: since === null });
     return added;
   }
 
