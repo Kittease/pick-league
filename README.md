@@ -6,46 +6,68 @@ Every recommendation shows its reasons. The data comes from high-elo ranked solo
 (Challenger, Grandmaster and Master players of KR, EUW, NA and VN, best players first) on the
 current patch, plus the previous patch for champions with few matchups on the current one.
 
-It has three parts:
+It has four parts:
 
 - **worker**: collects matches from the Riot API into Postgres.
-- **api**: serves static data and recommendations over HTTP (port 3000).
+- **api**: serves static data and recommendations over HTTP.
+- **web**: a Next.js app on Vercel (<https://pick-league.vercel.app>) with the tier list, the draft
+  planner and builds, and the gateway the desktop app calls.
 - **desktop**: an Electron app that reads your champion select from the League client and shows picks and builds.
 
-The worker, the API and Postgres all run with Docker. The desktop app runs on your machine.
+The worker, the API and Postgres run with Docker on a VPS, behind Caddy (HTTPS). Only the web
+app's server talks to the API (with a secret token); browsers and the desktop app talk to Vercel.
+
+```
+desktop app ─┐
+browsers ────┴─► pick-league.vercel.app (Next.js) ──token──► VPS: Caddy :443 ─► api ─► Postgres ◄─ worker ─► Riot API
+```
 
 See [docs/architecture.md](docs/architecture.md) and [docs/database-schema.md](docs/database-schema.md).
 
-## Setup (no infra knowledge needed)
+## Server (VPS)
 
-1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start it.
-2. Copy `.env.example` to `.env`, then paste your Riot API key (from <https://developer.riotgames.com>) into `RIOT_API_KEY`.
-3. Run `docker compose up -d` in this folder.
+Runs on any Linux box with Docker (sized for 6 cores, 12 GB RAM, 100 GB disk; see the limits in
+`docker-compose.yml`).
 
-The API is then available at <http://localhost:3000>. Data collection starts right away, and
-recommendations improve as matches come in. Use `docker compose logs -f worker` to follow
-progress and `docker compose down` to stop everything (your data is kept).
+1. Install Docker Engine with the compose plugin and clone this repository.
+2. `cp .env.example .env`, then set `RIOT_API_KEY`, a strong `POSTGRES_PASSWORD` (**before the
+   first start**: Postgres only reads it when it creates its volume), `PUBLIC_HOST` (the VPS's
+   IPv4, or a domain), and `API_TOKEN` (`openssl rand -hex 32`, the same value as the web app's).
+3. `docker compose up -d --build`.
+4. `sudo deploy/install.sh` installs the systemd timers: nightly backup, watchdog, worker socket
+   sampling (see "Operations").
+5. Firewall: allow only 22, 80 and 443 (`ufw allow 22/tcp 80/tcp 443/tcp && ufw enable`). The API
+   is published on `127.0.0.1` only (Docker-published ports bypass ufw); Postgres is never published.
 
-If port 3000 is already taken, set `API_PORT=3001` in `.env`.
+Caddy serves `PUBLIC_HOST` over HTTPS. Without a domain it gets a Let's Encrypt certificate for the
+bare IP (short-lived, renewed by itself). The API answers only `GET /health` without the token.
 
 The worker starts with the Challenger and Grandmaster players of each server. Each time it has
 caught up with their matches, it adds the next 500 Master players by LP, down to the bottom of
 Master. Matches of better-placed players are always fetched first. The `masterTracked` and
 `masterTotal` fields of its `progress` log lines show how far down it got.
 
-**Windows: Docker using too much memory (`VmmemWSL`).** The stack itself needs about 1.5 GB,
-but Docker's WSL2 virtual machine may grow to half your RAM and keeps memory it used as file
-cache. Create `%USERPROFILE%\.wslconfig` with:
+### Operations
 
-```ini
-[wsl2]
-memory=3GB
+- **Deploy**: `git pull && docker compose up -d --build`.
+- **Riot key**: edit `.env`, then `docker compose up -d worker` (a plain restart keeps the old key).
+- **Logs**: `docker compose logs -f worker` (rotated, 3 × 10 MB per container); timers:
+  `journalctl -u 'pickleague-*'`.
+- **Backups**: `deploy/backup.sh` runs nightly at 04:30 UTC and keeps the last 3 dumps
+  (directory format, zstd) in `/var/backups/pickleague`. Restore into an empty database:
+  `pg_restore -d pickleague --jobs=6 --no-owner <dump dir>` (from a `postgres:17` container on the
+  compose network).
+- **Watchdog**: every 2 minutes `deploy/watchdog.sh` restarts a service that is down or unhealthy,
+  or the worker when its heartbeat (`worker_status`) is over 5 minutes old.
+- **Sockets**: every 5 minutes `deploy/sockets.sh` logs the worker's open HTTPS connections; they
+  should stay flat.
 
-[experimental]
-autoMemoryReclaim=dropCache
-```
+## Web app (Vercel)
 
-then run `wsl --shutdown` and restart Docker Desktop (your data is kept).
+Vercel project with root directory `apps/web`, framework Next.js, install command
+`bun install --frozen-lockfile`, and two server-only environment variables: `API_URL`
+(`https://<PUBLIC_HOST>`) and `API_TOKEN`. Deploy with `vercel deploy --prod` from a clean export of
+the repository (`git archive HEAD | tar -x -C <dir>`), or connect the project to GitHub.
 
 ### Desktop app
 
@@ -131,15 +153,15 @@ the champion select view it goes back to the tier list. In the draft planner bot
 own search instead (Escape then closes the build shown; it never undoes a draft action). While
 a menu, a select or Settings is open, Escape only closes that.
 
-**Installers.** `bun run --filter @pick-league/desktop package` builds an installer for the
-current OS into `apps/desktop/dist/` (unsigned).
+**Installers.** Windows: download `PickLeague-<version>-setup.exe` from the GitHub releases
+(built by CI on `desktop-v*` tags; unsigned, so SmartScreen asks "More info" → "Run anyway").
+`bun run --filter @pick-league/desktop package` builds an installer for the current OS into
+`apps/desktop/dist/`.
 
 **Troubleshooting.** "League client not found": start League (the app retries every few
-seconds). "Cannot reach the API": check the address in Settings and that `docker compose ps`
-shows the api running. "No data yet": the worker needs time to collect matches. "Riot key
-rejected": Riot development keys expire every 24 h; paste a new one into `.env`, then run
-`docker compose up -d` (it recreates the worker with the new key; a plain restart keeps the old
-one).
+seconds). "Cannot reach the API": check your connection and the address in Settings (default
+`https://pick-league.vercel.app/api/v1`). "Riot key rejected" (server admin): put a valid key in
+the server's `.env`, then run `docker compose up -d worker` (a plain restart keeps the old key).
 
 ## Development
 

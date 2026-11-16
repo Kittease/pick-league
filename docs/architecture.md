@@ -7,13 +7,14 @@ Data comes from high-elo ranked solo/duo games (Challenger + Grandmaster + Maste
 ## Components
 
 ```
-                ┌────────────── Docker Compose (laptop or VPS) ───────────────┐
-Riot API ─────► │ apps/worker ──► Postgres 17 ◄── apps/api (HTTP :3000) ◄─────┼──── apps/desktop (Electron, native)
-Data Dragon ──► │   (Bun)                          (Bun + Hono)               │        ▲
-                └─────────────────────────────────────────────────────────────┘        │ LCU (local League client API)
-                                                                                     League client
+                                          ┌──────────────── VPS (Docker Compose) ────────────────────┐
+apps/desktop ──┐                          │                                                          │
+(Electron)     ├─► apps/web (Vercel) ─────┼─► Caddy :443 ─► apps/api ─► Postgres 17 ◄── apps/worker ◄─┼── Riot API
+browsers ──────┘   Next.js + gateway      │   (TLS)        (Bun+Hono)                   (Bun)        │   Data Dragon
+     ▲                 (API token)        └──────────────────────────────────────────────────────────┘
+     │ LCU (local League client API, desktop only)
+League client
 ```
-
 | Path | Package | Role |
 |---|---|---|
 | `packages/shared` | `@pick-league/shared` | Domain types, platform/routing maps, patch helpers, Data Dragon client, Riot DTO types, **API contract types** shared by api + desktop |
@@ -24,7 +25,7 @@ Data Dragon ──► │   (Bun)                          (Bun + Hono)         
 | `apps/desktop` | `@pick-league/desktop` | Electron helper: reads champion select from the League client, shows picks + builds with reasons, auto-applies runes + summoner spells on lock-in, keeps the build on screen until the game ends |
 | `apps/web` | `@pick-league/web` | Next.js web app on Vercel (https://pick-league.vercel.app): tier list, draft planner and builds without the League client, plus the public API gateway the desktop app calls |
 
-Everything runs with `docker compose up -d` except the desktop app (it must reach the local League client). The whole stack must work on Linux, macOS and Windows, and be set up by someone with zero infra knowledge.
+The server side (Postgres, worker, API, Caddy) runs with `docker compose up -d` on a Linux VPS. The web app runs on Vercel and is the only caller of the API; the desktop app runs on the player's computer (it must reach the local League client) and calls the API through the web app's gateway, so the VPS address is never handed out.
 
 ## Tooling
 
@@ -122,6 +123,7 @@ Next.js (App Router) in `apps/web`, deployed on Vercel (root directory `apps/web
 
 ## Docker
 
-- `docker-compose.yml` at the root: `postgres` (postgres:17, named volume, healthcheck), `worker`, `api` (port `3000` published). Images built from a single multi-stage `Dockerfile` using `oven/bun`. `restart: unless-stopped`, logs rotated (3 × 10 MB per container), `api` healthcheck on `/health`. `.env` provides `RIOT_API_KEY` (+ optional `POSTGRES_PASSWORD`, `PLATFORMS`, API settings): only the worker receives the whole file, the API gets its own settings listed in the compose file, never the Riot key.
+- `docker-compose.yml` at the root: `postgres` (postgres:17, named volume, healthcheck, tuned for 12 GB: `shared_buffers` 3 GB, 1 GB `/dev/shm` for parallel queries), `worker`, `api` (published on `127.0.0.1:3000` only), `caddy` (ports 80/443, TLS for `PUBLIC_HOST`: a Let's Encrypt IP certificate on the short-lived profile when it is a bare IP, `deploy/Caddyfile`). Each service has a memory/CPU limit (Postgres 7 GB, API 1 GB, worker 512 MB, Caddy 256 MB). Images built from a single multi-stage `Dockerfile` using `oven/bun`. `restart: unless-stopped`, logs rotated (3 × 10 MB per container), `api` healthcheck on `/health`. `.env` provides `RIOT_API_KEY` (+ `POSTGRES_PASSWORD`, `PUBLIC_HOST`, `API_TOKEN`, `TRUST_PROXY`, optional `PLATFORMS` and API settings): only the worker receives the whole file, the API gets its own settings listed in the compose file, never the Riot key.
+- `deploy/`: Caddyfile, and systemd timers installed by `deploy/install.sh`: nightly `pg_dump` (directory format, zstd, last 3 kept), a watchdog every 2 min (restarts a stopped/unhealthy service, or the worker when its `worker_status` heartbeat is over 5 min old), and a 5-minute sample of the worker's open HTTPS sockets.
 - `docker-compose.override.example.yml` (publishes Postgres on 127.0.0.1:5432) and the `bun run dev:*` scripts let each app run outside Docker against the dockerised Postgres.
-- `README.md`: setup in 3 steps (install Docker Desktop, copy `.env.example` → `.env` with the Riot key, `docker compose up -d`), how to run the desktop app, how to point it at a VPS (`http://<vps-ip>:3000`), troubleshooting.
+- `.github/workflows/desktop-release.yml`: a `desktop-v*` tag builds the Windows installer and attaches it to a GitHub release.
