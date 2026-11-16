@@ -11,7 +11,7 @@
  */
 
 import { z } from 'zod';
-import { POSITIONS, type Position, type SoloTier } from './domain.ts';
+import { POSITIONS, type Position } from './domain.ts';
 import type { PatchId } from './patch.ts';
 import { PLATFORMS, type Platform } from './platform.ts';
 import type {
@@ -35,7 +35,6 @@ export const API_ROUTES = {
   build: '/recommendations/build',
   draft: '/recommendations/draft',
   statsStatus: '/stats/status',
-  statsRefresh: '/stats/refresh',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -166,7 +165,7 @@ export interface HealthResponse {
 }
 
 // ---------------------------------------------------------------------------
-// GET /stats/status and POST /stats/refresh
+// GET /stats/status
 // ---------------------------------------------------------------------------
 
 /** Freshness of the stats views the recommendations are computed from. */
@@ -220,26 +219,6 @@ export interface CollectionStatus {
   /** One entry per platform the worker has run, sorted by platform. */
   platforms: PlatformCollectionStatus[];
 }
-
-export const STATS_REFRESH_SKIP_REASONS = [
-  /** The stats already include every stored match. */
-  'up_to_date',
-  /** A refresh is running (timer or another request); poll `GET /stats/status`. */
-  'already_running',
-  /** The previous refresh finished too recently; see `retryAfterSeconds`. */
-  'cooldown',
-  /** The user is queued, in champion select or in game: it runs once the game is over. */
-  'playing',
-] as const;
-export type StatsRefreshSkipReason = (typeof STATS_REFRESH_SKIP_REASONS)[number];
-
-/**
- * `POST /stats/refresh` (no body). 202 `{ started: true }` when a background refresh was started,
- * else 200 with the reason. The refresh itself takes seconds to minutes: poll `GET /stats/status`.
- */
-export type StatsRefreshResponse =
-  | { started: true }
-  | { started: false; reason: StatsRefreshSkipReason; retryAfterSeconds?: number };
 
 // ---------------------------------------------------------------------------
 // GET /patches
@@ -692,206 +671,4 @@ export interface TierListChampionResponse {
   synergies: TierListRelation[] | null;
   /** Filters applied (defaults filled in). */
   filters: TierListFilters;
-}
-
-// ---------------------------------------------------------------------------
-// POST /live/players
-// Rank, recent form and mastery of the players of the user's game in progress. Only once the
-// game has started (never in champion select, where Riot hides identities). The API only queues
-// the work: the worker finds the game from the user's own Riot ID (account-v1, spectator-v5,
-// whose participants carry the Riot API puuids: the League client's player ids are not the
-// API's), then looks its players up. The desktop repeats the same request every few seconds
-// until `done`. Never cached. No player id goes in or comes out: players are named by team and
-// champion, answered by their index in the request.
-// ---------------------------------------------------------------------------
-
-export const LIVE_PLAYERS_ROUTE = '/live/players';
-
-export const LIVE_TEAMS = ['ally', 'enemy'] as const;
-export type LiveTeam = (typeof LIVE_TEAMS)[number];
-
-/** The user's own Riot ID (`gameName#tagLine`), as the League client shows it. */
-export const riotIdSchema = z.object({
-  gameName: z.string().trim().min(1).max(64),
-  tagLine: z.string().trim().min(1).max(16),
-});
-export type RiotId = z.infer<typeof riotIdSchema>;
-
-export const livePlayerRequestSchema = z.object({
-  /** Champion the player has in this game (identifies the player within its team). */
-  championId: championIdSchema,
-  /** Position in this game; null when the client does not say (blind pick, customs). */
-  position: positionSchema.nullable(),
-  /** Relative to the user. */
-  team: z.enum(LIVE_TEAMS),
-});
-
-export const livePlayersRequestSchema = z.object({
-  /** The user's platform (from the League client). */
-  platform: z.enum(PLATFORMS),
-  /** The game in progress (League client `gameData.gameId`). */
-  gameId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  /** The user, to find the game (spectator-v5 by the user's account). */
-  me: riotIdSchema,
-  /** The players of the game (the user included): at most 10, each team + champion once. */
-  players: z
-    .array(livePlayerRequestSchema)
-    .min(1)
-    .max(10)
-    .refine((list) => new Set(list.map((p) => `${p.team}:${p.championId}`)).size === list.length, {
-      message: 'each champion at most once per team',
-    }),
-});
-
-export type LivePlayerRequest = z.infer<typeof livePlayerRequestSchema>;
-export type LivePlayersRequest = z.infer<typeof livePlayersRequestSchema>;
-
-export const LIVE_LOOKUP_STATUSES = [
-  /** The worker is fetching it (some parts may already be there). */
-  'pending',
-  /** Everything is in. */
-  'ready',
-  /** Riot kept failing for this player (retried when asked again a few minutes later). */
-  'failed',
-  /** No worker collects this platform: nothing will come. */
-  'unsupported',
-  /** Riot hides who this player is (spectator-v5 gives no id): never looked up. */
-  'hidden',
-] as const;
-export type LiveLookupStatus = (typeof LIVE_LOOKUP_STATUSES)[number];
-
-/** Finding the user's game (spectator-v5), before its players can be looked up. */
-export const LIVE_GAME_STATES = [
-  /** The worker is looking for it. */
-  'finding',
-  /** Found: its players are looked up. */
-  'found',
-  /** Riot does not show this game (not started yet for spectators, custom game, wrong Riot ID). */
-  'not_found',
-  /** Riot kept failing (asked again a minute later). */
-  'failed',
-  /** No worker collects this platform. */
-  'unsupported',
-] as const;
-export type LiveGameState = (typeof LIVE_GAME_STATES)[number];
-
-/** Whether the worker can serve the lookups of this platform right now. */
-export const LIVE_WORKER_STATES = [
-  'ok',
-  /** No heartbeat for `COLLECTION_STALL_MS`: the worker is not running. */
-  'stalled',
-  /** Riot rejects the API key. */
-  'key_rejected',
-  /** The worker does not run this platform (`PLATFORMS`). */
-  'unsupported',
-] as const;
-export type LiveWorkerState = (typeof LIVE_WORKER_STATES)[number];
-
-/** Recent matches looked at per player (the most recent ranked solo/duo ones). */
-export const LIVE_RECENT_MATCHES = 10;
-/** Off-role needs at least this many recent matches with a known position. */
-export const LIVE_OFF_ROLE_MIN_MATCHES = 5;
-/** Off-role: the position played now is under this share of those recent matches. */
-export const LIVE_OFF_ROLE_MAX_SHARE = 0.2;
-
-/** Solo/duo rank of this season. */
-export interface LiveRank {
-  tier: SoloTier;
-  /** 1..4; null for Master+. */
-  division: number | null;
-  lp: number;
-  wins: number;
-  losses: number;
-  /** wins / (wins + losses); 0 without games. */
-  winRate: number;
-}
-
-export interface LiveRoleCount {
-  position: Position;
-  matches: number;
-}
-
-/** From the player's most recent ranked solo/duo matches (remakes left out). */
-export interface LiveRecentStats {
-  matches: number;
-  wins: number;
-  /** On the champion they play in this game. */
-  championMatches: number;
-  championWins: number;
-  /** Positions played (known ones), most played first. */
-  roles: LiveRoleCount[];
-  /** Most played position; null without any known one. */
-  mainRole: Position | null;
-  /**
-   * The position played now is under `LIVE_OFF_ROLE_MAX_SHARE` of their recent matches (with at
-   * least `LIVE_OFF_ROLE_MIN_MATCHES` of them); null when unknown (no position now, too few).
-   */
-  offRole: boolean | null;
-}
-
-export interface LivePlayerResult {
-  /** Index of the player in the request. */
-  index: number;
-  team: LiveTeam;
-  championId: number;
-  position: Position | null;
-  status: LiveLookupStatus;
-  /** The rank is in (`rank` null then means unranked this season). */
-  rankLoaded: boolean;
-  rank: LiveRank | null;
-  /** Mastery of `championId` (0 / 0 when never played); null until it is in. */
-  mastery: { level: number; points: number } | null;
-  /** Null until the recent matches are in. */
-  recent: LiveRecentStats | null;
-}
-
-export interface LivePlayersResponse {
-  platform: Platform;
-  worker: LiveWorkerState;
-  game: LiveGameState;
-  /** Every player is ready, failed or unsupported: no need to ask again. */
-  done: boolean;
-  /** Same order as the request. */
-  players: LivePlayerResult[];
-}
-
-// ---------------------------------------------------------------------------
-// PUT /client/activity
-// The desktop says what the user is doing in the League client. From queue start to the end of
-// the game (`isPlayingPhase`) it repeats the call every `CLIENT_ACTIVITY_RENEW_MS`; meanwhile
-// the API holds its stats refresh, heavy on CPU and memory (a running one is cancelled and runs
-// again after the game). The worker keeps collecting. A pause not renewed ends by itself after
-// `CLIENT_ACTIVITY_TTL_MS` (app closed or crashed).
-// ---------------------------------------------------------------------------
-
-export const CLIENT_ACTIVITY_ROUTE = '/client/activity';
-/** The desktop renews a pause this often. */
-export const CLIENT_ACTIVITY_RENEW_MS = 30_000;
-/** A pause not renewed for this long is over. */
-export const CLIENT_ACTIVITY_TTL_MS = 90_000;
-
-/** League client gameflow phases from queue start to the end of the game. */
-export const PLAYING_PHASES = [
-  'Matchmaking',
-  'CheckedIntoTournament',
-  'ReadyCheck',
-  'ChampSelect',
-  'GameStart',
-  'InProgress',
-  'Reconnect',
-] as const;
-
-export function isPlayingPhase(phase: string | null | undefined): boolean {
-  return phase != null && (PLAYING_PHASES as readonly string[]).includes(phase);
-}
-
-export const clientActivityRequestSchema = z.object({
-  /** League client gameflow phase ('None' when the client is gone). */
-  phase: z.string().trim().min(1).max(40),
-});
-export type ClientActivityRequest = z.infer<typeof clientActivityRequestSchema>;
-
-export interface ClientActivityResponse {
-  /** The stats refresh is paused (the user is playing); collection goes on. */
-  paused: boolean;
 }

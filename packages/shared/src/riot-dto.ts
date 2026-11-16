@@ -416,24 +416,3 @@ export function isTimelineEvent<T extends TimelineEventType>(
 ): event is TimelineEventOf<T> {
   return event.type === type;
 }
-
-// ---------------------------------------------------------------------------
-// spectator-v5
-// ---------------------------------------------------------------------------
-
-/** Player of `GET /lol/spectator/v5/active-games/by-summoner/{puuid}`. */
-export interface CurrentGameParticipantDto {
-  championId: number;
-  /** 100 (blue) or 200 (red). */
-  teamId: number;
-  /** The Riot API puuid; null when the player hides their identity, absent for bots. */
-  puuid?: string | null;
-  bot?: boolean;
-}
-
-/** `GET /lol/spectator/v5/active-games/by-summoner/{puuid}` (404 when not in a game). */
-export interface CurrentGameInfoDto {
-  gameId: number;
-  gameQueueConfigId?: number;
-  participants: CurrentGameParticipantDto[];
-}
