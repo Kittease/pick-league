@@ -140,7 +140,7 @@ function Runes({ build, lookup }: { build: BuildResponse; lookup: StaticLookup |
       <SectionTitle meta={`${percent(r.winRate)} wr · ${compact(r.games)} games`}>
         Runes
       </SectionTitle>
-      <div className="mb-3 flex items-center gap-4">
+      <div className="mb-3 flex items-center gap-4 max-md:flex-wrap">
         <div className="flex items-center gap-2">
           <GameIcon src={primary?.iconUrl} alt={primary?.name ?? 'Primary tree'} size={20} round />
           {keystone && rune(keystone, 44)}
@@ -341,7 +341,7 @@ export function BuildView({
   const name = champ?.name ?? `#${championId}`;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-3 border-b border-border px-4 py-3">
+      <div className="flex items-center gap-3 border-b border-border px-4 py-3 max-md:flex-wrap">
         {leading}
         <ChampionIcon src={champ?.iconUrl} name={name} size={44} mastery={mastery} />
         <div className="flex min-w-0 flex-col leading-tight">
@@ -409,7 +409,7 @@ export function BuildDetails({
   return (
     <div className="flex flex-col gap-6 p-4">
       <LanePhase build={build} lookup={lookup} />
-      <section className="grid grid-cols-[1fr_1fr_1.3fr_1.3fr] gap-4">
+      <section className="grid grid-cols-[1fr_1fr_1.3fr_1.3fr] gap-4 max-md:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-4">
           <ItemGroup title="Starting" items={build.items.starting} lookup={lookup} />
           {build.items.questUpgrade && (
@@ -430,7 +430,7 @@ export function BuildDetails({
           </div>
         </div>
       </section>
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-2 gap-6 max-md:grid-cols-1">
         <Runes build={build} lookup={lookup} />
         <div className="flex flex-col gap-6">
           <Spells build={build} lookup={lookup} mySpells={mySpells} flashKey={flashKey} />

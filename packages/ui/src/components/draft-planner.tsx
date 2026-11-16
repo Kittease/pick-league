@@ -287,6 +287,8 @@ function TeamColumn({
     <aside
       className={cn(
         'flex w-[200px] shrink-0 flex-col gap-3 overflow-y-auto border-border py-2',
+        // Phones: both teams side by side above the champion grid, the page scrolls.
+        'max-md:w-auto max-md:overflow-visible max-md:border-b',
         team === 'blue' ? 'border-r' : 'border-l',
       )}
     >
@@ -711,7 +713,7 @@ export function DraftPlanner({
         </span>
         <TurnStatus turn={turn} draft={draft} />
         {/* DOM order = Tab order: the search comes last, so Tab from it goes to the grid. */}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           <span
             className="flex items-center gap-2"
             title="Tournament draft: 3 bans each, picks B1 R1 R2 B2 B3 R3, 2 bans each, picks R4 B4 B5 R5. Changing it starts a new draft."
@@ -761,7 +763,7 @@ export function DraftPlanner({
               placeholder={SEARCH_PLACEHOLDER}
               aria-label="Search champion"
               aria-keyshortcuts={IS_MAC ? 'Meta+K Meta+F' : 'Control+K Control+F'}
-              className="h-8 w-44 text-xs md:text-xs"
+              className="h-8 w-44 text-xs max-sm:w-36 md:text-xs"
             />
           </span>
         </div>
@@ -776,7 +778,7 @@ export function DraftPlanner({
         />
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 max-md:grid max-md:grid-cols-2 max-md:content-start max-md:overflow-y-auto">
         <TeamColumn
           team="blue"
           draft={draft}
@@ -790,7 +792,7 @@ export function DraftPlanner({
           onSwap={(from, to) => swap('blue', from, to)}
         />
 
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main className="flex min-w-0 flex-1 flex-col max-md:order-last max-md:col-span-2">
           {shownBuild ? (
             <BuildView
               championId={shownBuild.request.championId}
@@ -884,7 +886,7 @@ export function DraftPlanner({
                 />
               )}
 
-              <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="min-h-0 flex-1 overflow-y-auto max-md:flex-none max-md:overflow-visible">
                 {!lookup ? (
                   <GridSkeleton />
                 ) : (

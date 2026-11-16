@@ -234,10 +234,13 @@ const COLUMNS: {
 const gridClass = (narrow: boolean) =>
   narrow
     ? 'grid items-center gap-2 grid-cols-[60px_minmax(0,1fr)_48px_40px_44px]'
-    : 'grid items-center gap-3 grid-cols-[64px_minmax(0,1fr)_64px_60px_56px_56px_44px]';
+    : 'grid items-center gap-3 grid-cols-[64px_minmax(0,1fr)_64px_60px_56px_56px_44px] max-sm:gap-2 max-sm:grid-cols-[60px_minmax(0,1fr)_48px_40px_44px]';
 
-/** Table width while a champion's details are open; the panel takes the rest. */
-const COMPACT_TABLE = 'w-[400px] max-w-[45%] shrink-0';
+/** Optional columns are left out on phones too (the full table is too wide there). */
+const OPTIONAL_CELL = 'max-sm:hidden';
+
+/** Table width while a champion's details are open; the panel takes the rest (all of it on phones). */
+const COMPACT_TABLE = 'w-[400px] max-w-[45%] shrink-0 max-md:hidden';
 
 function SortHeader({
   sort,
@@ -267,6 +270,7 @@ function SortHeader({
             className={cn(
               'flex items-center gap-1 uppercase outline-none hover:text-foreground focus-visible:text-foreground',
               c.align === 'right' && 'justify-end',
+              c.optional && OPTIONAL_CELL,
               active && 'text-foreground',
             )}
           >
@@ -347,13 +351,13 @@ function EntryRow({
       </span>
       <span className="num text-right text-xs text-muted-foreground">{compact(entry.games)}</span>
       {!narrow && (
-        <span className="num text-right text-xs text-muted-foreground">
+        <span className={cn('num text-right text-xs text-muted-foreground', OPTIONAL_CELL)}>
           {percent(entry.pickRate)}
         </span>
       )}
       <span className="num text-right text-xs text-muted-foreground">{percent(entry.banRate)}</span>
       {!narrow && (
-        <span className="flex justify-end">
+        <span className={cn('flex justify-end', OPTIONAL_CELL)}>
           <ConfidencePips confidence={entry.confidence} />
         </span>
       )}
@@ -401,7 +405,7 @@ function DetailPanel({
   const name = champ?.name ?? `#${entry.championId}`;
   const merged = entry.patchesUsed.length > 1;
   return (
-    <aside className="@container flex min-w-0 flex-1 flex-col border-l border-border bg-card/40">
+    <aside className="@container flex min-w-0 flex-1 flex-col border-l border-border bg-card/40 max-md:border-l-0">
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
         <ChampionIcon
           src={champ?.iconUrl}
@@ -506,14 +510,14 @@ function GenericBuild({
   const data = state.status === 'ok' ? state.data : null;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex items-center gap-3 border-b border-border px-4 py-3">
+      <div className="flex items-center gap-3 border-b border-border px-4 py-3 max-md:flex-wrap">
         <Button size="sm" variant="ghost" onClick={onBack} title="Back to the tier list (Esc)">
           <ArrowLeftIcon data-icon="inline-start" />
           Tier list
         </Button>
         <span className="h-6 w-px bg-border" />
         <ChampionIcon src={champ?.iconUrl} name={name} size={40} mastery={mastery?.[championId]} />
-        <div className="flex flex-col leading-tight">
+        <div className="flex min-w-0 flex-col leading-tight">
           <span className="flex items-baseline gap-2">
             <span className="text-lg font-semibold">{name}</span>
             <span className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
