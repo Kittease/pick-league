@@ -72,23 +72,14 @@ bun run dev:desktop      # opens the app; start League whenever you like
   champion select is dropped right away. Opened mid-game, the app reads the teams from the client.
   If League closes its client during the game, the build stays until the client is back and
   says the game is over.
-- **Lobby** (in game, next to the build): once the match has started — never during champion
-  select, where Riot hides who the players are — the app shows every player of both teams by
-  champion and role (no names), like a scoreboard: solo/duo rank and season win rate, results on
-  the champion they play over their last 10 ranked solo/duo matches plus their mastery on it, an
-  **Off-role** badge when the role they play is rare in those matches ("usually Mid"), and a
-  **First time** hint. Ranks show within seconds; recent matches can take a minute or two (Riot
-  allows the key 100 requests per 2 minutes). The worker fetches them from Riot (the key never
-  leaves it) for the servers in `PLATFORMS` only.
 - Runes and summoner spells are **applied automatically when you lock in** (setting
   "Apply runes and spells on lock-in", on by default; an "Apply runes + spells" button does it
   by hand). If the client refuses, it tries again a few seconds later, up to 3 times. Runes go to a page named `PickLeague`; if every page slot holds one of your pages,
   the app warns you instead of deleting anything. Flash goes on the key chosen in settings
   ("Flash key", F by default); spell pairs without Flash keep the keys you already use.
 - The header shows how fresh the API's stats are ("Stats updated 12 min ago", plus "+N new"
-  when the worker stored matches the stats don't include yet). The refresh button next to it asks
-  the API to recompute them now — handy right before champion select; picks and build reload
-  when it is done. The API refreshes on its own every hour anyway. When data collection
+  when the worker stored matches the stats don't include yet). The API recomputes them every
+  hour; picks and build reload when it is done. When data collection
   stopped, the header says so in red with the time since, and a line under it says how to fix
   it: "Riot key rejected" (put a new key in `.env`, then run `docker compose up -d`) or
   "Collection stopped" (the worker is not running; `docker compose up -d` starts it).
@@ -190,14 +181,11 @@ These commands read `DATABASE_URL` (and the other settings) from the root `.env`
 | `POST /recommendations/picks` | ranked champions for a role, with reasons; with a lane opponent, each candidate also gets a `lane_phase` reason (gold / CS / XP difference at 10 min, bot lane 2v2) right after its matchup |
 | `POST /recommendations/build` | items, runes, summoner spells and skill order, with reasons; `lanePhase` (optional): `lane_phase` reasons at 10 and 15 min vs the lane opponent |
 | `GET /stats/status` | `{ refreshing, lastRefreshedAt, lastRefreshDurationMs, matchesIncluded, matchesStored, pendingMatches, collection }`; `collection` = `{ state, platforms }`, `state` one of `collecting`, `key_rejected` (Riot rejects the key), `stalled` (no worker heartbeat for 3 min), `unknown` (no worker status yet); `platforms` = `[{ platform, heartbeatAt, authRejectedSince, lastError, lastErrorAt, lastMatchStoredAt }]` |
-| `POST /stats/refresh` | starts a background stats refresh: `202 { started: true }`, or `200 { started: false, reason }` with `up_to_date`, `already_running` or `cooldown` (+ `retryAfterSeconds`) |
 | `GET /tierlist?role=UTILITY&patch=latest&platform=ALL&rank=MASTER` | tier list of a role: tiers, win/pick/ban rates, confidence. Optional filters (echoed as `filters`): `platform` = `ALL` (default), `KR`, `EUW1`, `NA1`, `VN2`; `rank` = `MASTER` (Master+, default: every player), `GRANDMASTER` (Grandmaster+), `CHALLENGER` (Challenger only), on each counted player's current solo rank |
-| `PUT /client/activity` | `{ phase }` of the League client: from queue start to the end of the game the worker only looks up live players and the stats refresh waits (renewed every 30 s, over after 90 s without) |
-| `POST /live/players` | players of the caller's game in progress, `{ platform, gameId, me: { gameName, tagLine }, players: [{ championId, position, team }] }` (≤ 10, no player id: the worker finds the game from the caller's Riot ID through spectator-v5): queues their lookup for the worker and answers per player (by index) `game` state and `status` (`pending`, `ready`, `failed`, `unsupported`), rank, mastery and recent form (`offRole`, `mainRole`…); repeat until `done`. Never cached |
 | `GET /tierlist/champion?role=UTILITY&championId=111&patch=latest` | one champion of the tier list: every lane matchup, duo partner and other ally (synergy) with 5+ matchups, best first, with shrunk win-rate delta, win rate, sample size and confidence; matchups also carry `lane` (gold / XP / CS difference at 10 min) when there are 20+ matchups with timeline frames. Same `platform`/`rank` filters; `synergies` is `null` and `lane` is omitted when filtered |
 
 Errors are `{ error: { code, message, details? } }`: `400 BAD_REQUEST` (invalid body or query),
-`404 NOT_FOUND` (unknown route, patch or champion: the requested `championId` of a build or of
+`401 UNAUTHORIZED` (missing or wrong token, only with `API_TOKEN`), `404 NOT_FOUND` (unknown route, patch or champion: the requested `championId` of a build or of
 `/tierlist/champion`, including ids beyond the stored champion id range), `413 PAYLOAD_TOO_LARGE`
 (POST body over 64 KB), `429 RATE_LIMITED`, `503 NO_DATA`. Champion ids inside lists (`allies`,
 `enemies`, `bans`, `availableChampionIds`) that match no champion are ignored, never an error;
@@ -212,16 +200,16 @@ toward 0 by sample size, 1v1 for top / jungle / mid and 2v2 for the bot lane (ow
 both enemy bot laners).
 
 The API owns the stats layer: materialized views (`packages/db/migrations/0002_stats_views.sql`)
-refreshed in the background every `STATS_REFRESH_MINUTES` (default 60) when matches changed.
-`POST /stats/refresh` triggers the same refresh on demand. It is public, so besides the per-IP
-rate limit it refuses to start less than `STATS_MANUAL_REFRESH_COOLDOWN_SECONDS` (60) after the
-previous refresh finished, and the Postgres advisory lock keeps timer and manual runs (on any
-instance) from overlapping.
+refreshed in the background every `STATS_REFRESH_MINUTES` (default 60) when matches changed; a
+Postgres advisory lock keeps several API instances from refreshing at the same time.
 Engine weights and thresholds live in `apps/api/src/engine/config.ts`.
 
 Settings (env): `DATABASE_URL`, `PORT`, `LOG_LEVEL`, `CACHE_TTL_SECONDS` (600),
 `RATE_LIMIT_PER_MINUTE` (120 per IP, 0 = off), `RATE_LIMIT_BURST` (30), `TRUST_PROXY` (use
-`X-Forwarded-For`), `STATS_REFRESH_MINUTES` (60), `STATS_MANUAL_REFRESH_COOLDOWN_SECONDS` (60).
+`X-Forwarded-For`), `STATS_REFRESH_MINUTES` (60), `API_TOKEN` (unset = no auth; when set, every
+route but `GET /health` needs `Authorization: Bearer <API_TOKEN>`, else `401 UNAUTHORIZED`, and
+the per-IP rate limit uses the visitor IP the gateway sends in `X-Client-IP`). No CORS: browsers
+never call the API directly.
 
 ```sh
 PORT=3001 bun run dev:api
