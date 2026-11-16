@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import {
-  type BuildRequestInput,
-  type BuildResponse,
-  isPlayingPhase,
-  type LivePlayersRequest,
-  type LivePlayersResponse,
-} from '@pick-league/shared';
+import type { BuildRequestInput, BuildResponse } from '@pick-league/shared';
 import type { AppState } from '../core/app-state.ts';
 import {
   champSelectSession,
@@ -72,39 +66,8 @@ afterEach(() => {
  * Controller wired to an in-memory API and a stand-in League client: tests push client events
  * (`lcu.session`, `lcu.phase`, `lcu.disconnect`…) and count the calls it receives.
  */
-/** Every player ready (unranked, no recent match) unless `pending` lists request indexes. */
-function liveAnswer(req: LivePlayersRequest, pending: number[] = []): LivePlayersResponse {
-  const players = req.players.map((p, index) => ({
-    index,
-    team: p.team,
-    championId: p.championId,
-    position: p.position,
-    status: pending.includes(index) ? ('pending' as const) : ('ready' as const),
-    rankLoaded: !pending.includes(index),
-    rank: null,
-    mastery: pending.includes(index) ? null : { level: 1, points: 100 },
-    recent: null,
-  }));
-  return {
-    platform: req.platform,
-    worker: 'ok',
-    game: 'found',
-    done: pending.length === 0,
-    players,
-  };
-}
-
-function setup(
-  options: {
-    lcu?: Partial<LcuApi>;
-    live?: (req: LivePlayersRequest, n: number) => Promise<LivePlayersResponse>;
-  } = {},
-) {
+function setup(options: { lcu?: Partial<LcuApi> } = {}) {
   const calls = { picks: 0, build: 0, draft: 0, spells: 0, applies: 0 };
-  /** Bodies of POST /live/players, in order. */
-  const live: LivePlayersRequest[] = [];
-  /** Phases sent to PUT /client/activity, in order. */
-  const activity: string[] = [];
   const api: ApiClient = {
     baseUrl: 'http://api.test',
     health: async () => ({ ok: true, db: true, latestPatch: '15.22', matchCount: 10 }),
@@ -129,17 +92,8 @@ function setup(
       };
     },
     statsStatus: async () => Promise.reject(new Error('no stats in tests')),
-    statsRefresh: async () => Promise.reject(new Error('no stats in tests')),
     tierList: async () => Promise.reject(new Error('no tier list in tests')),
     tierListChampion: async () => Promise.reject(new Error('no tier list in tests')),
-    livePlayers: async (req) => {
-      live.push(req);
-      return options.live ? options.live(req, live.length) : liveAnswer(req);
-    },
-    clientActivity: async (req) => {
-      activity.push(req.phase);
-      return { paused: isPlayingPhase(req.phase) };
-    },
   };
   const lcu: LcuApi = {
     getChampSelectSession: async () => null,
@@ -148,7 +102,6 @@ function setup(
     getOwnedChampions: async () => [],
     getMastery: async () => [],
     getCurrentSummoner: async () => FAKE_SUMMONER,
-    getPlatformHints: async () => ({ platformId: 'EUW1', region: 'EUW' }),
     getPerkPages: async () => {
       calls.applies++;
       return [];
@@ -178,8 +131,6 @@ function setup(
     saveSettings: async () => undefined,
     log: () => undefined,
     autoApplyRetryMs: 20,
-    lobbyPollMs: 20,
-    activityRenewMs: 30,
   });
   current = controller;
   controller.start();
@@ -200,7 +151,7 @@ function setup(
     },
   };
   const state = (): AppState => controller.getState();
-  return { controller, calls, live, activity, lcu: lcuEvents, state };
+  return { controller, calls, lcu: lcuEvents, state };
 }
 
 describe('controller: champion select → game', () => {
@@ -295,74 +246,6 @@ describe('controller: champion select → game', () => {
       apply: { state: 'idle' },
     });
     expect(calls).toEqual({ picks: 0, build: 1, draft: 0, spells: 0, applies: 0 });
-  });
-});
-
-describe('controller: lobby lookup', () => {
-  test('never in champion select nor the loading screen; once in progress, polled until done', async () => {
-    const { live, lcu, state } = setup({
-      live: async (req, n) => liveAnswer(req, n < 3 ? [7, 8] : []),
-    });
-    lcu.phase('ChampSelect');
-    lcu.session(champSelectSession());
-    await settle();
-    lcu.phase('GameStart');
-    lcu.session(null);
-    await settle();
-    expect(live).toHaveLength(0);
-    expect(state().lobby).toBeNull();
-
-    lcu.phase('InProgress');
-    await settle();
-    expect(live.length).toBe(3);
-    expect(live[0]?.platform).toBe('EUW1');
-    expect(live[0]?.players).toHaveLength(10);
-    // The game is found from the user's own Riot ID: no player id is sent.
-    expect(live[0]).toMatchObject({ gameId: 1, me: { gameName: 'FakePlayer', tagLine: 'TEST' } });
-    expect(JSON.stringify(live)).not.toContain(FAKE_SUMMONER.puuid as string);
-    // Done: no more requests.
-    await settle();
-    expect(live.length).toBe(3);
-    const lobby = state().lobby;
-    expect(lobby).toMatchObject({ state: 'done', platform: 'EUW1', worker: 'ok' });
-    expect(lobby?.allies.find((p) => p.me)?.championId).toBe(LOCKED_CHAMPION);
-    expect(
-      [...(lobby?.allies ?? []), ...(lobby?.enemies ?? [])].every((p) => p.status === 'ready'),
-    ).toBe(true);
-    // The renderer state never carries a puuid.
-    expect(JSON.stringify(state())).not.toContain('puuid');
-
-    lcu.phase('EndOfGame');
-    expect(state().lobby).toBeNull();
-  });
-
-  test('stops asking when the game ends, even if players are still pending', async () => {
-    const { live, lcu, state } = setup({ live: async (req) => liveAnswer(req, [0]) });
-    lcu.phase('InProgress');
-    lcu.session(null);
-    await settle();
-    expect(state().lobby?.state).toBe('loading');
-    const asked = live.length;
-    expect(asked).toBeGreaterThan(1);
-    lcu.phase('Lobby');
-    expect(state().lobby).toBeNull();
-    await settle();
-    expect(live.length).toBeLessThanOrEqual(asked + 1);
-    const after = live.length;
-    await settle();
-    expect(live.length).toBe(after);
-  });
-
-  test('a server PickLeague does not collect: shown as such, the API is not asked', async () => {
-    const { live, lcu, state } = setup({
-      lcu: { getPlatformHints: async () => ({ platformId: 'EUN1', region: 'EUNE' }) },
-    });
-    lcu.phase('InProgress');
-    lcu.session(null);
-    await settle();
-    expect(live).toHaveLength(0);
-    expect(state().lobby).toMatchObject({ state: 'unsupported', platform: null });
-    expect(state().lobby?.message).toContain('EUNE');
   });
 });
 
@@ -560,48 +443,5 @@ describe('controller: draft planner', () => {
     }
     expect(calls.picks).toBe(0);
     expect(calls.build).toBe(0);
-  });
-});
-
-describe('controller: stats refresh paused while the user plays', () => {
-  test('from queue start to the end of the game, renewed meanwhile, then released', async () => {
-    const { activity, lcu, state } = setup();
-    lcu.phase('Lobby');
-    await settle();
-    expect(activity.at(-1)).toBe('Lobby');
-    expect(state().statsRefreshPaused).toBe(false);
-
-    lcu.phase('Matchmaking');
-    await settle();
-    expect(state().statsRefreshPaused).toBe(true);
-    lcu.phase('ChampSelect');
-    lcu.session(champSelectSession());
-    lcu.phase('InProgress');
-    lcu.session(null);
-    const sent = activity.length;
-    await new Promise((r) => setTimeout(r, 100));
-    // Renewed while in game (every 30 ms here).
-    expect(activity.length).toBeGreaterThan(sent + 1);
-    expect(activity.at(-1)).toBe('InProgress');
-    expect(state().statsRefreshPaused).toBe(true);
-
-    lcu.phase('EndOfGame');
-    await settle();
-    expect(state().statsRefreshPaused).toBe(false);
-    const ended = activity.length;
-    await new Promise((r) => setTimeout(r, 100));
-    expect(activity.length).toBe(ended);
-    expect(activity.at(-1)).toBe('EndOfGame');
-  });
-
-  test('the League client closing in game ends the pause', async () => {
-    const { activity, lcu, state } = setup();
-    lcu.phase('InProgress');
-    await settle();
-    expect(state().statsRefreshPaused).toBe(true);
-    lcu.disconnect();
-    await settle();
-    expect(activity.at(-1)).toBe('None');
-    expect(state().statsRefreshPaused).toBe(false);
   });
 });

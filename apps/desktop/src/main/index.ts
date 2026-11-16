@@ -184,7 +184,6 @@ async function main(): Promise<void> {
     controller.previewBuild(typeof championId === 'number' ? championId : null),
   );
   ipcMain.handle(IPC.refresh, () => controller.refresh());
-  ipcMain.handle(IPC.refreshStats, () => controller.refreshStats());
   const senderWindow = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent) =>
     BrowserWindow.fromWebContents(e.sender);
   ipcMain.handle(IPC.getWindowState, (e) => {

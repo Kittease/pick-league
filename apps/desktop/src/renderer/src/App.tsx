@@ -7,7 +7,6 @@ import type { AppState } from '../../core/app-state.ts';
 import { BuildPanel } from './components/build-panel';
 import { ChampSelectBoard } from './components/champ-select-board';
 import { type DraftHandle, DraftPlanner } from './components/draft-planner';
-import { LobbyPanel } from './components/lobby-panel';
 import { PicksPanel } from './components/picks-panel';
 import { StatusBar } from './components/status-bar';
 import { type TierListHandle, TierListPage } from './components/tier-list';
@@ -17,7 +16,7 @@ import { type StaticLookup, useAppState, useStatic } from './hooks/use-app';
 import { useShortcuts } from './hooks/use-shortcuts';
 import { draftEscapeAction, escapeAction } from './lib/shortcuts';
 
-type Tab = 'picks' | 'build' | 'lobby';
+type Tab = 'picks' | 'build';
 
 function Waiting({ state }: { state: AppState }) {
   const connected = state.lcu.state === 'connected';
@@ -64,26 +63,11 @@ function ChampSelect({ state, lookup }: { state: AppState; lookup: StaticLookup 
     if (preview !== null && preview !== lastPreview.current) setTab('build');
     lastPreview.current = preview;
   }, [target]);
-  // The match has started (the lobby lookup only begins then): show the players. The build was
-  // on screen through champion select and the loading screen, and stays one click away.
-  const lobbyStarted = state.lobby !== null;
-  const lastLobby = useRef(false);
-  useEffect(() => {
-    if (lobbyStarted && !lastLobby.current) setTab('lobby');
-    lastLobby.current = lobbyStarted;
-  }, [lobbyStarted]);
 
   if (!view) return null;
-  // In game: no picks, nothing to apply; the build and the players of the match.
+  // In game: no picks, nothing to apply; the build stays until the game ends.
   const inGame = state.inGame;
-  const shown: Tab = inGame
-    ? tab === 'lobby'
-      ? 'lobby'
-      : 'build'
-    : tab === 'picks'
-      ? 'picks'
-      : 'build';
-  const lobbyLoading = state.lobby?.state === 'loading';
+  const shown: Tab = !inGame && tab === 'picks' ? 'picks' : 'build';
   return (
     <div className="flex min-h-0 flex-1">
       <ChampSelectBoard
@@ -103,20 +87,10 @@ function ChampSelect({ state, lookup }: { state: AppState; lookup: StaticLookup 
                 <span className="size-1.5 rounded-full bg-primary" />
               )}
             </TabsTrigger>
-            {inGame && (
-              <TabsTrigger value="lobby">
-                Lobby
-                {lobbyLoading && (
-                  <span className="size-1.5 animate-pulse rounded-full bg-primary" />
-                )}
-              </TabsTrigger>
-            )}
           </TabsList>
         </Tabs>
         {shown === 'picks' ? (
           <PicksPanel state={state} lookup={lookup} />
-        ) : shown === 'lobby' ? (
-          <LobbyPanel lobby={state.lobby} lookup={lookup} />
         ) : (
           <BuildPanel state={state} lookup={lookup} />
         )}

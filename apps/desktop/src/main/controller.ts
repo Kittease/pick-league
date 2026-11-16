@@ -8,17 +8,10 @@ import {
   type BuildRequestInput,
   type BuildResponse,
   buildRequestSchema,
-  CLIENT_ACTIVITY_RENEW_MS,
   type DraftEvaluationResponse,
   draftRequestSchema,
-  isPlayingPhase,
-  type LiveGameState,
-  type LivePlayersResponse,
-  type LiveWorkerState,
   type PicksRequestInput,
   type PicksResponse,
-  PLATFORMS,
-  type Platform,
   type Position,
   picksRequestSchema,
   type StaticDataResponse,
@@ -26,14 +19,7 @@ import {
   type TierListFilters,
   type TierListResponse,
 } from '@pick-league/shared';
-import type {
-  ApiResult,
-  AppState,
-  Loadable,
-  Settings,
-  StatsRefreshOutcome,
-  StatsState,
-} from '../core/app-state.ts';
+import type { ApiResult, AppState, Loadable, Settings, StatsState } from '../core/app-state.ts';
 import {
   availableChampionIds,
   buildBuildRequest,
@@ -49,14 +35,6 @@ import {
   nextLobby,
   sessionFromGameflow,
 } from '../core/game-flow.ts';
-import {
-  canLookUpLobby,
-  type LiveLobbyRequest,
-  type LobbyState,
-  lobbyRequestFromGameflow,
-  lobbyView,
-  platformFromLcu,
-} from '../core/live-lobby.ts';
 import { type ApiClient, ApiClientError } from './api-client.ts';
 import { type ApplyResult, applyBuild } from './apply.ts';
 import type { LcuApi } from './lcu/api.ts';
@@ -73,39 +51,6 @@ const LEAVING_TIMEOUT_MS = 3_000;
 /** A failed auto-apply (e.g. the client briefly busy) is tried again, this many times in all. */
 const AUTO_APPLY_ATTEMPTS = 3;
 const AUTO_APPLY_RETRY_MS = 3_000;
-/** Lobby lookup: the API is asked again this often until every player is in… */
-const LOBBY_POLL_MS = 3_000;
-/** …for at most this long (the worker is slow or down). */
-const LOBBY_MAX_MS = 5 * 60_000;
-
-const GAME_MESSAGE: Record<LiveGameState, string | null> = {
-  finding: null,
-  found: null,
-  not_found:
-    "Riot's spectator API does not show this match, so its players cannot be looked up (custom matches and some queues are not shown).",
-  failed: 'Riot kept failing to find this match: asked again in a minute.',
-  unsupported: null,
-};
-
-const WORKER_MESSAGE: Record<LiveWorkerState, string | null> = {
-  ok: null,
-  stalled: 'The PickLeague worker is not running: the players are looked up once it is back.',
-  key_rejected: 'Riot rejects the API key of the worker: the players cannot be looked up.',
-  unsupported: 'The PickLeague worker does not collect your server (see PLATFORMS in its .env).',
-};
-
-/** Lookup of the game in progress (players by team, champion and role: no player id). */
-interface LobbyLookup {
-  request: LiveLobbyRequest;
-  platform: Platform;
-  startedAt: number;
-  response: LivePlayersResponse | null;
-  timer: ReturnType<typeof setTimeout> | null;
-  inFlight: boolean;
-  /** Every player is in, or there is no point asking again. */
-  finished: boolean;
-}
-
 export interface ControllerDeps {
   settings: Settings;
   createSource(): LcuSource;
@@ -116,11 +61,6 @@ export interface ControllerDeps {
   log(message: string): void;
   /** Delay before a failed auto-apply is tried again (tests shorten it). */
   autoApplyRetryMs?: number;
-  /** Lobby lookup poll period and limit (tests shorten them). */
-  lobbyPollMs?: number;
-  lobbyMaxMs?: number;
-  /** How often a pause is renewed while the user plays (tests shorten it). */
-  activityRenewMs?: number;
 }
 
 function errorInfo(e: unknown): { message: string; code: string | null } {
@@ -178,16 +118,6 @@ export class Controller {
   private buildTimer: ReturnType<typeof setTimeout> | null = null;
   private healthTimer: ReturnType<typeof setInterval> | null = null;
   private statsTimer: ReturnType<typeof setTimeout> | null = null;
-  /** A refresh requested from this app is in progress (→ `stats.lastManual` when it ends). */
-  private manualRefresh: { includedBefore: number } | null = null;
-  /** Lookup of the players of the game in progress (one per game). */
-  private lobbyLookup: LobbyLookup | null = null;
-  private lobbyStarting = false;
-  /** Phase last sent to `PUT /client/activity` (null = nothing sent to this API yet). */
-  private activityPhase: string | null = null;
-  /** Renews the pause while the user plays. */
-  private activityTimer: ReturnType<typeof setInterval> | null = null;
-  private activityError: string | null = null;
 
   constructor(private readonly deps: ControllerDeps) {
     this.api = deps.createApi(deps.settings.apiUrl);
@@ -201,11 +131,9 @@ export class Controller {
         matchCount: null,
         message: null,
       },
-      stats: { status: null, refreshing: false, lastManual: null },
+      stats: { status: null, refreshing: false },
       champSelect: null,
       inGame: false,
-      lobby: null,
-      statsRefreshPaused: false,
       mastery: {},
       availableCount: null,
       ownedChampionIds: null,
@@ -237,9 +165,6 @@ export class Controller {
     if (this.buildTimer) clearTimeout(this.buildTimer);
     if (this.leavingTimer) clearTimeout(this.leavingTimer);
     this.cancelAutoApplyRetry();
-    this.stopLobbyLookup();
-    if (this.activityTimer) clearInterval(this.activityTimer);
-    this.activityTimer = null;
   }
 
   getState(): AppState {
@@ -271,13 +196,9 @@ export class Controller {
       });
       void this.checkHealth();
       void this.ensureStatic();
-      this.activityPhase = null;
-      this.syncActivity();
-      this.manualRefresh = null;
-      this.patch({ stats: { status: null, refreshing: false, lastManual: null } });
+      this.patch({ stats: { status: null, refreshing: false } });
       void this.pollStats();
       this.refetch();
-      this.restartLobbyPolling();
     }
     if (next.fallbackRole !== prev.fallbackRole || next.ownedOnly !== prev.ownedOnly) {
       if (this.lobby.stage === 'select') this.showSelect(false);
@@ -301,32 +222,6 @@ export class Controller {
     void this.checkHealth();
     if (!this.staticData) void this.ensureStatic();
     this.refetch();
-    const lobby = this.state.lobby?.state;
-    if (lobby === 'error' || lobby === 'timeout') this.restartLobbyPolling();
-  }
-
-  /** Asks the API to include every stored match in its stats, then follows the refresh. */
-  async refreshStats(): Promise<StatsRefreshOutcome> {
-    const api = this.api;
-    const before = this.state.stats.status;
-    try {
-      const res = await api.statsRefresh();
-      if (api !== this.api) return { kind: 'error', message: 'API address changed' };
-      if (res.started || res.reason === 'already_running') {
-        this.manualRefresh ??= { includedBefore: before?.matchesIncluded ?? 0 };
-        this.patchStats({ refreshing: true });
-        this.scheduleStatsPoll(STATS_ACTIVE_POLL_MS);
-        return res.started ? { kind: 'started' } : { kind: 'skipped', reason: 'already_running' };
-      }
-      void this.pollStats();
-      return {
-        kind: 'skipped',
-        reason: res.reason,
-        ...(res.retryAfterSeconds ? { retryAfterSeconds: res.retryAfterSeconds } : {}),
-      };
-    } catch (e) {
-      return { kind: 'error', message: errorInfo(e).message };
-    }
   }
 
   // ---------------------------------------------------------------------------
@@ -391,14 +286,12 @@ export class Controller {
     if (status.state === 'searching') {
       this.lcuApi = null;
       this.patch({ lcu: { state: 'searching', account: null, message: status.message } });
-      this.syncActivity();
       return;
     }
     const wasConnected = this.lcuApi !== null;
     this.lcuApi = status.api;
     this.patch({ lcu: { ...this.state.lcu, state: 'connected', message: null } });
     if (!wasConnected) void this.loadAccount();
-    this.syncLobbyLookup();
   }
 
   private async loadAccount(): Promise<void> {
@@ -461,56 +354,6 @@ export class Controller {
       }
     }
     // `leaving`: the last champion select stays as it is until the next phase tells.
-    this.syncLobbyLookup();
-    this.syncActivity();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Client activity (stats refresh paused while the user plays)
-  // ---------------------------------------------------------------------------
-
-  /** The League client phase as the API should know it ('None' without a client). */
-  private currentPhase(): string {
-    return (this.lcuApi && this.lobby.phase) || 'None';
-  }
-
-  /**
-   * Tells the API each phase change; while the user plays (queue → end of game) the call is
-   * renewed every `CLIENT_ACTIVITY_RENEW_MS`, so the pause ends by itself if the app goes away.
-   */
-  private syncActivity(): void {
-    const phase = this.currentPhase();
-    if (phase !== this.activityPhase) void this.sendActivity(phase);
-    const playing = isPlayingPhase(phase);
-    if (playing && !this.activityTimer) {
-      this.activityTimer = setInterval(
-        () => void this.sendActivity(this.currentPhase()),
-        this.deps.activityRenewMs ?? CLIENT_ACTIVITY_RENEW_MS,
-      );
-    } else if (!playing && this.activityTimer) {
-      clearInterval(this.activityTimer);
-      this.activityTimer = null;
-    }
-  }
-
-  private async sendActivity(phase: string): Promise<void> {
-    const api = this.api;
-    this.activityPhase = phase;
-    try {
-      const res = await api.clientActivity({ phase });
-      if (api !== this.api) return;
-      this.activityError = null;
-      if (res.paused !== this.state.statsRefreshPaused)
-        this.patch({ statsRefreshPaused: res.paused });
-    } catch (e) {
-      if (api !== this.api) return;
-      // Sent again on the next renewal / phase change.
-      if (this.activityPhase === phase) this.activityPhase = null;
-      const message = errorInfo(e).message;
-      if (message !== this.activityError) this.deps.log(`client activity not sent: ${message}`);
-      this.activityError = message;
-      if (this.state.statsRefreshPaused) this.patch({ statsRefreshPaused: false });
-    }
   }
 
   private showSelect(isNew: boolean): void {
@@ -554,11 +397,9 @@ export class Controller {
     this.buildKey = '';
     this.previewChampionId = null;
     this.cancelAutoApplyRetry();
-    this.stopLobbyLookup();
     this.patch({
       champSelect: null,
       inGame: false,
-      lobby: null,
       picks: { status: 'idle' },
       build: { status: 'idle' },
       buildTarget: null,
@@ -585,142 +426,6 @@ export class Controller {
     } finally {
       this.recovering = false;
     }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Lobby lookup (players of the game in progress)
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Once the game is running (never in champion select), looks its players up once; asks the API
-   * again until every player is in; stops when the game ends.
-   */
-  private syncLobbyLookup(): void {
-    if (this.lobby.stage !== 'game') {
-      this.stopLobbyLookup();
-      if (this.state.lobby) this.patch({ lobby: null });
-      return;
-    }
-    if (!canLookUpLobby(this.lobby.phase)) return;
-    const lookup = this.lobbyLookup;
-    if (!lookup) {
-      void this.startLobbyLookup();
-    } else if (!lookup.finished && !lookup.timer && !lookup.inFlight) {
-      // Back in game after the client was gone: carry on asking.
-      void this.pollLobby();
-    }
-  }
-
-  private async startLobbyLookup(): Promise<void> {
-    const api = this.lcuApi;
-    if (!api || this.lobbyStarting) return;
-    this.lobbyStarting = true;
-    try {
-      const [gameflow, me, hints] = await Promise.all([
-        api.getGameflowSession(),
-        api.getCurrentSummoner(),
-        api.getPlatformHints(),
-      ]);
-      if (api !== this.lcuApi || this.lobby.stage !== 'game' || this.lobbyLookup) return;
-      // The guard is applied again on what the client says now (never champion select).
-      const request =
-        gameflow && me ? lobbyRequestFromGameflow(gameflow, me, this.lobby.phase) : null;
-      if (!request) return; // tried again on the next client event
-      const platform = platformFromLcu(hints);
-      if (!platform) {
-        const server = hints.region ?? hints.platformId ?? 'unknown';
-        this.lobbyLookup = null;
-        this.patch({
-          lobby: lobbyView(
-            request,
-            null,
-            null,
-            'unsupported',
-            `Players are looked up on ${PLATFORMS.join(', ')} only (your server: ${server}).`,
-          ),
-        });
-        return;
-      }
-      this.lobbyLookup = {
-        request,
-        platform,
-        startedAt: Date.now(),
-        response: null,
-        timer: null,
-        inFlight: false,
-        finished: false,
-      };
-      this.deps.log(`game in progress: looking up ${request.players.length} players`);
-      this.patch({ lobby: lobbyView(request, platform, null, 'loading') });
-      void this.pollLobby();
-    } catch (e) {
-      this.deps.log(`lobby lookup not started: ${errorInfo(e).message}`);
-    } finally {
-      this.lobbyStarting = false;
-    }
-  }
-
-  private async pollLobby(): Promise<void> {
-    const lookup = this.lobbyLookup;
-    if (!lookup || lookup.finished || lookup.inFlight) return;
-    if (lookup.timer) clearTimeout(lookup.timer);
-    lookup.timer = null;
-    // Game over screen or client gone: resumed by `syncLobbyLookup` if the game is back.
-    if (!canLookUpLobby(this.lobby.phase)) return;
-    const showLobby = (state: LobbyState, message: string | null) =>
-      this.patch({
-        lobby: lobbyView(lookup.request, lookup.platform, lookup.response, state, message),
-      });
-    if (Date.now() - lookup.startedAt > (this.deps.lobbyMaxMs ?? LOBBY_MAX_MS)) {
-      lookup.finished = true;
-      showLobby('timeout', 'Stopped waiting: the worker did not look every player up in time.');
-      return;
-    }
-    lookup.inFlight = true;
-    const api = this.api;
-    try {
-      const res = await api.livePlayers({
-        platform: lookup.platform,
-        gameId: lookup.request.gameId,
-        me: lookup.request.me,
-        players: lookup.request.players,
-      });
-      if (lookup !== this.lobbyLookup || api !== this.api) return;
-      lookup.response = res;
-      lookup.finished = res.done;
-      showLobby(
-        res.worker === 'unsupported' ? 'unsupported' : res.done ? 'done' : 'loading',
-        WORKER_MESSAGE[res.worker] ?? GAME_MESSAGE[res.game],
-      );
-    } catch (e) {
-      if (lookup !== this.lobbyLookup || api !== this.api) return;
-      const info = errorInfo(e);
-      // An API without /live/players (older version) or refusing the request: no point retrying.
-      if (info.code === 'NOT_FOUND' || info.code === 'BAD_REQUEST') lookup.finished = true;
-      showLobby('error', info.message);
-    } finally {
-      lookup.inFlight = false;
-    }
-    if (lookup === this.lobbyLookup && !lookup.finished) {
-      lookup.timer = setTimeout(
-        () => void this.pollLobby(),
-        this.deps.lobbyPollMs ?? LOBBY_POLL_MS,
-      );
-    }
-  }
-
-  /** New API address, Retry after an error or a timeout: ask again from now. */
-  private restartLobbyPolling(): void {
-    const lookup = this.lobbyLookup;
-    if (!lookup) return;
-    lookup.startedAt = Date.now();
-    lookup.finished = false;
-    void this.pollLobby();
-  }
-
-  private stopLobbyLookup(): void {
-    if (this.lobbyLookup?.timer) clearTimeout(this.lobbyLookup.timer);
-    this.lobbyLookup = null;
   }
 
   // ---------------------------------------------------------------------------
@@ -791,17 +496,8 @@ export class Controller {
       if (api !== this.api) return;
       const refreshed =
         prev.status !== null && status.lastRefreshedAt !== prev.status.lastRefreshedAt;
-      let lastManual = prev.lastManual;
-      if (this.manualRefresh && !status.refreshing) {
-        lastManual = {
-          at: new Date().toISOString(),
-          result: refreshed ? 'done' : 'failed',
-          added: Math.max(0, status.matchesIncluded - this.manualRefresh.includedBefore),
-        };
-        this.manualRefresh = null;
-      }
-      this.patch({ stats: { status, refreshing: status.refreshing, lastManual } });
-      // New stats on the API (manual or timer refresh, its response cache was cleared).
+      this.patch({ stats: { status, refreshing: status.refreshing } });
+      // New stats on the API (its response cache was cleared).
       if (refreshed) {
         this.deps.log(`stats refreshed on the API (${status.matchesIncluded} matches)`);
         this.refetch();
@@ -810,13 +506,7 @@ export class Controller {
     } catch {
       if (api !== this.api) return;
       // API down or too old to serve /stats/status: keep the last known value, retry later.
-      if (this.manualRefresh) {
-        this.manualRefresh = null;
-        this.patchStats({
-          refreshing: false,
-          lastManual: { at: new Date().toISOString(), result: 'failed', added: 0 },
-        });
-      } else if (prev.refreshing) this.patchStats({ refreshing: false });
+      if (prev.refreshing) this.patchStats({ refreshing: false });
       this.scheduleStatsPoll(STATS_IDLE_POLL_MS);
     }
   }

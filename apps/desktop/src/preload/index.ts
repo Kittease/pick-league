@@ -8,7 +8,6 @@ const bridge: PickLeagueBridge = {
   applyNow: () => ipcRenderer.invoke(IPC.applyNow),
   previewBuild: (championId) => ipcRenderer.invoke(IPC.previewBuild, championId),
   refresh: () => ipcRenderer.invoke(IPC.refresh),
-  refreshStats: () => ipcRenderer.invoke(IPC.refreshStats),
   window: {
     getState: () => ipcRenderer.invoke(IPC.getWindowState),
     minimize: () => ipcRenderer.send(IPC.windowMinimize),

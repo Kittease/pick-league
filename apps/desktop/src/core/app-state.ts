@@ -12,14 +12,12 @@ import type {
   PicksResponse,
   Position,
   StaticDataResponse,
-  StatsRefreshSkipReason,
   StatsStatusResponse,
   TierListChampionResponse,
   TierListFilters,
   TierListResponse,
 } from '@pick-league/shared';
 import type { ChampSelectView } from './champ-select.ts';
-import type { LobbyView } from './live-lobby.ts';
 import type { FlashKey } from './spells.ts';
 
 export interface Settings {
@@ -56,22 +54,9 @@ export interface ApiStatus {
 export interface StatsState {
   /** null until the first answer (or when the API does not serve /stats/status). */
   status: StatsStatusResponse | null;
-  /** A refresh is running (reported by the API, or just requested from here). */
+  /** A refresh of the stats views is running on the API (it refreshes them on a timer). */
   refreshing: boolean;
-  /** Outcome of the last refresh requested from this app, once it is over (toasted once per `at`). */
-  lastManual: {
-    at: string;
-    result: 'done' | 'failed';
-    /** Matches the refresh added to the stats. */
-    added: number;
-  } | null;
 }
-
-/** Immediate answer to the Refresh button. */
-export type StatsRefreshOutcome =
-  | { kind: 'started' }
-  | { kind: 'skipped'; reason: StatsRefreshSkipReason; retryAfterSeconds?: number }
-  | { kind: 'error'; message: string };
 
 export type Loadable<T> =
   | { status: 'idle' }
@@ -104,17 +89,6 @@ export interface AppState {
    * until the game ends. Nothing is fetched (picks) nor applied anymore.
    */
   inGame: boolean;
-  /**
-   * Rank, recent form and mastery of the players of the game in progress (only once it has
-   * started, never in champion select). Players by champion and role: no names, no puuids.
-   * Null outside a game.
-   */
-  lobby: LobbyView | null;
-  /**
-   * The API confirmed the user is playing (queue → end of game): its stats refresh waits for
-   * the end of the game (collection goes on).
-   */
-  statsRefreshPaused: boolean;
   /** championId → the user's mastery. */
   mastery: Record<number, MasteryEntry>;
   /** Number of champions the account can play; null when unknown. */
@@ -138,7 +112,6 @@ export const IPC = {
   applyNow: 'pickleague:apply-now',
   previewBuild: 'pickleague:preview-build',
   refresh: 'pickleague:refresh',
-  refreshStats: 'pickleague:refresh-stats',
   getWindowState: 'window:get-state',
   windowState: 'window:state',
   windowMinimize: 'window:minimize',
@@ -174,8 +147,6 @@ export interface PickLeagueBridge {
   previewBuild(championId: number | null): Promise<void>;
   /** Re-run API calls (after fixing the API URL, for instance). */
   refresh(): Promise<void>;
-  /** Asks the API to include every stored match in its stats now; progress arrives in `stats`. */
-  refreshStats(): Promise<StatsRefreshOutcome>;
   /** Frameless window controls. */
   window: {
     getState(): Promise<WindowState>;

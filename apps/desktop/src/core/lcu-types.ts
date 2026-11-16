@@ -3,8 +3,7 @@
  * typed; the client sends many more. Identity fields (names, puuids) are deliberately absent,
  * except the puuids of a game in progress (`LcuGameflowPlayer`), only compared with the user's
  * own to find their team, and the user's own Riot ID. Other players' ids never leave the main
- * process (they are not the Riot API's anyway): the lobby lookup sends the user's own Riot ID and
- * the players by team, champion and role, and the worker finds the game through Riot.
+ * process.
  */
 
 /** `assignedPosition` in champion select; '' in blind/custom games. */
@@ -83,16 +82,6 @@ export interface LcuCurrentSummoner {
   gameName?: string;
   tagLine?: string;
   displayName?: string;
-}
-
-/**
- * Where the account plays, from two endpoints (either may be missing on some client versions):
- * `GET /lol-platform-config/v1/namespaces/LoginDataPacket/platformId` ("EUW1") and
- * `GET /riotclient/region-locale` → `region` ("EUW").
- */
-export interface LcuPlatformHints {
-  platformId: string | null;
-  region: string | null;
 }
 
 /** `GET /lol-perks/v1/pages` entry. */

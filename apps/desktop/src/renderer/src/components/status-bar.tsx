@@ -67,15 +67,6 @@ export function StatusBar({ state }: { state: AppState }) {
 
         <StatsFreshness state={state} />
 
-        {state.statsRefreshPaused && (
-          <span
-            className="hidden shrink-0 text-muted-foreground lg:inline"
-            title="While you queue and play, the stats refresh (heavy on CPU and memory) waits for the end of the match. New matches are still collected."
-          >
-            Stats refresh paused while you play
-          </span>
-        )}
-
         <span className="ml-auto flex shrink-0 items-center gap-3">
           <span className="hidden text-muted-foreground xl:inline">
             Auto-apply {state.settings.autoApply ? 'on' : 'off'}

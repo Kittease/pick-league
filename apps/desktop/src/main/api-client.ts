@@ -5,21 +5,14 @@ import {
   type ApiErrorResponse,
   type BuildRequestInput,
   type BuildResponse,
-  CLIENT_ACTIVITY_ROUTE,
-  type ClientActivityRequest,
-  type ClientActivityResponse,
   DEFAULT_TIER_LIST_FILTERS,
   type DraftEvaluationResponse,
   type DraftRequestInput,
   type HealthResponse,
-  LIVE_PLAYERS_ROUTE,
-  type LivePlayersRequest,
-  type LivePlayersResponse,
   type PicksRequestInput,
   type PicksResponse,
   type Position,
   type StaticDataResponse,
-  type StatsRefreshResponse,
   type StatsStatusResponse,
   TIER_LIST_CHAMPION_ROUTE,
   TIER_LIST_ROUTE,
@@ -51,12 +44,6 @@ export interface ApiClient {
   /** Win probability and damage split of a draft in any state. */
   draft(request: DraftRequestInput): Promise<DraftEvaluationResponse>;
   statsStatus(): Promise<StatsStatusResponse>;
-  /** Asks the API to refresh its stats views now (answers immediately). */
-  statsRefresh(): Promise<StatsRefreshResponse>;
-  /** Queues the lookups of a game's players; repeat until `done` (never cached). */
-  livePlayers(request: LivePlayersRequest): Promise<LivePlayersResponse>;
-  /** Says what the user does in the League client (collection pauses while they play). */
-  clientActivity(request: ClientActivityRequest): Promise<ClientActivityResponse>;
   tierList(role: Position, filters?: TierListFilters, patch?: string): Promise<TierListResponse>;
   tierListChampion(
     role: Position,
@@ -76,11 +63,11 @@ export function createApiClient(
 ): ApiClient {
   const base = normaliseApiUrl(baseUrl);
 
-  async function call<T>(path: string, body?: unknown, method?: 'POST' | 'PUT'): Promise<T> {
+  async function call<T>(path: string, body?: unknown): Promise<T> {
     let res: Response;
     try {
       res = await doFetch(`${base}${path}`, {
-        method: method ?? (body === undefined ? 'GET' : 'POST'),
+        method: body === undefined ? 'GET' : 'POST',
         headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -120,9 +107,6 @@ export function createApiClient(
     build: (request) => call(API_ROUTES.build, request),
     draft: (request) => call(API_ROUTES.draft, request),
     statsStatus: () => call(API_ROUTES.statsStatus),
-    statsRefresh: () => call(API_ROUTES.statsRefresh, undefined, 'POST'),
-    livePlayers: (request) => call(LIVE_PLAYERS_ROUTE, request),
-    clientActivity: (request) => call(CLIENT_ACTIVITY_ROUTE, request, 'PUT'),
     tierList: (role, filters = DEFAULT_TIER_LIST_FILTERS, patch = 'latest') =>
       call(`${TIER_LIST_ROUTE}?${new URLSearchParams({ role, patch, ...filters })}`),
     tierListChampion: (role, championId, filters = DEFAULT_TIER_LIST_FILTERS, patch = 'latest') =>

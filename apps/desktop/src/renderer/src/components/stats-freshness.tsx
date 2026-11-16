@@ -1,7 +1,5 @@
 import { RefreshCwIcon, TriangleAlertIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { type CollectionWarning, collectionWarning } from '@/lib/collection';
 import { compact, timeAgo } from '@/lib/format';
@@ -16,21 +14,6 @@ function useNow(ms: number): number {
     return () => clearInterval(t);
   }, [ms]);
   return now;
-}
-
-async function requestRefresh() {
-  const out = await window.pickleague.refreshStats();
-  if (out.kind === 'error') toast.error('Refresh failed', { description: out.message });
-  else if (out.kind === 'skipped' && out.reason === 'up_to_date')
-    toast('Already up to date', { description: 'The stats include every stored match.' });
-  else if (out.kind === 'skipped' && out.reason === 'playing')
-    toast('Runs after your match', {
-      description: 'The refresh is heavy: it waits until the match is over.',
-    });
-  else if (out.kind === 'skipped' && out.reason === 'cooldown')
-    toast.warning('Refreshed moments ago', {
-      description: `Try again in ${out.retryAfterSeconds ?? 60} s.`,
-    });
 }
 
 /** Collection stopped (rejected Riot key, worker down), when the API is up and says so. */
@@ -93,26 +76,11 @@ function CollectionBadge({ warning, now }: { warning: CollectionWarning; now: nu
   );
 }
 
-/** Header item: how fresh the API's stats are + a button to include the newest matches. */
+/** Header item: how fresh the API's stats are (the API refreshes them every hour). */
 export function StatsFreshness({ state }: { state: AppState }) {
   const warning = warningOf(state);
-  const { status, refreshing, lastManual } = state.stats;
+  const { status, refreshing } = state.stats;
   const now = useNow(30_000);
-
-  // Toast each finished manual refresh once.
-  const [toastedAt, setToastedAt] = useState<string | null>(lastManual?.at ?? null);
-  useEffect(() => {
-    if (!lastManual || lastManual.at === toastedAt) return;
-    setToastedAt(lastManual.at);
-    if (lastManual.result === 'done')
-      toast.success('Stats refreshed', {
-        description:
-          lastManual.added > 0
-            ? `${lastManual.added.toLocaleString()} new matches included — recommendations updated.`
-            : 'Recommendations updated.',
-      });
-    else toast.error('Refresh did not complete', { description: 'Check the API logs.' });
-  }, [lastManual, toastedAt]);
 
   if (state.api.state !== 'ok' || !status) return null;
   const pending = status.pendingMatches;
@@ -124,36 +92,26 @@ export function StatsFreshness({ state }: { state: AppState }) {
   const tip = refreshing
     ? 'The API is recomputing its stats; recommendations reload when it is done.'
     : pending > 0
-      ? `Include ${pending.toLocaleString()} new matches in the stats`
-      : 'Stats include every stored match — check again';
+      ? `${pending.toLocaleString()} new matches are included at the next hourly refresh.`
+      : 'The stats include every stored match. The API refreshes them every hour.';
 
   return (
     <span className="flex shrink-0 items-center gap-2">
-      <span className="text-muted-foreground">Stats</span>
-      <span className={cn(refreshing && 'text-primary')}>
-        {!refreshing && status.lastRefreshedAt && (
-          <span className="hidden text-muted-foreground lg:inline">updated </span>
-        )}
-        {label}
-      </span>
-      {!refreshing && pending > 0 && (
-        <span className="num whitespace-nowrap bg-gold/15 px-1.5 py-px text-[10px] font-semibold text-gold">
-          +{compact(pending)} new
-        </span>
-      )}
       <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Refresh stats"
-              disabled={refreshing}
-              onClick={() => void requestRefresh()}
-            />
-          }
-        >
-          <RefreshCwIcon className={cn(refreshing && 'animate-spin')} />
+        <TooltipTrigger render={<span className="flex shrink-0 items-center gap-2" />}>
+          <span className="text-muted-foreground">Stats</span>
+          <span className={cn(refreshing && 'text-primary')}>
+            {!refreshing && status.lastRefreshedAt && (
+              <span className="hidden text-muted-foreground lg:inline">updated </span>
+            )}
+            {label}
+          </span>
+          {refreshing && <RefreshCwIcon className="size-3.5 animate-spin text-primary" />}
+          {!refreshing && pending > 0 && (
+            <span className="num whitespace-nowrap bg-gold/15 px-1.5 py-px text-[10px] font-semibold text-gold">
+              +{compact(pending)} new
+            </span>
+          )}
         </TooltipTrigger>
         <TooltipContent side="bottom">{tip}</TooltipContent>
       </Tooltip>

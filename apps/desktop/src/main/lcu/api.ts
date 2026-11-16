@@ -1,8 +1,8 @@
 /**
  * Typed LCU endpoints. Reads: champion select, gameflow, owned champions, mastery, current
- * summoner, platform/region, rune pages. Writes are limited to the PickLeague rune page and the
- * local player's summoner spells — the helper never picks, bans, locks in, accepts or reveals
- * other players' identities (the puuids of a game in progress only go to the user's own API).
+ * summoner, rune pages. Writes are limited to the PickLeague rune page and the local player's
+ * summoner spells — the helper never picks, bans, locks in, accepts or reveals other players'
+ * identities (the puuids of a game in progress never leave the main process).
  */
 
 import type {
@@ -16,7 +16,6 @@ import type {
   LcuPerkInventory,
   LcuPerkPage,
   LcuPerkPageInput,
-  LcuPlatformHints,
 } from '../../core/lcu-types.ts';
 
 export type LcuMethod = 'GET' | 'POST' | 'PUT' | 'PATCH';
@@ -39,8 +38,6 @@ export class LcuHttpError extends Error {
 export const CHAMP_SELECT_SESSION_PATH = '/lol-champ-select/v1/session';
 export const GAMEFLOW_PHASE_PATH = '/lol-gameflow/v1/gameflow-phase';
 export const GAMEFLOW_SESSION_PATH = '/lol-gameflow/v1/session';
-export const PLATFORM_ID_PATH = '/lol-platform-config/v1/namespaces/LoginDataPacket/platformId';
-export const REGION_LOCALE_PATH = '/riotclient/region-locale';
 
 export interface LcuApi {
   getChampSelectSession(): Promise<LcuChampSelectSession | null>;
@@ -49,8 +46,6 @@ export interface LcuApi {
   getOwnedChampions(): Promise<LcuOwnedChampion[]>;
   getMastery(): Promise<LcuChampionMastery[]>;
   getCurrentSummoner(): Promise<LcuCurrentSummoner | null>;
-  /** The account's platform id and region (either null when the client does not serve it). */
-  getPlatformHints(): Promise<LcuPlatformHints>;
   getPerkPages(): Promise<LcuPerkPage[]>;
   getPerkInventory(): Promise<LcuPerkInventory>;
   createPerkPage(page: LcuPerkPageInput): Promise<LcuPerkPage>;
@@ -88,20 +83,6 @@ export function createLcuApi(send: LcuTransport): LcuApi {
       return Array.isArray(wrapped) ? (wrapped as LcuChampionMastery[]) : [];
     },
     getCurrentSummoner: () => orNullOn404(send('GET', '/lol-summoner/v1/current-summoner')),
-    async getPlatformHints() {
-      const text = (v: PromiseSettledResult<unknown>, pick: (x: unknown) => unknown) => {
-        const s = v.status === 'fulfilled' ? pick(v.value) : null;
-        return typeof s === 'string' && s.trim() !== '' ? s.trim() : null;
-      };
-      const [platformId, regionLocale] = await Promise.allSettled([
-        send('GET', PLATFORM_ID_PATH),
-        send('GET', REGION_LOCALE_PATH),
-      ]);
-      return {
-        platformId: text(platformId, (x) => x),
-        region: text(regionLocale, (x) => (x as { region?: unknown } | null)?.region),
-      };
-    },
     async getPerkPages() {
       const pages = await send('GET', '/lol-perks/v1/pages');
       return Array.isArray(pages) ? (pages as LcuPerkPage[]) : [];
