@@ -3,6 +3,8 @@
 # Caddy renews them by itself.
 {
 	admin off
+	# Clients send no SNI to a bare IP: serve this host's certificate to them.
+	default_sni {$PUBLIC_HOST}
 }
 
 {$PUBLIC_HOST} {
