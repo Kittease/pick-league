@@ -1,0 +1,7 @@
+[Unit]
+Description=PickLeague watchdog (restarts unhealthy services)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/pick-league/deploy/watchdog.sh

@@ -1,0 +1,7 @@
+[Unit]
+Description=PickLeague worker socket count
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/pick-league/deploy/sockets.sh
