@@ -1,0 +1,17 @@
+# Public door of the API (docs/architecture.md, "Docker"). PUBLIC_HOST is the VPS's IPv4 (or a
+# domain later). Let's Encrypt issues IP certificates only on its short-lived profile (6 days);
+# Caddy renews them by itself.
+{
+	admin off
+}
+
+{$PUBLIC_HOST} {
+	tls {
+		issuer acme {
+			profile shortlived
+		}
+	}
+	encode zstd gzip
+	reverse_proxy api:3000
+	log
+}

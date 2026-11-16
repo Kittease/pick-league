@@ -23,6 +23,21 @@ services:
     image: postgres:17
     restart: unless-stopped
     logging: *logging
+    # Sized for a 12 GB / 6-core VPS: Postgres gets 7 GB, the API 1 GB, the worker 512 MB, the
+    # rest is left to the OS page cache. /dev/shm is big enough for parallel hash joins.
+    shm_size: 1g
+    mem_limit: 7g
+    cpus: 5
+    command: >-
+      postgres
+      -c shared_buffers=3GB
+      -c effective_cache_size=8GB
+      -c work_mem=64MB
+      -c maintenance_work_mem=512MB
+      -c max_wal_size=8GB
+      -c max_parallel_workers_per_gather=4
+      -c max_parallel_maintenance_workers=2
+      -c random_page_cost=1.1
     environment:
       POSTGRES_USER: pickleague
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pickleague}
@@ -43,6 +58,8 @@ services:
       context: .
       target: worker
     image: pick-league-worker
+    mem_limit: 512m
+    cpus: 1
     env_file:
       - path: .env
         required: false
@@ -56,6 +73,8 @@ services:
       context: .
       target: api
     image: pick-league-api
+    mem_limit: 1g
+    cpus: 2
     environment:
       DATABASE_URL: postgres://pickleague:${POSTGRES_PASSWORD:-pickleague}@postgres:5432/pickleague
       PORT: "3000"
@@ -67,7 +86,8 @@ services:
       STATS_REFRESH_MINUTES: ${STATS_REFRESH_MINUTES:-}
       STATS_MANUAL_REFRESH_COOLDOWN_SECONDS: ${STATS_MANUAL_REFRESH_COOLDOWN_SECONDS:-}
     ports:
-      - "${API_PORT:-3000}:3000"
+      # Loopback only: Docker-published ports bypass ufw. The reverse proxy is the public door.
+      - "127.0.0.1:${API_PORT:-3000}:3000"
     # `docker compose ps` shows "unhealthy" when /health stops answering (the slim image has no curl).
     healthcheck:
       test:
@@ -82,5 +102,24 @@ services:
       retries: 3
       start_period: 60s
 
+  # TLS reverse proxy, the only service reachable from the internet (ports 80 + 443).
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: 256m
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - api
+
 volumes:
   pgdata:
+  caddy_data:
