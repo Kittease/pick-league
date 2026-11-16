@@ -17,7 +17,9 @@
     "dev:worker": "bun run --filter @pick-league/worker dev",
     "dev:api": "bun run --filter @pick-league/api dev",
     "dev:desktop": "bun run --filter @pick-league/desktop dev",
-    "build:desktop": "bun run --filter @pick-league/desktop build"
+    "dev:web": "bun run --filter @pick-league/web dev",
+    "build:desktop": "bun run --filter @pick-league/desktop build",
+    "build:web": "bun run --filter @pick-league/web build"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.7",

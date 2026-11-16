@@ -1,0 +1,12 @@
+/* Shared theme (Tailwind, tokens, fonts, base styles) from @pick-league/ui, then the web app's own rules. */
+@import "@pick-league/ui/styles/globals.css";
+
+/* This app's own sources (the shared package's are declared by globals.css). */
+@source "../";
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+}

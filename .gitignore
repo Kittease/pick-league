@@ -16,3 +16,8 @@ docker-compose.override.yml
 
 # Local agent worktrees
 .claude/worktrees/
+
+# Next.js
+.next/
+next-env.d.ts
+.vercel
