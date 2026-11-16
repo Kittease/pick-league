@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import type { Db } from './client.ts';
 import {
   claimEnrichment,
-  claimLiveLookups,
   claimPendingMatches,
   clearWorkerAuthRejected,
   completeEnrichment,
@@ -13,12 +12,9 @@ import {
   enqueueEnrichment,
   enqueueMatchIds,
   failEnrichment,
-  failLiveLookup,
   finishListing,
-  finishLiveLookup,
   finishWorkerRun,
   getLatestPatch,
-  getLiveProfiles,
   getMatchesSyncedUntil,
   insertParsedMatch,
   listMigrationFiles,
@@ -32,18 +28,12 @@ import {
   pickProbeMatch,
   playersNeedingDailyRefresh,
   playersWithListingRequested,
-  purgeLiveLookups,
   purgeOrphanPlayers,
   recordWorkerError,
   replaceMasteries,
-  requestLiveLookups,
   setMatchesSyncedUntil,
   skipPendingMatchesUpTo,
   startWorkerRun,
-  storedRecentMatches,
-  storeLiveMastery,
-  storeLiveRank,
-  storeLiveRecent,
   touchWorkerStatus,
   updatePlayerRank,
   updatePlayerRiotId,
@@ -545,181 +535,6 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       await clearWorkerAuthRejected(db, 'KR');
       [kr] = await listWorkerStatus(db);
       expect(kr?.authRejectedSince).toBeNull();
-    });
-  });
-
-  describe('live lookups', () => {
-    const t = (min: number) => new Date(Date.UTC(2026, 10, 13, 12, min));
-    const live = (n: number) => `fake-live-puuid-${n}`;
-    const recentMatch = (id: string, championId: number) => ({
-      matchId: id,
-      championId,
-      position: 'MIDDLE' as const,
-      win: true,
-      remake: false,
-      endedAt: t(0).toISOString(),
-    });
-
-    /** Fetches every part of the PENDING lookups, like the worker does. */
-    async function complete(now: Date) {
-      for (const job of await claimLiveLookups(db, 'EUW1', 20)) {
-        if (job.needsRank) {
-          await storeLiveRank(
-            db,
-            job.puuid,
-            job.requestSeq,
-            { tier: 'DIAMOND', division: 2, lp: 40, wins: 30, losses: 20 },
-            now,
-          );
-        }
-        for (const c of job.masteryChampionIds) {
-          await storeLiveMastery(db, job.puuid, c, { level: 7, points: 54_000 }, now);
-        }
-        if (job.needsRecent) {
-          await storeLiveRecent(db, job.puuid, job.requestSeq, [recentMatch('EUW1_1', 99)], now);
-        }
-        expect(await finishLiveLookup(db, job.puuid, now)).toBe(true);
-      }
-    }
-
-    test('request → claim → parts stored → READY, reused for 30 min, then fetched again', async () => {
-      const players = [
-        { puuid: live(1), championId: 99 },
-        { puuid: live(2), championId: 12 },
-      ];
-      expect(await requestLiveLookups(db, 'EUW1', players, { now: t(0) })).toEqual([
-        live(1),
-        live(2),
-      ]);
-      // Asked again while PENDING: nothing more to do.
-      expect(await requestLiveLookups(db, 'EUW1', players, { now: t(1) })).toEqual([]);
-      const jobs = await claimLiveLookups(db, 'EUW1', 20);
-      expect(jobs).toEqual([
-        {
-          puuid: live(1),
-          platform: 'EUW1',
-          requestSeq: 1,
-          needsRank: true,
-          needsRecent: true,
-          masteryChampionIds: [99],
-          previousRecent: [],
-          attempts: 0,
-        },
-        expect.objectContaining({ puuid: live(2), masteryChampionIds: [12] }),
-      ]);
-      expect(await claimLiveLookups(db, 'KR', 20)).toEqual([]);
-
-      // Rank first: readable before the rest.
-      await storeLiveRank(db, live(1), 1, null, t(1));
-      expect(await finishLiveLookup(db, live(1), t(1))).toBe(false);
-      let [p1] = await getLiveProfiles(db, [players[0] as (typeof players)[0]]);
-      expect(p1).toMatchObject({ status: 'PENDING', rankLoaded: true, rank: null, recent: null });
-      expect(p1?.mastery).toBeNull();
-
-      await complete(t(2));
-      const profiles = await getLiveProfiles(db, players);
-      expect(profiles).toHaveLength(2);
-      p1 = profiles.find((p) => p.puuid === live(1));
-      expect(p1).toMatchObject({
-        status: 'READY',
-        rankLoaded: true,
-        mastery: { level: 7, points: 54_000 },
-        recent: [recentMatch('EUW1_1', 99)],
-      });
-      expect(profiles.find((p) => p.puuid === live(2))?.rank).toEqual({
-        tier: 'DIAMOND',
-        division: 2,
-        lp: 40,
-        wins: 30,
-        losses: 20,
-      });
-
-      expect(await requestLiveLookups(db, 'EUW1', players, { now: t(20) })).toEqual([]);
-      expect(await requestLiveLookups(db, 'EUW1', players, { now: t(33) })).toEqual([
-        live(1),
-        live(2),
-      ]);
-      const [again] = await claimLiveLookups(db, 'EUW1', 1);
-      expect(again).toMatchObject({
-        requestSeq: 2,
-        needsRank: true,
-        needsRecent: true,
-        masteryChampionIds: [99],
-        previousRecent: [recentMatch('EUW1_1', 99)],
-      });
-      // While it is fetched again, the previous data stays readable.
-      expect((await getLiveProfiles(db, [{ puuid: live(1), championId: 99 }]))[0]).toMatchObject({
-        status: 'PENDING',
-        rankLoaded: true,
-        recent: [recentMatch('EUW1_1', 99)],
-        mastery: null,
-      });
-    });
-
-    test('a fresh profile asked about another champion only fetches that mastery', async () => {
-      await requestLiveLookups(db, 'EUW1', [{ puuid: live(1), championId: 99 }], { now: t(0) });
-      await complete(t(1));
-      expect(
-        await requestLiveLookups(db, 'EUW1', [{ puuid: live(1), championId: 7 }], { now: t(5) }),
-      ).toEqual([live(1)]);
-      expect(await claimLiveLookups(db, 'EUW1', 20)).toEqual([
-        expect.objectContaining({
-          needsRank: false,
-          needsRecent: false,
-          masteryChampionIds: [7],
-          requestSeq: 1,
-        }),
-      ]);
-      await complete(t(6));
-      const [p] = await getLiveProfiles(db, [{ puuid: live(1), championId: 7 }]);
-      expect(p).toMatchObject({ status: 'READY', mastery: { level: 7, points: 54_000 } });
-    });
-
-    test('failures: PENDING until the last attempt, FAILED retried only after a cooldown', async () => {
-      await requestLiveLookups(db, 'EUW1', [{ puuid: live(1), championId: 99 }], { now: t(0) });
-      expect(await failLiveLookup(db, live(1), 'boom', 2, t(0))).toBe('PENDING');
-      expect((await claimLiveLookups(db, 'EUW1', 20))[0]?.attempts).toBe(1);
-      expect(await failLiveLookup(db, live(1), 'boom again', 2, t(1))).toBe('FAILED');
-      expect(await claimLiveLookups(db, 'EUW1', 20)).toEqual([]);
-      const [p] = await getLiveProfiles(db, [{ puuid: live(1), championId: 99 }]);
-      expect(p).toMatchObject({ status: 'FAILED', lastError: 'boom again' });
-
-      const ask = (min: number) =>
-        requestLiveLookups(db, 'EUW1', [{ puuid: live(1), championId: 99 }], { now: t(min) });
-      expect(await ask(3)).toEqual([]);
-      expect(await ask(7)).toEqual([live(1)]);
-      expect((await claimLiveLookups(db, 'EUW1', 20))[0]).toMatchObject({
-        attempts: 0,
-        requestSeq: 2,
-      });
-    });
-
-    test('stored matches are read from participants; old lookups are purged', async () => {
-      await upsertPatchStaticData(db, staticPatch('15.22'));
-      await insertParsedMatch(db, parsedMatch('EUW1_10', '15.22', TEN));
-      const stored = await storedRecentMatches(db, fakePuuid(3), ['EUW1_10', 'EUW1_11']);
-      expect(stored).toEqual([
-        {
-          matchId: 'EUW1_10',
-          championId: 3,
-          position: 'MIDDLE',
-          win: true,
-          remake: false,
-          endedAt: '2026-11-01T12:30:00.000Z',
-        },
-      ]);
-      // Looked-up data never touches the stats tables.
-      await requestLiveLookups(db, 'EUW1', [{ puuid: live(1), championId: 99 }], { now: t(0) });
-      await requestLiveLookups(db, 'EUW1', [{ puuid: live(2), championId: 99 }], { now: t(30) });
-      await complete(t(31));
-      expect((await db`SELECT 1 FROM players WHERE puuid LIKE 'fake-live-%'`).length).toBe(0);
-      expect(await purgeLiveLookups(db, t(10))).toBe(1);
-      expect((await db`SELECT puuid FROM live_player_profiles`).map((r) => r.puuid)).toEqual([
-        live(2),
-      ]);
-      expect((await db`SELECT puuid FROM live_player_masteries`).map((r) => r.puuid)).toEqual([
-        live(2),
-      ]);
     });
   });
 });
