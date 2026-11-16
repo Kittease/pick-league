@@ -34,6 +34,8 @@ const sweep = setInterval(() => limiter?.sweep(), 60_000);
 const refreshDb = createDb(config.databaseUrl, { max: 2 });
 const refresher = new StatsRefresher(refreshDb, {
   intervalMs: config.statsRefreshIntervalMs,
+  parallelWorkers: config.statsRefreshParallelWorkers,
+  workMem: config.statsRefreshWorkMem,
   statusDb: db,
   log: (msg, fields) => log.info(msg, fields),
   onRefreshed: () => cache.clear(),

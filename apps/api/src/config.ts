@@ -18,6 +18,10 @@ export interface ApiConfig {
   apiToken: string | undefined;
   /** How often to check whether the stats views need a refresh. */
   statsRefreshIntervalMs: number;
+  /** Parallel workers per stats refresh query (0 = serial, for a small /dev/shm). */
+  statsRefreshParallelWorkers: number;
+  /** work_mem of the stats refresh session. */
+  statsRefreshWorkMem: string;
 }
 
 function int(env: Record<string, string | undefined>, name: string, fallback: number): number {
@@ -42,5 +46,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     trustProxy: env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true',
     apiToken: env.API_TOKEN?.trim() || undefined,
     statsRefreshIntervalMs: int(env, 'STATS_REFRESH_MINUTES', 60) * 60_000,
+    statsRefreshParallelWorkers: int(env, 'STATS_REFRESH_PARALLEL_WORKERS', 0),
+    statsRefreshWorkMem: /^\d+(kB|MB|GB)$/.test(env.STATS_REFRESH_WORK_MEM ?? '')
+      ? (env.STATS_REFRESH_WORK_MEM as string)
+      : '256MB',
   };
 }

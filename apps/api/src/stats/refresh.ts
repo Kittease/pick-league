@@ -63,6 +63,11 @@ export interface RefreshOptions {
   log?: (msg: string, fields?: Record<string, unknown>) => void;
   /** Session work_mem for the refresh (default '256MB'). */
   workMem?: string;
+  /**
+   * Parallel workers per query (`max_parallel_workers_per_gather`, default 0). Their hash tables
+   * live in /dev/shm: only raise it where Postgres has enough of it (the compose file gives 1 GB).
+   */
+  parallelWorkers?: number;
   /** Views to refresh, in order (default `STATS_REFRESH_ORDER`; tests use a shorter list). */
   views?: typeof STATS_REFRESH_ORDER;
 }
@@ -184,10 +189,11 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
         RETURNING id`;
       try {
         await conn.unsafe(`SET work_mem = '${(options.workMem ?? '256MB').replace(/'/g, '')}'`);
-        // No parallel workers: their hash tables live in /dev/shm (64 MB in Docker by default), so
-        // with this work_mem the big joins failed with "could not resize shared memory segment"
-        // past ~65k matches. Serial plans spill to disk instead, and use a third of the memory.
-        await conn.unsafe('SET max_parallel_workers_per_gather = 0');
+        // Serial by default: parallel workers keep their hash tables in /dev/shm (64 MB in Docker by
+        // default), and with this work_mem the big joins failed with "could not resize shared
+        // memory segment" past ~65k matches. Serial plans spill to disk instead.
+        const workers = Math.max(0, Math.floor(options.parallelWorkers ?? 0));
+        await conn.unsafe(`SET max_parallel_workers_per_gather = ${workers}`);
         // Fresh planner statistics: the views join large tables whose size changes a lot.
         await conn.unsafe('ANALYZE matches, participants, item_events, skill_events');
         for (const step of options.views ?? STATS_REFRESH_ORDER) {

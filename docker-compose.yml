@@ -84,6 +84,9 @@ services:
       RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-}
       TRUST_PROXY: ${TRUST_PROXY:-}
       STATS_REFRESH_MINUTES: ${STATS_REFRESH_MINUTES:-}
+      # Postgres has 1 GB of /dev/shm here (see the postgres service): parallel refresh queries.
+      STATS_REFRESH_PARALLEL_WORKERS: ${STATS_REFRESH_PARALLEL_WORKERS:-4}
+      STATS_REFRESH_WORK_MEM: ${STATS_REFRESH_WORK_MEM:-128MB}
       # Gateway token: every route but /health then needs `Authorization: Bearer <API_TOKEN>`.
       API_TOKEN: ${API_TOKEN:-}
     ports:
