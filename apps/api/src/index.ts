@@ -48,9 +48,10 @@ const app = createApp({
   log,
   stats: refresher,
   trustProxy: config.trustProxy,
+  apiToken: config.apiToken,
 });
 const server = Bun.serve({ port: config.port, fetch: app.fetch });
-log.info('listening', { port: server.port });
+log.info('listening', { port: server.port, auth: config.apiToken ? 'token' : 'none' });
 
 const shutdown = async () => {
   log.info('shutting down');

@@ -11,6 +11,11 @@ export interface ApiConfig {
   rateLimitPerMinute: number;
   rateLimitBurst: number;
   trustProxy: boolean;
+  /**
+   * Bearer token every route but `GET /health` requires (the gateway's), which then also gives
+   * the visitor IP in `X-Client-IP`. Unset (local dev): no auth.
+   */
+  apiToken: string | undefined;
   /** How often to check whether the stats views need a refresh. */
   statsRefreshIntervalMs: number;
 }
@@ -35,6 +40,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     rateLimitPerMinute: int(env, 'RATE_LIMIT_PER_MINUTE', 120),
     rateLimitBurst: int(env, 'RATE_LIMIT_BURST', 30),
     trustProxy: env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true',
+    apiToken: env.API_TOKEN?.trim() || undefined,
     statsRefreshIntervalMs: int(env, 'STATS_REFRESH_MINUTES', 60) * 60_000,
   };
 }

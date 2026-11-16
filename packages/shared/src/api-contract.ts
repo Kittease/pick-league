@@ -44,6 +44,8 @@ export const API_ROUTES = {
 export const API_ERROR_CODES = [
   /** 400: invalid body/params (details = zod issues). */
   'BAD_REQUEST',
+  /** 401: missing or wrong `Authorization: Bearer` token (only when the API has `API_TOKEN`). */
+  'UNAUTHORIZED',
   /** 404: unknown route, unknown patch, unknown champion. */
   'NOT_FOUND',
   /** 413: request body over `MAX_REQUEST_BODY_BYTES`. */

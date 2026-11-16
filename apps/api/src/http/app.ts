@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { Db } from '@pick-league/db';
 import {
   API_ROUTES,
@@ -12,7 +13,6 @@ import {
 } from '@pick-league/shared';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { cors } from 'hono/cors';
 import type { z } from 'zod';
 import { ApiError } from '../errors.ts';
 import type { Logger } from '../logger.ts';
@@ -41,6 +41,11 @@ export interface AppDeps {
   stats?: StatsControl;
   /** Use the first X-Forwarded-For address as client IP (behind a reverse proxy). */
   trustProxy?: boolean;
+  /**
+   * When set, every route but `GET /health` needs `Authorization: Bearer <apiToken>` (the
+   * gateway's), and the client IP is the visitor's the gateway sends in `X-Client-IP`.
+   */
+  apiToken?: string;
 }
 
 interface BunServerLike {
@@ -64,6 +69,15 @@ export function clientIp(c: Context<Env>, trustProxy: boolean): string {
   }
 }
 
+const digest = (value: string) => createHash('sha256').update(value).digest();
+
+/** Constant-time check of an `Authorization: Bearer <token>` header. */
+export function hasBearerToken(header: string | undefined, token: string): boolean {
+  const match = /^Bearer (.+)$/.exec(header ?? '');
+  // Both sides hashed to the same length: neither the length nor the content leaks by timing.
+  return match?.[1] !== undefined && timingSafeEqual(digest(match[1]), digest(token));
+}
+
 async function parseBody<S extends z.ZodType>(c: Context<Env>, schema: S): Promise<z.infer<S>> {
   let body: unknown;
   try {
@@ -79,7 +93,21 @@ async function parseBody<S extends z.ZodType>(c: Context<Env>, schema: S): Promi
 
 export function createApp(deps: AppDeps): Hono<Env> {
   const { db, cache, limiter, log } = deps;
+  const apiToken = deps.apiToken || undefined;
   const app = new Hono<Env>();
+
+  /**
+   * The visitor's IP. Behind the gateway (token set, so the request carried it) that is the
+   * `X-Client-IP` the gateway sends; otherwise the socket's, or `X-Forwarded-For` with
+   * `trustProxy`.
+   */
+  const ipOf = (c: Context<Env>): string => {
+    if (apiToken) {
+      const visitor = c.req.header('x-client-ip')?.trim();
+      if (visitor && hasBearerToken(c.req.header('authorization'), apiToken)) return visitor;
+    }
+    return clientIp(c, deps.trustProxy ?? false);
+  };
 
   app.use('*', async (c, next) => {
     const started = performance.now();
@@ -89,21 +117,21 @@ export function createApp(deps: AppDeps): Hono<Env> {
       path: c.req.path,
       status: c.res.status,
       ms: Math.round((performance.now() - started) * 10) / 10,
-      ip: clientIp(c, deps.trustProxy ?? false),
+      ip: ipOf(c),
       ...(c.get('cache') ? { cache: c.get('cache') } : {}),
     });
   });
-  app.use(
-    '*',
-    cors({
-      origin: '*',
-      allowMethods: ['GET', 'POST', 'OPTIONS'],
-      allowHeaders: ['Content-Type'],
-    }),
-  );
+  // No CORS: browsers never call the API, only the web app's server (the gateway) does.
   app.use('*', async (c, next) => {
-    if (limiter && c.req.method !== 'OPTIONS' && c.req.path !== API_ROUTES.health) {
-      const decision = limiter.take(clientIp(c, deps.trustProxy ?? false));
+    const open = c.req.method === 'GET' && c.req.path === API_ROUTES.health;
+    if (apiToken && !open && !hasBearerToken(c.req.header('authorization'), apiToken)) {
+      throw new ApiError('UNAUTHORIZED', 'Missing or invalid API token');
+    }
+    await next();
+  });
+  app.use('*', async (c, next) => {
+    if (limiter && c.req.path !== API_ROUTES.health) {
+      const decision = limiter.take(ipOf(c));
       if (!decision.allowed) {
         c.header('Retry-After', String(decision.retryAfterS));
         throw new ApiError('RATE_LIMITED', `Too many requests, retry in ${decision.retryAfterS}s`);

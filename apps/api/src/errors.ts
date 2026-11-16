@@ -2,6 +2,7 @@ import type { ApiErrorCode, ApiErrorResponse } from '@pick-league/shared';
 
 const STATUS: Record<ApiErrorCode, number> = {
   BAD_REQUEST: 400,
+  UNAUTHORIZED: 401,
   NOT_FOUND: 404,
   PAYLOAD_TOO_LARGE: 413,
   RATE_LIMITED: 429,

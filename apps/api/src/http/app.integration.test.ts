@@ -165,7 +165,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(((await missing.json()) as ApiErrorResponse).error.code).toBe('NOT_FOUND');
   });
 
-  test('unknown route and CORS', async () => {
+  test('unknown route, no CORS', async () => {
     const res = await get('/nope');
     expect(res.status).toBe(404);
     expect(((await res.json()) as ApiErrorResponse).error.code).toBe('NOT_FOUND');
@@ -173,7 +173,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       method: 'OPTIONS',
       headers: { origin: 'http://localhost:5173', 'access-control-request-method': 'POST' },
     });
-    expect(pre.headers.get('access-control-allow-origin')).toBe('*');
+    expect(pre.headers.get('access-control-allow-origin')).toBeNull();
   });
 
   test('POST /recommendations/picks validates the body', async () => {
