@@ -3,13 +3,9 @@
  * Runs in the background (never blocks requests): served views are refreshed CONCURRENTLY,
  * intermediate ones (only read by the refresh itself) plainly. A Postgres advisory lock keeps
  * several API instances from refreshing at the same time.
- *
- * Never while the user plays (`client_activity`, from queue start to the end of the game): the
- * refresh is heavy enough to make the game stutter. A due refresh waits for the end of the game,
- * a running one is cancelled and runs again then.
  */
-import { type Db, type Queryable, readPlayPause } from '@pick-league/db';
-import type { StatsRefreshResponse, StatsStatusResponse } from '@pick-league/shared';
+import type { Db, Queryable } from '@pick-league/db';
+import type { StatsStatusResponse } from '@pick-league/shared';
 import { readCollectionStatus } from './collection.ts';
 
 /** Refresh order (dependencies first). `concurrent` = read by requests. */
@@ -69,10 +65,6 @@ export interface RefreshOptions {
   workMem?: string;
   /** Views to refresh, in order (default `STATS_REFRESH_ORDER`; tests use a shorter list). */
   views?: typeof STATS_REFRESH_ORDER;
-  /** Stops the refresh before the next view (the running statement is cancelled separately). */
-  signal?: AbortSignal;
-  /** Receives the Postgres backend pid of the refresh connection (to cancel its statement). */
-  onBackendPid?: (pid: number) => void;
 }
 
 /**
@@ -119,8 +111,6 @@ export interface StatsRefreshState {
     finishedAt: Date;
     durationMs: number | null;
   } | null;
-  /** Milliseconds since the last refresh (successful or not) finished, by the database clock. */
-  msSinceLastFinished: number | null;
 }
 
 /** One cheap round trip: match count (as /health), last refresh log rows, lock holder. */
@@ -133,15 +123,12 @@ export async function readStatsRefreshState(q: Queryable): Promise<StatsRefreshS
       ok_match_count: number | null;
       ok_finished_at: Date | null;
       ok_duration_ms: number | null;
-      since_finished_ms: number | null;
       locked: boolean;
     }[]
   >`
     SELECT m.stored, m.last_fetched,
       ok.signature AS ok_signature, ok.match_count AS ok_match_count,
       ok.finished_at AS ok_finished_at, ok.duration_ms AS ok_duration_ms,
-      (SELECT (extract(epoch FROM now() - max(finished_at)) * 1000)::float8
-         FROM stats_refresh_log) AS since_finished_ms,
       EXISTS (
         SELECT 1 FROM pg_locks
         WHERE locktype = 'advisory' AND granted AND objsubid = 1
@@ -167,7 +154,6 @@ export async function readStatsRefreshState(q: Queryable): Promise<StatsRefreshS
             durationMs: row.ok_duration_ms,
           }
         : null,
-    msSinceLastFinished: row?.since_finished_ms ?? null,
   };
 }
 
@@ -176,10 +162,6 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
   const conn = await db.reserve();
   const views: Record<string, number> = {};
   try {
-    if (options.onBackendPid) {
-      const [backend] = await conn<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
-      if (backend) options.onBackendPid(backend.pid);
-    }
     const [lock] = await conn<
       { ok: boolean }[]
     >`SELECT pg_try_advisory_lock(${STATS_REFRESH_LOCK_KEY}) AS ok`;
@@ -209,7 +191,6 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
         // Fresh planner statistics: the views join large tables whose size changes a lot.
         await conn.unsafe('ANALYZE matches, participants, item_events, skill_events');
         for (const step of options.views ?? STATS_REFRESH_ORDER) {
-          if (options.signal?.aborted) throw new Error('refresh cancelled: the user is playing');
           const t = performance.now();
           await conn.unsafe(
             `REFRESH MATERIALIZED VIEW ${step.concurrent ? 'CONCURRENTLY ' : ''}${step.view}`,
@@ -243,17 +224,8 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
 export interface StatsRefresherOptions extends RefreshOptions {
   /** Timer period; the timer only refreshes when the matches changed. */
   intervalMs: number;
-  /**
-   * Manual refreshes (`requestRefresh`) are refused until this long after the previous refresh
-   * (timer or manual, any instance) finished. 0 disables the cooldown.
-   */
-  manualCooldownMs?: number;
   /** Pool for the cheap status queries (default: the refresh pool). */
   statusDb?: Queryable;
-  /** Whether the user is playing (default: `client_activity` through `statusDb`). */
-  isPlaying?: () => Promise<boolean>;
-  /** How often a refresh held for a game checks whether the game is over (default 30 s). */
-  resumeCheckMs?: number;
   /**
    * Called after a refresh that changed the views (e.g. to clear response caches), including a
    * failed one that had already refreshed some of them.
@@ -263,18 +235,12 @@ export interface StatsRefresherOptions extends RefreshOptions {
 }
 
 /**
- * Runs `refreshStats` now and then every `intervalMs`, one run at a time, and on demand
- * (`requestRefresh`). Timer and manual runs share `tick`, so they never overlap within an
- * instance, always clear caches the same way, and the advisory lock serialises instances.
+ * Runs `refreshStats` now and then every `intervalMs`, one run at a time within an instance (the
+ * advisory lock serialises instances), clearing caches after every run that changed the views.
  */
 export class StatsRefresher {
   private timer: ReturnType<typeof setInterval> | null = null;
-  private resumeTimer: ReturnType<typeof setInterval> | null = null;
   private running: Promise<RefreshResult | null> | null = null;
-  /** The running refresh: stops it between views, and its connection (to cancel a statement). */
-  private current: { abort: AbortController; pid: number | null } | null = null;
-  /** A refresh was held or cancelled for a game: it runs once the game is over. */
-  private deferred = false;
 
   constructor(
     private readonly db: Db,
@@ -282,81 +248,14 @@ export class StatsRefresher {
   ) {}
 
   start(): void {
-    void this.scheduledTick();
-    this.timer = setInterval(() => void this.scheduledTick(), this.options.intervalMs);
-    // Catches the end of a pause the desktop could not announce (closed while in game).
-    this.resumeTimer = setInterval(
-      () => void this.resumeIfDeferred(),
-      this.options.resumeCheckMs ?? 30_000,
-    );
-  }
-
-  /** Whether the user is playing; a failed read counts as not playing. */
-  async isPlaying(): Promise<boolean> {
-    try {
-      if (this.options.isPlaying) return await this.options.isPlaying();
-      return (await readPlayPause(this.options.statusDb ?? this.db)).paused;
-    } catch {
-      return false;
-    }
-  }
-
-  /** Timer run: held while the user plays (it runs once the game is over). */
-  async scheduledTick(): Promise<RefreshResult | null> {
-    if (await this.isPlaying()) {
-      this.deferred = true;
-      return null;
-    }
-    return this.tick();
-  }
-
-  /**
-   * The desktop said the user started or stopped playing: a running refresh is cancelled (it
-   * runs again after the game), a held one runs once the game is over.
-   */
-  async activityChanged(playing: boolean): Promise<void> {
-    if (playing) {
-      await this.cancelRunning();
-      return;
-    }
-    await this.resumeIfDeferred();
-  }
-
-  private async resumeIfDeferred(): Promise<void> {
-    if (!this.deferred || this.running || (await this.isPlaying())) return;
-    this.deferred = false;
     void this.tick();
-  }
-
-  /** Stops the running refresh: before its next view, and its current statement right away. */
-  private async cancelRunning(): Promise<void> {
-    const current = this.current;
-    if (!current || current.abort.signal.aborted) return;
-    this.deferred = true;
-    current.abort.abort();
-    this.options.log?.('stats refresh cancelled: the user is playing');
-    if (current.pid === null) return;
-    try {
-      const q = this.options.statusDb ?? this.db;
-      await q`SELECT pg_cancel_backend(${current.pid})`;
-    } catch (err) {
-      this.options.onError?.(err);
-    }
+    this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
   }
 
   /** Runs a refresh unless one is in progress (then returns the running one). */
   tick(force = false): Promise<RefreshResult | null> {
     if (this.running) return this.running;
-    const current = { abort: new AbortController(), pid: null as number | null };
-    this.current = current;
-    this.running = refreshStats(this.db, {
-      ...this.options,
-      force,
-      signal: current.abort.signal,
-      onBackendPid: (pid) => {
-        current.pid = pid;
-      },
-    })
+    this.running = refreshStats(this.db, { ...this.options, force })
       .then((r) => {
         if (r.refreshed) this.options.onRefreshed?.();
         return r;
@@ -365,13 +264,11 @@ export class StatsRefresher {
         if (err instanceof StatsRefreshError && err.refreshedViews.length > 0) {
           this.options.onRefreshed?.();
         }
-        // A refresh cancelled for a game is not an error: it runs again after the game.
-        if (!current.abort.signal.aborted) this.options.onError?.(err);
+        this.options.onError?.(err);
         return null;
       })
       .finally(() => {
         this.running = null;
-        this.current = null;
       });
     return this.running;
   }
@@ -396,38 +293,9 @@ export class StatsRefresher {
     };
   }
 
-  /**
-   * Manual trigger: starts a background refresh when none is running anywhere, the matches
-   * changed since the last successful refresh and the cooldown is over. Never waits for it.
-   */
-  async requestRefresh(): Promise<StatsRefreshResponse> {
-    if (this.running) return { started: false, reason: 'already_running' };
-    if (await this.isPlaying()) {
-      // Asked for: it runs as soon as the game is over.
-      this.deferred = true;
-      return { started: false, reason: 'playing' };
-    }
-    const s = await readStatsRefreshState(this.options.statusDb ?? this.db);
-    // Re-checked after the await: a concurrent request may have started one meanwhile.
-    if (this.running || s.locked) return { started: false, reason: 'already_running' };
-    if (s.lastOk?.signature === s.signature) return { started: false, reason: 'up_to_date' };
-    const cooldownMs = this.options.manualCooldownMs ?? 0;
-    if (cooldownMs > 0 && s.msSinceLastFinished !== null && s.msSinceLastFinished < cooldownMs) {
-      return {
-        started: false,
-        reason: 'cooldown',
-        retryAfterSeconds: Math.max(1, Math.ceil((cooldownMs - s.msSinceLastFinished) / 1000)),
-      };
-    }
-    void this.tick();
-    return { started: true };
-  }
-
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    if (this.resumeTimer) clearInterval(this.resumeTimer);
-    this.resumeTimer = null;
     await this.running;
   }
 }

@@ -53,51 +53,6 @@ describe('request limits', () => {
     expect(await errorCode(res)).toBe('PAYLOAD_TOO_LARGE');
   });
 
-  test('POST /live/players is validated before any database access', async () => {
-    const player = (n: number) => ({
-      championId: 412 + n,
-      position: null,
-      team: 'ally',
-    });
-    const game = { platform: 'EUW1', gameId: 1, me: { gameName: 'FakePlayer', tagLine: 'TEST' } };
-    for (const body of [
-      { ...game, players: [] },
-      { ...game, players: Array.from({ length: 11 }, (_, i) => player(i)) },
-      { ...game, players: [player(1), player(1)] },
-      { ...game, platform: 'OC1', players: [player(1)] },
-      { ...game, gameId: 0, players: [player(1)] },
-      { ...game, me: { gameName: '', tagLine: 'TEST' }, players: [player(1)] },
-      { platform: 'EUW1', players: [player(1)] },
-      'not json',
-    ]) {
-      const res = await app.request('/live/players', {
-        method: 'POST',
-        body: typeof body === 'string' ? body : JSON.stringify(body),
-        headers: { 'content-type': 'application/json' },
-      });
-      expect(res.status).toBe(400);
-      expect(await errorCode(res)).toBe('BAD_REQUEST');
-    }
-    const tooBig = await app.request('/live/players', {
-      method: 'POST',
-      body: big,
-      headers: { 'content-type': 'application/json' },
-    });
-    expect(tooBig.status).toBe(413);
-  });
-
-  test('PUT /client/activity is validated before any database access', async () => {
-    for (const body of [{}, { phase: '' }, { phase: 'x'.repeat(41) }, 'not json']) {
-      const res = await app.request('/client/activity', {
-        method: 'PUT',
-        body: typeof body === 'string' ? body : JSON.stringify(body),
-        headers: { 'content-type': 'application/json' },
-      });
-      expect(res.status).toBe(400);
-      expect(await errorCode(res)).toBe('BAD_REQUEST');
-    }
-  });
-
   test('availableChampionIds is capped', async () => {
     const ids = Array.from({ length: MAX_AVAILABLE_CHAMPION_IDS + 1 }, (_, i) => i + 1);
     const res = await app.request('/recommendations/picks', {

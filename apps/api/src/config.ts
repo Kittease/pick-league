@@ -13,8 +13,6 @@ export interface ApiConfig {
   trustProxy: boolean;
   /** How often to check whether the stats views need a refresh. */
   statsRefreshIntervalMs: number;
-  /** Minimum time between the end of a refresh and a manually requested one (POST /stats/refresh). */
-  statsManualCooldownMs: number;
 }
 
 function int(env: Record<string, string | undefined>, name: string, fallback: number): number {
@@ -38,6 +36,5 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     rateLimitBurst: int(env, 'RATE_LIMIT_BURST', 30),
     trustProxy: env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true',
     statsRefreshIntervalMs: int(env, 'STATS_REFRESH_MINUTES', 60) * 60_000,
-    statsManualCooldownMs: int(env, 'STATS_MANUAL_REFRESH_COOLDOWN_SECONDS', 60) * 1000,
   };
 }

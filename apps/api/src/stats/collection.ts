@@ -57,7 +57,7 @@ export async function readCollectionStatus(q: Queryable): Promise<CollectionStat
       lastMatchStoredAt: r.last_match?.toISOString() ?? null,
     }),
   );
-  // Staleness by the database clock, as the refresh cooldown.
+  // Staleness by the database clock.
   const now = rows[0]?.db_now ?? new Date();
   return { state: collectionState(platforms, now), platforms };
 }

@@ -1,14 +1,13 @@
 /**
- * Manual stats refresh: GET /stats/status, POST /stats/refresh, cooldown and locking.
+ * Stats refresh: GET /stats/status, the timer-driven refresh, failures and locking.
  * Needs DATABASE_URL_TEST (bun run db:test:up); uses its own database so it never races
  * the endpoint tests.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createDb, type Db } from '@pick-league/db';
-import type { StatsRefreshResponse, StatsStatusResponse } from '@pick-league/shared';
+import type { StatsStatusResponse } from '@pick-league/shared';
 import { createApp } from '../http/app.ts';
 import { TtlCache } from '../http/cache.ts';
-import { TokenBucketLimiter } from '../http/rate-limit.ts';
 import { silentLogger } from '../logger.ts';
 import { resetApiTestDb, seedSyntheticPatch, withDatabase } from '../testing/seed.ts';
 import {
@@ -25,7 +24,7 @@ const URL_ = BASE
   : undefined;
 const PATCH = '15.22';
 
-describe.skipIf(!URL_)('manual stats refresh (Postgres)', () => {
+describe.skipIf(!URL_)('stats refresh (Postgres)', () => {
   let db: Db;
   let batch = 0;
 
@@ -37,16 +36,11 @@ describe.skipIf(!URL_)('manual stats refresh (Postgres)', () => {
       seed: 100 + ++batch,
       idPrefix: `SYN_REFRESH_${batch}`,
     });
-  /** Pretends the last refresh finished `seconds` ago. */
-  const ageLastRefresh = (seconds: number) =>
-    db`UPDATE stats_refresh_log SET finished_at = now() - make_interval(secs => ${seconds})`;
-
-  const setup = (cooldownMs: number) => {
+  const setup = () => {
     const cache = new TtlCache<unknown>(60_000);
     let refreshed = 0;
     const refresher = new StatsRefresher(db, {
       intervalMs: 60_000,
-      manualCooldownMs: cooldownMs,
       onRefreshed: () => {
         refreshed++;
         cache.clear();
@@ -58,10 +52,6 @@ describe.skipIf(!URL_)('manual stats refresh (Postgres)', () => {
 
   const status = async (app: ReturnType<typeof createApp>) =>
     (await (await app.request('/stats/status')).json()) as StatsStatusResponse;
-  const trigger = async (app: ReturnType<typeof createApp>) => {
-    const res = await app.request('/stats/refresh', { method: 'POST' });
-    return { status: res.status, body: (await res.json()) as StatsRefreshResponse, res };
-  };
 
   beforeAll(async () => {
     await resetApiTestDb(URL_);
@@ -74,12 +64,8 @@ describe.skipIf(!URL_)('manual stats refresh (Postgres)', () => {
     await db?.end();
   });
 
-  beforeEach(async () => {
-    await ageLastRefresh(3600);
-  });
-
   test('status reports what the views include and what is pending', async () => {
-    const { app } = setup(0);
+    const { app } = setup();
     const before = await status(app);
     expect(before).toMatchObject({
       refreshing: false,
@@ -98,17 +84,14 @@ describe.skipIf(!URL_)('manual stats refresh (Postgres)', () => {
     });
   }, 60_000);
 
-  test('POST starts a background refresh, clears the cache, then reports up_to_date', async () => {
-    const { app, cache, refresher, refreshed } = setup(0);
+  test('a tick refreshes the views and clears the cache, then finds them up to date', async () => {
+    const { app, cache, refresher, refreshed } = setup();
     await addMatches(20);
     cache.set('stale', 1);
 
-    const first = await trigger(app);
-    expect(first.status).toBe(202);
-    expect(first.body).toEqual({ started: true });
+    const run = refresher.tick();
     expect((await status(app)).refreshing).toBe(true);
-
-    await refresher.idle();
+    expect((await run)?.reason).toBe('refreshed');
     const after = await status(app);
     expect(after.refreshing).toBe(false);
     expect(after.pendingMatches).toBe(0);
@@ -116,41 +99,15 @@ describe.skipIf(!URL_)('manual stats refresh (Postgres)', () => {
     expect(refreshed()).toBe(1);
     expect(cache.size).toBe(0);
 
-    const again = await trigger(app);
-    expect(again.status).toBe(200);
-    expect(again.body).toEqual({ started: false, reason: 'up_to_date' });
+    expect((await refresher.tick())?.reason).toBe('unchanged');
+    expect(refreshed()).toBe(1);
   }, 60_000);
 
-  test('cooldown after any refresh, with Retry-After', async () => {
-    const { app, refresher } = setup(60_000);
+  test('concurrent ticks share a single refresh', async () => {
+    const { refresher, refreshed } = setup();
     await addMatches(10);
-    await ageLastRefresh(15);
-
-    const r = await trigger(app);
-    expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ started: false, reason: 'cooldown' });
-    const retry = (r.body as { retryAfterSeconds: number }).retryAfterSeconds;
-    expect(retry).toBeGreaterThan(40);
-    expect(retry).toBeLessThanOrEqual(45);
-    expect(r.res.headers.get('retry-after')).toBe(String(retry));
-
-    await ageLastRefresh(61);
-    expect((await trigger(app)).body).toEqual({ started: true });
-    await refresher.idle();
-  }, 60_000);
-
-  test('concurrent requests start a single refresh', async () => {
-    const { app, refresher, refreshed } = setup(0);
-    await addMatches(10);
-    const results = await Promise.all([trigger(app), trigger(app), trigger(app)]);
-    expect(results.filter((r) => r.status === 202)).toHaveLength(1);
-    for (const r of results.filter((x) => x.status !== 202)) {
-      expect(r.body).toEqual({ started: false, reason: 'already_running' });
-    }
-    // The timer path joins the running refresh instead of starting another one.
-    const timerRun = refresher.tick();
-    await refresher.idle();
-    expect((await timerRun)?.reason).toBe('refreshed');
+    const runs = await Promise.all([refresher.tick(), refresher.tick(), refresher.tick()]);
+    expect(runs.map((r) => r?.reason)).toEqual(['refreshed', 'refreshed', 'refreshed']);
     expect(refreshed()).toBe(1);
   }, 60_000);
 
@@ -189,51 +146,14 @@ describe.skipIf(!URL_)('manual stats refresh (Postgres)', () => {
     expect(last.message).toContain('stats_no_such_view');
   }, 60_000);
 
-  test('held while the user plays: a running one cancelled, everything runs after the game', async () => {
-    const errors: unknown[] = [];
-    const cache = new TtlCache<unknown>(60_000);
-    const refresher = new StatsRefresher(db, {
-      intervalMs: 60_000,
-      onError: (e) => errors.push(e),
-    });
-    const app = createApp({ db, cache, limiter: null, log: silentLogger, stats: refresher });
-    const activity = (phase: string) =>
-      app.request('/client/activity', {
-        method: 'PUT',
-        body: JSON.stringify({ phase }),
-        headers: { 'content-type': 'application/json' },
-      });
-    await addMatches(10);
-
-    // A refresh running when the queue starts is stopped (no error: it runs again later).
-    const running = refresher.tick();
-    await activity('Matchmaking');
-    expect(await running).toBeNull();
-    expect(errors).toEqual([]);
-    expect((await status(app)).pendingMatches).toBeGreaterThan(0);
-
-    // Meanwhile neither the timer nor a manual request starts one.
-    expect(await refresher.scheduledTick()).toBeNull();
-    expect((await trigger(app)).body).toEqual({ started: false, reason: 'playing' });
-    await activity('InProgress');
-    expect((await status(app)).refreshing).toBe(false);
-
-    // The game is over: the held refresh runs.
-    await activity('EndOfGame');
-    await refresher.idle();
-    expect((await status(app)).pendingMatches).toBe(0);
-    expect(errors).toEqual([]);
-    await refresher.stop();
-  }, 60_000);
-
   test('a refresh holding the advisory lock elsewhere counts as running', async () => {
-    const { app } = setup(0);
+    const { app } = setup();
     await addMatches(10);
     const other = await db.reserve();
     try {
       await other`SELECT pg_advisory_lock(${STATS_REFRESH_LOCK_KEY})`;
       expect((await status(app)).refreshing).toBe(true);
-      expect((await trigger(app)).body).toEqual({ started: false, reason: 'already_running' });
+      expect((await setup().refresher.tick())?.reason).toBe('locked');
     } finally {
       await other`SELECT pg_advisory_unlock(${STATS_REFRESH_LOCK_KEY})`;
       other.release();
@@ -241,17 +161,8 @@ describe.skipIf(!URL_)('manual stats refresh (Postgres)', () => {
     expect((await status(app)).refreshing).toBe(false);
   }, 60_000);
 
-  test('POST /stats/refresh stays under the per-IP rate limit', async () => {
-    const { refresher } = setup(0);
-    const app = createApp({
-      db,
-      cache: new TtlCache(1000),
-      limiter: new TokenBucketLimiter({ burst: 1, perMinute: 1 }),
-      log: silentLogger,
-      stats: refresher,
-    });
-    await app.request('/stats/status');
-    const limited = await app.request('/stats/refresh', { method: 'POST' });
-    expect(limited.status).toBe(429);
+  test('there is no manual refresh endpoint', async () => {
+    const { app } = setup();
+    expect((await app.request('/stats/refresh', { method: 'POST' })).status).toBe(404);
   });
 });

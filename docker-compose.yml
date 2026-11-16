@@ -84,7 +84,6 @@ services:
       RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-}
       TRUST_PROXY: ${TRUST_PROXY:-}
       STATS_REFRESH_MINUTES: ${STATS_REFRESH_MINUTES:-}
-      STATS_MANUAL_REFRESH_COOLDOWN_SECONDS: ${STATS_MANUAL_REFRESH_COOLDOWN_SECONDS:-}
     ports:
       # Loopback only: Docker-published ports bypass ufw. The reverse proxy is the public door.
       - "127.0.0.1:${API_PORT:-3000}:3000"
