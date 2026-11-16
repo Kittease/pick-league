@@ -11,6 +11,13 @@ import {
   type TierListResponse,
   toTierListFilters,
 } from '@pick-league/shared';
+import { Button } from '@pick-league/ui/components/ui/button';
+import { Input } from '@pick-league/ui/components/ui/input';
+import { Label } from '@pick-league/ui/components/ui/label';
+import { Skeleton } from '@pick-league/ui/components/ui/skeleton';
+import { Switch } from '@pick-league/ui/components/ui/switch';
+import { Tabs, TabsList, TabsTrigger } from '@pick-league/ui/components/ui/tabs';
+import { cn } from '@pick-league/ui/lib/utils';
 import {
   ArrowDownIcon,
   ArrowLeftIcon,
@@ -28,12 +35,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Switch } from '@/components/ui/switch';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { type ConfidenceLevel, meetsConfidence } from '@/lib/confidence';
 import { compact, confidenceLabel, patchesText, percent, ROLE_LABEL } from '@/lib/format';
 import {
@@ -42,7 +43,6 @@ import {
   shortcutLabel,
   type TierListLayer,
 } from '@/lib/shortcuts';
-import { cn } from '@/lib/utils';
 import type { ApiResult, AppState, Settings } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
 import { useMinConfidence } from '../hooks/use-min-confidence';

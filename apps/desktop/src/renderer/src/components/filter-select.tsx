@@ -4,7 +4,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
+} from '@pick-league/ui/components/ui/select';
 import { MIN_CONFIDENCE_LABEL } from '@/lib/confidence';
 import { useMinConfidence } from '../hooks/use-min-confidence';
 

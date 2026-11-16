@@ -1,4 +1,21 @@
 import { type PickCandidate, POSITIONS, type Position } from '@pick-league/shared';
+import { Button } from '@pick-league/ui/components/ui/button';
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from '@pick-league/ui/components/ui/hover-card';
+import { Input } from '@pick-league/ui/components/ui/input';
+import { Label } from '@pick-league/ui/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from '@pick-league/ui/components/ui/select';
+import { Skeleton } from '@pick-league/ui/components/ui/skeleton';
+import { Switch } from '@pick-league/ui/components/ui/switch';
+import { cn } from '@pick-league/ui/lib/utils';
 import {
   ArrowLeftIcon,
   ArrowLeftRightIcon,
@@ -17,17 +34,9 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Button } from '@/components/ui/button';
-import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Switch } from '@/components/ui/switch';
 import { meetsConfidence } from '@/lib/confidence';
 import { compact, confidenceLabel, patchesText, percent, ROLE_LABEL } from '@/lib/format';
 import { type DraftEscapeAction, type SearchFocus, shortcutLabel } from '@/lib/shortcuts';
-import { cn } from '@/lib/utils';
 import type { AppState } from '../../../core/app-state.ts';
 import {
   ban,

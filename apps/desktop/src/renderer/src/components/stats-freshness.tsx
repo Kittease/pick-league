@@ -1,9 +1,9 @@
+import { Tooltip, TooltipContent, TooltipTrigger } from '@pick-league/ui/components/ui/tooltip';
+import { cn } from '@pick-league/ui/lib/utils';
 import { RefreshCwIcon, TriangleAlertIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { type CollectionWarning, collectionWarning } from '@/lib/collection';
 import { compact, timeAgo } from '@/lib/format';
-import { cn } from '@/lib/utils';
 import type { AppState } from '../../../core/app-state.ts';
 
 /** Re-renders every `ms` so relative times stay current. */

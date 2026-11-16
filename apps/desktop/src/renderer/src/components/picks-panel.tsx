@@ -1,9 +1,14 @@
 import type { PickCandidate, PicksResponse } from '@pick-league/shared';
+import { Button } from '@pick-league/ui/components/ui/button';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@pick-league/ui/components/ui/collapsible';
+import { Skeleton } from '@pick-league/ui/components/ui/skeleton';
+import { cn } from '@pick-league/ui/lib/utils';
 import { ChevronDownIcon, HammerIcon } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { Skeleton } from '@/components/ui/skeleton';
 import {
   type ConfidenceLevel,
   confidenceLevel,
@@ -11,7 +16,6 @@ import {
   meetsConfidence,
 } from '@/lib/confidence';
 import { compact, confidenceLabel, patchesText, percent, ROLE_LABEL } from '@/lib/format';
-import { cn } from '@/lib/utils';
 import type { AppState } from '../../../core/app-state.ts';
 import type { StaticLookup } from '../hooks/use-app';
 import { useMinConfidence } from '../hooks/use-min-confidence';

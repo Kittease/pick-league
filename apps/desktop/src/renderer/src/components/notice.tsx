@@ -1,7 +1,12 @@
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from '@pick-league/ui/components/ui/alert';
+import { Button } from '@pick-league/ui/components/ui/button';
+import { cn } from '@pick-league/ui/lib/utils';
 import { CircleAlertIcon, TriangleAlertIcon } from 'lucide-react';
-import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
 
 export function Notice({
   tone,

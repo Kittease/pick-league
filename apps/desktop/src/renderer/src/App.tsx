@@ -1,8 +1,8 @@
+import { Toaster } from '@pick-league/ui/components/ui/sonner';
+import { Tabs, TabsList, TabsTrigger } from '@pick-league/ui/components/ui/tabs';
+import { TooltipProvider } from '@pick-league/ui/components/ui/tooltip';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { Toaster } from '@/components/ui/sonner';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { TooltipProvider } from '@/components/ui/tooltip';
 import type { AppState } from '../../core/app-state.ts';
 import { BuildPanel } from './components/build-panel';
 import { ChampSelectBoard } from './components/champ-select-board';

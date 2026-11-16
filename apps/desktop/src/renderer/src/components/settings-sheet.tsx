@@ -1,9 +1,7 @@
 import { POSITIONS, type Position } from '@pick-league/shared';
-import { SettingsIcon } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { Button } from '@pick-league/ui/components/ui/button';
+import { Input } from '@pick-league/ui/components/ui/input';
+import { Label } from '@pick-league/ui/components/ui/label';
 import {
   Sheet,
   SheetContent,
@@ -11,10 +9,12 @@ import {
   SheetHeader,
   SheetTitle,
   SheetTrigger,
-} from '@/components/ui/sheet';
-import { Switch } from '@/components/ui/switch';
+} from '@pick-league/ui/components/ui/sheet';
+import { Switch } from '@pick-league/ui/components/ui/switch';
+import { cn } from '@pick-league/ui/lib/utils';
+import { SettingsIcon } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { ROLE_LABEL } from '@/lib/format';
-import { cn } from '@/lib/utils';
 import type { AppState, Settings } from '../../../core/app-state.ts';
 import { FLASH_KEYS } from '../../../core/spells.ts';
 import { ZOOM_LEVELS } from '../../../core/zoom.ts';

@@ -4,12 +4,16 @@ import {
   type RecommendedItem,
   STAT_SHARD_ROWS,
 } from '@pick-league/shared';
+import { Button } from '@pick-league/ui/components/ui/button';
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from '@pick-league/ui/components/ui/hover-card';
+import { Skeleton } from '@pick-league/ui/components/ui/skeleton';
+import { cn } from '@pick-league/ui/lib/utils';
 import { ArrowRightIcon, CheckIcon, Loader2Icon, WandSparklesIcon } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
-import { Skeleton } from '@/components/ui/skeleton';
 import { compact, confidenceLabel, patchesText, percent, SKILL_KEY } from '@/lib/format';
-import { cn } from '@/lib/utils';
 import type { AppState, Loadable, MasteryEntry } from '../../../core/app-state.ts';
 import { arrangeSpells, type FlashKey } from '../../../core/spells.ts';
 import type { StaticLookup } from '../hooks/use-app';

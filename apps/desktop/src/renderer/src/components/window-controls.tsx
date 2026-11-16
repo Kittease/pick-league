@@ -1,6 +1,6 @@
+import { cn } from '@pick-league/ui/lib/utils';
 import { CopyIcon, MinusIcon, SquareIcon, XIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { cn } from '@/lib/utils';
 import type { WindowState } from '../../../core/app-state.ts';
 
 /** Native-like window state, pushed by the main process (frameless window only). */

@@ -1,4 +1,5 @@
 import type { LanePhaseDiff, Reason } from '@pick-league/shared';
+import { cn } from '@pick-league/ui/lib/utils';
 import {
   compact,
   deltaPoints,
@@ -8,7 +9,6 @@ import {
   REASON_KIND_LABEL,
   sampleWeight,
 } from '@/lib/format';
-import { cn } from '@/lib/utils';
 
 /** Scale of the diverging bar: ±5 points fills one half. */
 const FULL_SCALE = 0.05;
