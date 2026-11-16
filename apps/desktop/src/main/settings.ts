@@ -14,6 +14,13 @@ export const DEFAULT_SETTINGS: Settings = {
   flashKey: 'F',
 };
 
+/**
+ * The default API address before the desktop went through the public gateway (a local Docker
+ * stack). Every settings file saved since holds it, so it is read as "the default" and moves to
+ * the gateway; a local API is set with PICKLEAGUE_API_URL for the run (dev) instead.
+ */
+export const LEGACY_DEFAULT_API_URL = 'http://localhost:3000';
+
 /** Keeps known keys with the right type; anything else falls back to the defaults. */
 export function sanitizeSettings(raw: unknown): Settings {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -55,7 +62,10 @@ export async function loadSettings(
     return { ...DEFAULT_SETTINGS };
   }
   try {
-    return sanitizeSettings(JSON.parse(text));
+    const settings = sanitizeSettings(JSON.parse(text));
+    return settings.apiUrl === LEGACY_DEFAULT_API_URL
+      ? { ...settings, apiUrl: DEFAULT_SETTINGS.apiUrl }
+      : settings;
   } catch (e) {
     const backup = `${path}.corrupt`;
     const kept = await copyFile(path, backup).then(

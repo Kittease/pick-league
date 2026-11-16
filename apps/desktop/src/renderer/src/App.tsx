@@ -37,8 +37,8 @@ function Waiting({ state }: { state: AppState }) {
         </p>
         {state.api.state === 'down' && (
           <p className="text-sm text-down">
-            The API at <span className="num">{state.api.url}</span> isn't answering — check the
-            address in settings or start it with <span className="num">docker compose up -d</span>.
+            PickLeague's server at <span className="num">{state.api.url}</span> isn't answering —
+            check your internet connection, or the address in settings.
           </p>
         )}
       </div>

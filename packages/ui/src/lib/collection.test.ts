@@ -19,7 +19,7 @@ describe('collectionWarning', () => {
     expect(collectionWarning(undefined)).toBeNull();
   });
 
-  test('rejected key: since the first rejection, with the fix', () => {
+  test('rejected key: since the first rejection, nothing for the user to do', () => {
     const collection: CollectionStatus = {
       state: 'key_rejected',
       platforms: [
@@ -31,8 +31,8 @@ describe('collectionWarning', () => {
     expect(collectionWarning(collection)).toEqual({
       state: 'key_rejected',
       label: 'Riot key rejected',
-      title: 'Riot rejected the API key — collection stopped.',
-      fix: { text: 'Put a new key in .env, then run', command: 'docker compose up -d' },
+      title: 'Collection is stopped on the server: Riot rejected its API key.',
+      detail: 'The stats may be getting stale; nothing to do on your side.',
       since: '2026-11-14T08:30:00.000Z',
     });
   });
@@ -46,7 +46,8 @@ describe('collectionWarning', () => {
       ],
     });
     expect(w?.state).toBe('stalled');
-    expect(w?.title).toBe('Collection stopped: the worker is not running.');
+    expect(w?.title).toBe('Collection is stopped on the server.');
+    expect(w?.detail).toBe('The stats may be getting stale; nothing to do on your side.');
     expect(w?.since).toBe('2026-11-14T10:05:00.000Z');
   });
 

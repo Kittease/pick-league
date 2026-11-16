@@ -66,8 +66,8 @@ export function SettingsSheet({ state }: { state: AppState }) {
           <div className="flex flex-col gap-2 border-b border-border py-4">
             <Label htmlFor="api-url">API address</Label>
             <p className="text-xs text-muted-foreground">
-              Where PickLeague runs: <span className="num">http://localhost:3000</span> on this
-              computer, or <span className="num">http://&lt;vps-ip&gt;:3000</span> on a server.
+              PickLeague's servers by default; change it only to use your own API (e.g.{' '}
+              <span className="num">http://localhost:3000</span> in development).
             </p>
             <form
               className="flex gap-2"

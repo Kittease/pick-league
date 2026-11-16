@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   createSettingsSaver,
   DEFAULT_SETTINGS,
+  LEGACY_DEFAULT_API_URL,
   loadSettings,
   sanitizeSettings,
 } from './settings.ts';
@@ -44,6 +45,19 @@ describe('settings file', () => {
     await save(settings);
     expect(await loadSettings(path, log)).toEqual(settings);
     expect(logs).toEqual([]);
+  });
+
+  test('the API goes through the public gateway by default', async () => {
+    expect(DEFAULT_SETTINGS.apiUrl).toBe('https://pick-league.vercel.app/api/v1');
+    expect(sanitizeSettings({}).apiUrl).toBe('https://pick-league.vercel.app/api/v1');
+  });
+
+  test('a file saved with the old local default moves to the gateway, other addresses stay', async () => {
+    const save = createSettingsSaver(path);
+    await save({ ...DEFAULT_SETTINGS, apiUrl: LEGACY_DEFAULT_API_URL, autoApply: false });
+    expect(await loadSettings(path, log)).toEqual({ ...DEFAULT_SETTINGS, autoApply: false });
+    await save({ ...DEFAULT_SETTINGS, apiUrl: 'http://example.test:3000' });
+    expect((await loadSettings(path, log)).apiUrl).toBe('http://example.test:3000');
   });
 
   test('a burst of saves leaves the last settings on disk, as valid JSON', async () => {

@@ -18,7 +18,7 @@ import type { FlashKey } from './spells.ts';
 export type { ApiResult, Loadable, MasteryEntry };
 
 export interface Settings {
-  /** PickLeague API base URL, e.g. http://localhost:3000 or http://<vps-ip>:3000. */
+  /** PickLeague API base URL: the public gateway by default, http://localhost:3000 in dev. */
   apiUrl: string;
   /** Apply runes + summoner spells automatically when the user locks in. */
   autoApply: boolean;

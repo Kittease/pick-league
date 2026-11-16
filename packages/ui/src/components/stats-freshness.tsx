@@ -31,9 +31,7 @@ function WarningText({ warning }: { warning: CollectionWarning }) {
   return (
     <>
       <span className="font-semibold">{warning.title}</span>{' '}
-      <span className="text-foreground/80">
-        {warning.fix.text} <span className="num">{warning.fix.command}</span>.
-      </span>
+      <span className="text-foreground/80">{warning.detail}</span>
     </>
   );
 }

@@ -24,7 +24,11 @@ import type {
 } from './static-data.ts';
 
 export const API_DEFAULT_PORT = 3000;
-export const API_DEFAULT_URL = `http://localhost:${API_DEFAULT_PORT}`;
+/**
+ * Where clients reach the API by default: the public gateway, which forwards the API's own paths
+ * and bodies (e.g. `GET <url>/tierlist?…`). A local API is `http://localhost:${API_DEFAULT_PORT}`.
+ */
+export const API_DEFAULT_URL = 'https://pick-league.vercel.app/api/v1';
 
 export const API_ROUTES = {
   health: '/health',

@@ -7,13 +7,13 @@ export interface CollectionWarning {
   label: string;
   /** What happened, one sentence. */
   title: string;
-  /** How to fix it: `text`, then the command to run. */
-  fix: { text: string; command: string };
+  /** What it means for the user (the server is not theirs to fix). */
+  detail: string;
   /** When collection stopped (ISO): first key rejection, or last heartbeat. Null if unknown. */
   since: string | null;
 }
 
-const COMPOSE_UP = 'docker compose up -d';
+const STALE = 'The stats may be getting stale; nothing to do on your side.';
 
 /**
  * The warning to show for the API's collection block, or null while collecting (or when the
@@ -29,8 +29,8 @@ export function collectionWarning(
     return {
       state,
       label: 'Riot key rejected',
-      title: 'Riot rejected the API key — collection stopped.',
-      fix: { text: 'Put a new key in .env, then run', command: COMPOSE_UP },
+      title: 'Collection is stopped on the server: Riot rejected its API key.',
+      detail: STALE,
       since: earliest(rejected),
     };
   }
@@ -38,8 +38,8 @@ export function collectionWarning(
     return {
       state,
       label: 'Collection stopped',
-      title: 'Collection stopped: the worker is not running.',
-      fix: { text: 'Start it with', command: COMPOSE_UP },
+      title: 'Collection is stopped on the server.',
+      detail: STALE,
       since: latest(platforms.map((p) => p.heartbeatAt)),
     };
   }
