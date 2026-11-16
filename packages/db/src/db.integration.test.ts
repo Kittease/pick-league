@@ -81,6 +81,16 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
         await other.end();
       }
     });
+
+    test('0017 drops the live lookup and play pause tables', async () => {
+      const tables = await db`
+        SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name IN ('live_games', 'live_player_profiles', 'live_player_masteries',
+                             'client_activity')`;
+      expect(tables).toHaveLength(0);
+      expect(await db`SELECT 1 FROM pg_type WHERE typname = 'live_lookup_status'`).toHaveLength(0);
+    });
   });
 
   describe('patches + static data', () => {

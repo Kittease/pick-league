@@ -9,7 +9,7 @@ PostgreSQL 17, single database, run by Docker Compose next to the worker and the
 - **Two patches only.** `patches` lists the patches we keep. When a new patch is detected, every match of the patch before the previous one is deleted (`ON DELETE CASCADE` cleans every child table). Postgres reuses the freed space for the new patch, so disk usage stays flat at ~2 patches.
 - **Static data is per patch.** Champions, items, runes and summoner spells come from Data Dragon and are stored per patch, so an old match is always read with the item/rune data that existed when it was played.
 - **All 10 players are identified.** Every `puuid` met in a match gets a `players` row. Riot IDs come for free in the match payload. Extra info (mastery, solo queue rank) is fetched with a priority scheme so it never slows match collection:
-  0. live game lookups requested by the desktop (see "Live game lookups", kept apart from these tables) → 1. ladder refresh (Challenger, Grandmaster and the top Master players, more of them each time the queues empty) → 2. match ids of players who played → 3. matches + timelines → 4. daily refresh of tracked ladder players (account + mastery) → 5. **lowest priority:** mastery + rank of non-ladder players, only with leftover budget. Fetched once, refreshed only if the player shows up again and the data is older than 7 days.
+  1. ladder refresh (Challenger, Grandmaster and the top Master players, more of them each time the queues empty) → 2. match ids of players who played → 3. matches + timelines → 4. daily refresh of tracked ladder players (account + mastery) → 5. **lowest priority:** mastery + rank of non-ladder players, only with leftover budget. Fetched once, refreshed only if the player shows up again and the data is older than 7 days.
 - Riot timestamps are converted to `timestamptz`; in-game times are kept as milliseconds since game start (`int`).
 
 ## Overview
@@ -28,10 +28,6 @@ players ─┬── ladder_entries          (tracked set: current Challenger/GM
          └─< participants            (every player of every match)
 
 player_enrichment_queue               (low-priority mastery/rank fetches for non-ladder players)
-
-live_games                            (the user's live game, found through spectator-v5: its players' puuids)
-live_player_profiles ─< live_player_masteries   (players of the user's live game, looked up on request)
-client_activity                       (the user is queued / in champion select / in game: stats refresh paused)
 
 match_fetch_queue                     (worker backlog, survives restarts)
 worker_runs                           (monitoring)
@@ -409,106 +405,12 @@ CREATE TABLE worker_status (
 );
 ```
 
-## Live game lookups
+## Removed tables
 
-Players of the user's game in progress, looked up on request (`POST /live/players`, see
-architecture) — never during champion select. The API writes the requests, the worker fetches
-them from Riot at the highest priority (`0013_live_lookups.sql`). Only per-player summaries are
-kept: looked-up matches never go into `matches` / `participants` / `players`, so the stats stay
-high-elo ladder data. Rows are deleted a day after their last request.
-
-```sql
-CREATE TYPE live_lookup_status AS ENUM ('PENDING', 'READY', 'FAILED');
-
-CREATE TABLE live_player_profiles (
-  puuid             text PRIMARY KEY,
-  platform          platform           NOT NULL,
-  status            live_lookup_status NOT NULL DEFAULT 'PENDING',
-  request_seq       integer            NOT NULL DEFAULT 1,  -- bumped by each (re)request
-  requested_at      timestamptz        NOT NULL DEFAULT now(),
-  rank_seq          integer,          -- request_seq the rank was fetched for (NULL = never)
-  rank_fetched_at   timestamptz,
-  solo_tier         solo_tier,        -- all NULL = unranked (once rank_seq is set)
-  solo_division     smallint,         -- 1..4, NULL for Master+
-  solo_lp           integer,
-  solo_wins         integer,
-  solo_losses       integer,
-  recent_seq        integer,          -- request_seq the recent matches were fetched for
-  recent_fetched_at timestamptz,
-  recent            jsonb,            -- newest first: [{matchId, championId, position, win, remake, endedAt}]
-  attempts          smallint           NOT NULL DEFAULT 0,  -- failed attempts of the current request
-  last_error        text,
-  updated_at        timestamptz        NOT NULL DEFAULT now()
-);
-CREATE INDEX live_player_profiles_pending_idx
-  ON live_player_profiles (platform, requested_at, puuid) WHERE status = 'PENDING';
-CREATE INDEX live_player_profiles_requested_at_idx ON live_player_profiles (requested_at);
-
--- Mastery of the champion each player has in the looked-up game.
-CREATE TABLE live_player_masteries (
-  puuid       text     NOT NULL REFERENCES live_player_profiles ON DELETE CASCADE,
-  champion_id integer  NOT NULL,
-  level       smallint,                -- 0 / 0 when never played
-  points      integer,
-  fetched_at  timestamptz,             -- NULL = asked for, not fetched yet
-  PRIMARY KEY (puuid, champion_id)
-);
-```
-
-- **Requests** (API, idempotent: the desktop repeats them while it polls): a player never seen, a
-  READY profile whose rank or recent matches are older than 30 min, or a FAILED one older than
-  5 min becomes PENDING with `request_seq + 1` (its mastery rows are asked for again); a PENDING
-  one is left alone. A fresh READY profile asked about another champion goes back to PENDING for
-  that mastery only.
-- **Parts** are up to date when their `*_seq` equals `request_seq` (counters, so the API and worker
-  clocks never need to agree). The worker fetches only what is missing, stores each part as soon
-  as it has it (rank first) and marks the row READY once nothing is missing. Previous data stays
-  readable while a stale profile is fetched again.
-- **Failures**: `attempts` counts failed attempts of the current request; FAILED after a few.
-
-The League client's player ids are not the Riot API's (Riot answers 400 to them), so the desktop
-sends no player id at all: only the user's own Riot ID and the game id. The worker finds the game
-and its players' API puuids (`0014_live_games_and_play_pause.sql`):
-
-```sql
-CREATE TABLE live_games (
-  platform     platform           NOT NULL,
-  game_id      bigint             NOT NULL,
-  game_name    text               NOT NULL,  -- the user's own Riot ID, never another player's
-  tag_line     text               NOT NULL,
-  status       live_lookup_status NOT NULL DEFAULT 'PENDING',
-  participants jsonb,                         -- READY: [{teamId, championId, puuid|null}] (spectator-v5)
-  my_team_id   smallint,                      -- the user's team (100 / 200)
-  attempts     smallint           NOT NULL DEFAULT 0,
-  last_error   text,                          -- 'not_found: …' when Riot has no such game
-  requested_at timestamptz        NOT NULL DEFAULT now(),
-  updated_at   timestamptz        NOT NULL DEFAULT now(),
-  PRIMARY KEY (platform, game_id)
-);
-CREATE INDEX live_games_pending_idx ON live_games (platform, requested_at) WHERE status = 'PENDING';
-CREATE INDEX live_games_requested_at_idx ON live_games (requested_at);
-```
-
-- The worker resolves a PENDING game with account-v1 (by Riot ID), then spectator-v5 (active game
-  by puuid). Riot not showing the game yet is retried for about two minutes, then FAILED with a
-  `not_found:` error. A FAILED game asked about again a minute later is tried again.
-- The API matches the requested players to the participants by team and champion, then queues
-  their lookups (`live_player_profiles`). Deleted a day after the last request, as the lookups.
-
-## Client activity
-
-```sql
-CREATE TABLE client_activity (
-  client     text        PRIMARY KEY,  -- 'desktop'
-  phase      text        NOT NULL,     -- League client gameflow phase
-  busy_until timestamptz,              -- the user plays until then (renewed by the desktop)
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-```
-
-From queue start to the end of the game the desktop renews `busy_until` every few seconds (a
-closed app releases it by itself within a minute and a half). Meanwhile the API neither starts nor
-keeps running a stats refresh: it runs once the game is over. The worker keeps collecting.
+`0017_drop_live_and_play_pause.sql` drops the live game lookups (`live_games`,
+`live_player_profiles`, `live_player_masteries`, type `live_lookup_status`; added by 0013 / 0014)
+and the play pause of the stats refresh (`client_activity`, 0014): single-user features of the
+laptop era, gone since the stack runs on a shared server.
 
 ## Stats views (owned by apps/api)
 
