@@ -80,9 +80,10 @@ bun run dev:desktop      # opens the app; start League whenever you like
 - The header shows how fresh the API's stats are ("Stats updated 12 min ago", plus "+N new"
   when the worker stored matches the stats don't include yet). The API recomputes them every
   hour; picks and build reload when it is done. When data collection
-  stopped, the header says so in red with the time since, and a line under it says how to fix
-  it: "Riot key rejected" (put a new key in `.env`, then run `docker compose up -d`) or
-  "Collection stopped" (the worker is not running; `docker compose up -d` starts it).
+  stopped on the server ("Riot key rejected" or "Collection stopped"), the header says so in red
+  with the time since, and a line under it says the stats may be getting stale — nothing to do
+  on your side (the server's admin fixes the key or restarts the worker with
+  `docker compose up -d`).
 - It never picks, bans, locks in or accepts for you, and never shows other players' names.
 - **Tier list** (left rail, shown whenever you are not in champion select): best picks per lane
   with tier (S–D), win/pick/ban rates, confidence and your mastery; filter by server (all, KR,
@@ -109,12 +110,13 @@ bun run dev:desktop      # opens the app; start League whenever you like
   phase, items, runes, spells, skill order). The draft is kept while you look at other views;
   a champion select starting switches to it as usual.
 
-**API address.** By default the app talks to `http://localhost:3000` (the Docker stack on the
-same computer). If the stack runs on a server, open Settings (gear icon) and set
-`http://<vps-ip>:3000` — the port must be reachable from your computer. Settings are saved in
+**API address.** By default the app talks to PickLeague's public gateway
+(`https://pick-league.vercel.app/api/v1`), which forwards to the API: nothing to run on your
+side. To use another API (e.g. `http://localhost:3000` in development), open Settings (gear
+icon) and set its address. Settings are saved in
 the app's user data folder (`settings.json`; if it ever gets corrupted, the app starts with the
-defaults and keeps the broken file as `settings.json.corrupt`). `PICKLEAGUE_API_URL=http://<vps-ip>:3000` also overrides it for one
-run.
+defaults and keeps the broken file as `settings.json.corrupt`). `PICKLEAGUE_API_URL=http://localhost:3000` also overrides it for one
+run. A settings file still holding the old default (`http://localhost:3000`) moves to the gateway.
 
 **Window.** On Windows and Linux the app has no native title bar or menu: drag the window by
 its header (double-click it to maximize) and use the minimize / maximize / close buttons at its
