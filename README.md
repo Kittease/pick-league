@@ -158,6 +158,13 @@ a menu, a select or Settings is open, Escape only closes that.
 `bun run --filter @pick-league/desktop package` builds an installer for the current OS into
 `apps/desktop/dist/`.
 
+**Updates.** From 0.2.0 on, the installed Windows app checks GitHub releases at startup and every few
+hours, downloads a new version in the background and installs it when you quit (or right away
+with "Restart" in the toast or in Settings, which also shows the version). Users of 0.1.0 must
+download and run the 0.2.0 setup once by hand; later versions arrive automatically. The update
+reads the repository's *latest* release, so it must be a published (not draft, not prerelease)
+`desktop-v*` release carrying `latest.yml` and the `.blockmap` (the CI workflow uploads both).
+
 **Troubleshooting.** "League client not found": start League (the app retries every few
 seconds). "Cannot reach the API": check your connection and the address in Settings (default
 `https://pick-league.vercel.app/api/v1`). "Riot key rejected" (server admin): put a valid key in

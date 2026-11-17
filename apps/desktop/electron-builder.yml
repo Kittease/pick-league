@@ -22,6 +22,14 @@ nsis:
   artifactName: ${productName}-${version}-setup.${ext}
   oneClick: false
   allowToChangeInstallationDirectory: true
+# Auto-update (electron-updater): the build writes latest.yml + the .blockmap next to the setup,
+# and app-update.yml into the app. The release workflow uploads them; nothing is published by
+# electron-builder itself (`--publish never`). No publisherName: the app is unsigned, so the
+# updater skips the Windows signature check.
+publish:
+  provider: github
+  owner: Kittease
+  repo: pick-league
 linux:
   target: AppImage
   category: Game
