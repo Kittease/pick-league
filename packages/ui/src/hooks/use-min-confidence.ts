@@ -5,7 +5,8 @@ import {
 } from '@pick-league/ui/lib/confidence';
 import { useSyncExternalStore } from 'react';
 
-const STORAGE_KEY = 'pickleague.minConfidence';
+// v2: the default became High; a choice saved under the old key (often the old Low default) is dropped.
+const STORAGE_KEY = 'pickleague.minConfidence.v2';
 
 function load(): ConfidenceLevel {
   try {

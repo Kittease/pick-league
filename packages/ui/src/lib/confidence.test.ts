@@ -30,9 +30,9 @@ describe('meetsConfidence', () => {
 });
 
 describe('toConfidenceLevel', () => {
-  test('keeps a known level, defaults anything else to Low+', () => {
-    expect(toConfidenceLevel('HIGH')).toBe('HIGH');
-    expect(toConfidenceLevel('high')).toBe('LOW');
-    expect(toConfidenceLevel(null)).toBe('LOW');
+  test('keeps a known level, defaults anything else to High', () => {
+    expect(toConfidenceLevel('LOW')).toBe('LOW');
+    expect(toConfidenceLevel('low')).toBe('HIGH');
+    expect(toConfidenceLevel(null)).toBe('HIGH');
   });
 });

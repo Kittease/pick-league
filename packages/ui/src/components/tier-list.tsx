@@ -204,7 +204,7 @@ const COLUMNS: {
   {
     key: 'score',
     label: 'Tier',
-    title: 'Tier and score (win-rate delta vs role average)',
+    title: 'Tier and score: win-rate delta vs the role average (points), shrunk by sample size',
     align: 'left',
   },
   { key: 'name', label: 'Champion', title: 'Name', align: 'left' },
@@ -246,10 +246,13 @@ function SortHeader({
   sort,
   onSort,
   narrow,
+  count,
 }: {
   sort: { key: SortKey; desc: boolean };
   onSort: (key: SortKey) => void;
   narrow: boolean;
+  /** Champions shown once the filters apply, in the name column's label; null while loading. */
+  count: number | null;
 }) {
   return (
     <div
@@ -274,7 +277,13 @@ function SortHeader({
               active && 'text-foreground',
             )}
           >
-            {c.label}
+            {c.key === 'name' && count !== null ? (
+              <span className="num">
+                {count} {count === 1 ? 'champion' : 'champions'}
+              </span>
+            ) : (
+              c.label
+            )}
             {active && <Arrow className="size-3" />}
           </button>
         );
@@ -772,29 +781,6 @@ export function TierListPage({
       </div>
       <div className="flex min-h-0 flex-1">
         <section className={cn('flex min-w-0 flex-col', narrow ? COMPACT_TABLE : 'flex-1')}>
-          <div className="flex flex-wrap items-baseline gap-x-3 px-3 py-1.5 text-[11px] text-muted-foreground">
-            <span className="font-semibold tracking-[0.18em] text-foreground uppercase">
-              {ROLE_LABEL[role]} tier list
-            </span>
-            {data && (
-              <span className="num">
-                patch {data.patch} · {compact(data.roleGames)} matchups · {data.entries.length}{' '}
-                champions
-                {data.filters && (
-                  <>
-                    {' · '}
-                    {PLATFORM_LABEL[data.filters.platform]} · {RANK_LABEL[data.filters.rank]}
-                  </>
-                )}
-              </span>
-            )}
-            {!narrow && (
-              <span className="ml-auto hidden lg:inline">
-                score = win-rate delta vs role average (points), shrunk by sample size
-              </span>
-            )}
-          </div>
-
           {tl.status === 'error' && (
             <Notice
               tone={tl.code === 'NO_DATA' ? 'warn' : 'bad'}
@@ -811,6 +797,7 @@ export function TierListPage({
                 setSort((s) => ({ key, desc: s.key === key ? !s.desc : key !== 'name' }))
               }
               narrow={narrow}
+              count={data ? rows.length : null}
             />
           )}
           {/* biome-ignore lint/a11y/noStaticElementInteractions: arrow keys move focus between the rows (roving tabindex), the rows themselves are buttons */}

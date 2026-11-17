@@ -27,7 +27,7 @@ export const MIN_CONFIDENCE_LABEL: Record<ConfidenceLevel, string> = {
   HIGH: 'High confidence',
 };
 
-export const DEFAULT_MIN_CONFIDENCE: ConfidenceLevel = 'LOW';
+export const DEFAULT_MIN_CONFIDENCE: ConfidenceLevel = 'HIGH';
 
 /** A level from untrusted input (local storage): anything else is the default. */
 export function toConfidenceLevel(value: unknown): ConfidenceLevel {
