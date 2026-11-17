@@ -1,6 +1,12 @@
 'use client';
 
-import { type PickCandidate, POSITIONS, type Position } from '@pick-league/shared';
+import {
+  DEFAULT_TIER_LIST_FILTERS,
+  type PickCandidate,
+  POSITIONS,
+  type Position,
+  type TierListEntry,
+} from '@pick-league/shared';
 import { BuildView } from '@pick-league/ui/components/build-view';
 import { ConfidencePips } from '@pick-league/ui/components/confidence-pips';
 import { usePickLeagueData } from '@pick-league/ui/components/data-provider';
@@ -29,6 +35,7 @@ import {
 } from '@pick-league/ui/components/ui/select';
 import { Skeleton } from '@pick-league/ui/components/ui/skeleton';
 import { Switch } from '@pick-league/ui/components/ui/switch';
+import { Tabs, TabsList, TabsTrigger } from '@pick-league/ui/components/ui/tabs';
 import { useApiCall } from '@pick-league/ui/hooks/use-api-call';
 import { useMinConfidence } from '@pick-league/ui/hooks/use-min-confidence';
 import {
@@ -419,6 +426,29 @@ interface PoolChampion {
   iconUrl: string;
 }
 
+/**
+ * A tier list entry shown as a ranked ban candidate: its score is the lane's tier list score,
+ * with its tier, ban and pick rates as the reason.
+ */
+function banCandidate(e: TierListEntry): PickCandidate {
+  return {
+    championId: e.championId,
+    score: e.score,
+    confidence: e.confidence,
+    patchesUsed: e.patchesUsed,
+    games: e.games,
+    winRate: e.winRate,
+    reasons: [
+      {
+        kind: 'base',
+        label: `Tier ${e.tier} in this lane: banned in ${percent(e.banRate)} of matches, picked in ${percent(e.pickRate)} of the lane's matches`,
+        delta: e.score,
+        games: e.games,
+      },
+    ],
+  };
+}
+
 function CandidateDetails({
   name,
   ranked,
@@ -581,6 +611,8 @@ export function DraftPlanner({
   const [preferred, setPreferred] = useState(NO_PREFERENCE);
   const [buildOf, setBuildOf] = useState<Slot | null>(null);
   const [search, setSearch] = useState('');
+  /** Ban phase: only the champions of this lane, strongest first (null: every champion). */
+  const [banLane, setBanLane] = useState<Position | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const apiKey = dataKey;
 
@@ -625,16 +657,37 @@ export function DraftPlanner({
   const shownBuild = buildOf && buildRequest ? { ...buildOf, request: buildRequest } : null;
   const buildOpen = shownBuild !== null;
 
+  const banning = turn?.kind === 'ban';
+  const laneRequest = banning ? banLane : null;
+  const { result: laneTiers, retry: retryLaneTiers } = useApiCall(
+    laneRequest,
+    (role) => api.getTierList(role, DEFAULT_TIER_LIST_FILTERS),
+    apiKey,
+    true,
+  );
+  const banRanking = useMemo(
+    () =>
+      laneRequest && laneTiers.status !== 'idle'
+        ? (laneTiers.data?.entries.map(banCandidate) ?? null)
+        : null,
+    [laneRequest, laneTiers],
+  );
+
   const candidates = pickTeam && picks.status !== 'idle' ? (picks.data?.candidates ?? null) : null;
   const unavailable = useMemo(() => unavailableChampionIds(draft), [draft]);
   const [minConfidence] = useMinConfidence();
-  const pool = useMemo(
-    () =>
-      championPool(lookup?.champions ?? [], unavailable, candidates, search, (c) =>
-        meetsConfidence(c.confidence, minConfidence),
-      ),
-    [lookup, unavailable, candidates, search, minConfidence],
-  );
+  const pool = useMemo(() => {
+    const keep = (c: PickCandidate) => meetsConfidence(c.confidence, minConfidence);
+    const champions = lookup?.champions ?? [];
+    // A lane filter during bans: that lane's champions only.
+    if (laneRequest) {
+      return {
+        ranked: championPool(champions, unavailable, banRanking, search, keep).ranked,
+        rest: [],
+      };
+    }
+    return championPool(champions, unavailable, candidates, search, keep);
+  }, [lookup, unavailable, candidates, banRanking, laneRequest, search, minConfidence]);
   const poolIds = useMemo(
     () => [...pool.ranked.map((r) => r.champion.id), ...pool.rest.map((c) => c.id)],
     [pool],
@@ -727,7 +780,12 @@ export function DraftPlanner({
     if (first && search.trim()) choose(first.id);
   };
 
-  const heading = pickTeam && role ? `${TEAM_LABEL[pickTeam]} ${ROLE_LABEL[role]}` : '';
+  const heading =
+    pickTeam && role
+      ? `${TEAM_LABEL[pickTeam]} ${ROLE_LABEL[role]}`
+      : laneRequest
+        ? `Strongest in ${ROLE_LABEL[laneRequest]}`
+        : '';
   const competitive = draft.format === 'competitive';
 
   return (
@@ -886,6 +944,30 @@ export function DraftPlanner({
                       <BanIcon data-icon="inline-start" />
                       No ban
                     </Button>
+                    <Tabs
+                      value={banLane ?? 'ALL'}
+                      onValueChange={(v) => setBanLane(v === 'ALL' ? null : (v as Position))}
+                      className="gap-0"
+                    >
+                      <TabsList variant="line" aria-label="Lane of the champions to ban">
+                        <TabsTrigger value="ALL" className="px-2 text-[11px]">
+                          All
+                        </TabsTrigger>
+                        {POSITIONS.map((p) => (
+                          <TabsTrigger key={p} value={p} className="px-2 text-[11px]">
+                            {ROLE_LABEL[p]}
+                          </TabsTrigger>
+                        ))}
+                      </TabsList>
+                    </Tabs>
+                    {laneRequest && laneTiers.status === 'loading' && (
+                      <Loader2Icon className="size-3.5 animate-spin" aria-label="Updating" />
+                    )}
+                    {laneRequest && (
+                      <span className="ml-auto">
+                        <ConfidenceFilter />
+                      </span>
+                    )}
                   </>
                 ) : (
                   pickTeam && (
@@ -918,6 +1000,14 @@ export function DraftPlanner({
                 )}
               </div>
 
+              {laneRequest && laneTiers.status === 'error' && (
+                <Notice
+                  tone={laneTiers.code === 'NO_DATA' ? 'warn' : 'bad'}
+                  title={laneTiers.code === 'NO_DATA' ? 'No data yet' : 'Tier list unavailable'}
+                  message={laneTiers.message}
+                  action={{ label: 'Retry', onClick: retryLaneTiers }}
+                />
+              )}
               {pickTeam && picks.status === 'error' && (
                 <Notice
                   tone={picks.code === 'NO_DATA' ? 'warn' : 'bad'}
@@ -933,10 +1023,16 @@ export function DraftPlanner({
                 ) : (
                   <ChampionGrid
                     pool={pool}
-                    banning={turn?.kind === 'ban'}
+                    banning={banning}
                     heading={heading}
-                    loadingFirst={pickTeam !== null && picks.status === 'loading' && !candidates}
-                    stale={picks.status === 'loading'}
+                    loadingFirst={
+                      (pickTeam !== null && picks.status === 'loading' && !candidates) ||
+                      (laneRequest !== null && laneTiers.status === 'loading' && !banRanking)
+                    }
+                    stale={
+                      (pickTeam !== null && picks.status === 'loading') ||
+                      (laneRequest !== null && laneTiers.status === 'loading')
+                    }
                     role={role}
                     filtered={minConfidence !== 'LOW' && candidates !== null}
                     onChoose={choose}
@@ -1085,7 +1181,13 @@ function ChampionGrid({
   if (loadingFirst) return <GridSkeleton />;
   const empty = pool.ranked.length === 0 && pool.rest.length === 0;
   if (empty) {
-    return <p className="p-6 text-sm text-muted-foreground">No champion matches the search.</p>;
+    return (
+      <p className="p-6 text-sm text-muted-foreground">
+        {banning && heading
+          ? 'No champion of this lane matches the search and the confidence filter.'
+          : 'No champion matches the search.'}
+      </p>
+    );
   }
   const verb = banning ? 'Ban' : 'Pick';
   return (
@@ -1095,7 +1197,7 @@ function ChampionGrid({
         <>
           <div className="flex items-baseline gap-2 px-1">
             <span className="text-[10px] font-semibold tracking-[0.18em] uppercase">
-              Best picks · {heading}
+              {banning ? heading : `Best picks · ${heading}`}
             </span>
             <span className="text-[10px] text-muted-foreground">
               hover or focus for the reasons · arrows to move
