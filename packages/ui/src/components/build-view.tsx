@@ -2,6 +2,7 @@
 
 import {
   type BuildResponse,
+  type CoreBuild,
   type Reason,
   type RecommendedItem,
   STAT_SHARD_ROWS,
@@ -15,6 +16,7 @@ import {
   HoverCardTrigger,
 } from '@pick-league/ui/components/ui/hover-card';
 import { Skeleton } from '@pick-league/ui/components/ui/skeleton';
+import { Tabs, TabsList, TabsTrigger } from '@pick-league/ui/components/ui/tabs';
 import {
   compact,
   confidenceLabel,
@@ -27,6 +29,7 @@ import type { StaticLookup } from '@pick-league/ui/lib/static-lookup';
 import type { Loadable, MasteryEntry } from '@pick-league/ui/lib/types';
 import { cn } from '@pick-league/ui/lib/utils';
 import { ArrowRightIcon } from 'lucide-react';
+import { useState } from 'react';
 
 function SectionTitle({ children, meta }: { children: React.ReactNode; meta?: React.ReactNode }) {
   return (
@@ -92,6 +95,29 @@ function ItemTile({
   );
 }
 
+function ItemList({
+  items,
+  lookup,
+  ordered,
+}: {
+  items: RecommendedItem[];
+  lookup: StaticLookup | null;
+  ordered?: boolean;
+}) {
+  if (items.length === 0) return <p className="text-xs text-muted-foreground">—</p>;
+  return (
+    <ol className="flex flex-col">
+      {items.map((rec, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: duplicates allowed (2 potions)
+        <li key={`${rec.itemId}-${i}`} className="flex items-center gap-1">
+          {ordered && <span className="num w-3 text-[10px] text-muted-foreground">{i + 1}</span>}
+          <ItemTile rec={rec} lookup={lookup} />
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function ItemGroup({
   title,
   items,
@@ -106,21 +132,63 @@ function ItemGroup({
   return (
     <div className="min-w-0">
       <SectionTitle>{title}</SectionTitle>
-      {items.length === 0 ? (
-        <p className="text-xs text-muted-foreground">—</p>
-      ) : (
-        <ol className="flex flex-col">
-          {items.map((rec, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: duplicates allowed (2 potions)
-            <li key={`${rec.itemId}-${i}`} className="flex items-center gap-1">
-              {ordered && (
-                <span className="num w-3 text-[10px] text-muted-foreground">{i + 1}</span>
-              )}
-              <ItemTile rec={rec} lookup={lookup} />
-            </li>
+      <ItemList items={items} lookup={lookup} ordered={ordered} />
+    </div>
+  );
+}
+
+/** The core builds of a build (an API predating them only sends `core`). */
+function coreBuildsOf(build: BuildResponse): CoreBuild[] {
+  const builds = build.items.coreBuilds;
+  return builds && builds.length > 0
+    ? builds
+    : [{ items: build.items.core, games: 0, winRate: 0, share: 0, reasons: [] }];
+}
+
+function coreBuildMeta(b: CoreBuild): string | undefined {
+  return b.games > 0
+    ? `${percent(b.winRate)} wr · ${compact(b.games)} matches · ${percent(b.share)} of 3-item paths`
+    : undefined;
+}
+
+/** Core items in buy order; tabs to switch between core builds when there are several. */
+function CoreBuilds({
+  builds,
+  active,
+  onSelect,
+  lookup,
+}: {
+  builds: CoreBuild[];
+  active: number;
+  onSelect: (index: number) => void;
+  lookup: StaticLookup | null;
+}) {
+  const current = builds[active];
+  if (!current) return null;
+  if (builds.length === 1) {
+    return <ItemGroup title="Core · buy order" items={current.items} lookup={lookup} ordered />;
+  }
+  return (
+    <div className="min-w-0">
+      <Tabs value={active} onValueChange={(v) => onSelect(Number(v))} className="mb-2 gap-0">
+        <TabsList variant="line" className="h-auto w-full p-0">
+          {builds.map((b, i) => (
+            <TabsTrigger
+              // biome-ignore lint/suspicious/noArrayIndexKey: builds are ranked, the index is their id
+              key={i}
+              value={i}
+              className="flex-col gap-0 px-1.5 py-1 text-[10px]"
+              title={coreBuildMeta(b)}
+            >
+              <span>Core {i + 1}</span>
+              <span className="num font-normal tracking-normal text-muted-foreground normal-case">
+                {b.games > 0 ? `${percent(b.winRate)} wr` : '—'}
+              </span>
+            </TabsTrigger>
           ))}
-        </ol>
-      )}
+        </TabsList>
+      </Tabs>
+      <ItemList items={current.items} lookup={lookup} ordered />
     </div>
   );
 }
@@ -406,6 +474,12 @@ export function BuildDetails({
   /** Key Flash goes on (desktop setting; F by default). */
   flashKey?: FlashKey;
 }) {
+  const builds = coreBuildsOf(build);
+  // The picked core build, back to the first one when another champion/role is shown.
+  const key = `${build.championId}-${build.role}`;
+  const [picked, setPicked] = useState({ key, index: 0 });
+  const active = picked.key === key ? Math.min(picked.index, builds.length - 1) : 0;
+  const current = builds[active];
   return (
     <div className="flex flex-col gap-6 p-4">
       <LanePhase build={build} lookup={lookup} />
@@ -417,7 +491,12 @@ export function BuildDetails({
           )}
         </div>
         <ItemGroup title="Early" items={build.items.early} lookup={lookup} ordered />
-        <ItemGroup title="Core · buy order" items={build.items.core} lookup={lookup} ordered />
+        <CoreBuilds
+          builds={builds}
+          active={active}
+          onSelect={(index) => setPicked({ key, index })}
+          lookup={lookup}
+        />
         <div className="min-w-0">
           <SectionTitle>Situational</SectionTitle>
           <div className="flex flex-col gap-1">
@@ -430,6 +509,14 @@ export function BuildDetails({
           </div>
         </div>
       </section>
+      {current && current.reasons.length > 0 && (
+        <section>
+          <SectionTitle meta={coreBuildMeta(current)}>
+            {builds.length > 1 ? `Core build ${active + 1} of ${builds.length}` : 'Core build'}
+          </SectionTitle>
+          <ReasonList reasons={current.reasons} />
+        </section>
+      )}
       <div className="grid grid-cols-2 gap-6 max-md:grid-cols-1">
         <Runes build={build} lookup={lookup} />
         <div className="flex flex-col gap-6">
