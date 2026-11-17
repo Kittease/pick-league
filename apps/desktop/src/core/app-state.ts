@@ -14,6 +14,7 @@ import type { PickLeagueData } from '@pick-league/ui/lib/data';
 import type { ApiResult, Loadable, MasteryEntry } from '@pick-league/ui/lib/types';
 import type { ChampSelectView } from './champ-select.ts';
 import type { FlashKey } from './spells.ts';
+import type { UpdateBridge } from './update.ts';
 
 export type { ApiResult, Loadable, MasteryEntry };
 
@@ -136,5 +137,7 @@ export interface PickLeagueBridge extends PickLeagueData {
     close(): void;
     onState(listener: (state: WindowState) => void): () => void;
   };
+  /** Auto-update (packaged builds only). */
+  update: UpdateBridge;
   onState(listener: (state: AppState) => void): () => void;
 }

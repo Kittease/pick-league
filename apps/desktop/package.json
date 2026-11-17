@@ -1,7 +1,7 @@
 {
   "name": "@pick-league/desktop",
   "productName": "PickLeague",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "PickLeague champion-select helper",
   "author": "PickLeague",
@@ -11,8 +11,8 @@
     "dev": "install-electron && electron-vite dev",
     "build": "electron-vite build",
     "start": "install-electron && electron-vite preview",
-    "package": "electron-vite build && electron-builder --config electron-builder.yml",
-    "package:dir": "electron-vite build && electron-builder --config electron-builder.yml --dir",
+    "package": "electron-vite build && electron-builder --config electron-builder.yml --publish never",
+    "package:dir": "electron-vite build && electron-builder --config electron-builder.yml --dir --publish never",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.json",
     "test": "bun test"
   },
@@ -32,6 +32,7 @@
     "cn": "0.5.2",
     "electron": "45.3.1",
     "electron-builder": "26.18.0",
+    "electron-updater": "6.8.11",
     "electron-vite": "6.0.0",
     "lucide-react": "1.72.0",
     "next-themes": "0.4.6",

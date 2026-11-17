@@ -2,13 +2,16 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createDdragonClient, isPosition, toTierListFilters } from '@pick-league/shared';
 import { app, BrowserWindow, ipcMain, powerSaveBlocker, shell } from 'electron';
+import electronUpdater from 'electron-updater';
 import { IPC, type Settings, type WindowState } from '../core/app-state.ts';
 import { staticResponseFromDdragon } from '../core/static-from-ddragon.ts';
+import { UPDATE_IPC } from '../core/update.ts';
 import { DEFAULT_ZOOM, stepZoom, zoomShortcut } from '../core/zoom.ts';
 import { createApiClient } from './api-client.ts';
 import { Controller } from './controller.ts';
 import { createRealLcuSource } from './lcu/real.ts';
 import { createSettingsSaver, loadSettings, sanitizeSettings } from './settings.ts';
+import { UpdateService } from './updater.ts';
 
 app.setName('PickLeague');
 const log = (message: string) => console.log(`[pickleague] ${message}`);
@@ -223,13 +226,34 @@ async function main(): Promise<void> {
   ipcMain.handle(IPC.draftBuild, (_e, request: unknown) => controller.draftBuild(request));
   ipcMain.handle(IPC.evaluateDraft, (_e, request: unknown) => controller.evaluateDraft(request));
 
+  // Auto-update from GitHub Releases: installed Windows app only (releases ship no macOS/Linux
+  // builds, and an unsigned macOS app cannot update itself). See updater.ts.
+  const updates = new UpdateService({
+    currentVersion: app.getVersion(),
+    enabled: app.isPackaged && process.platform === 'win32',
+    createUpdater: () => electronUpdater.autoUpdater,
+    log,
+  });
+  updates.onChange((state) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(UPDATE_IPC.state, state);
+    }
+  });
+  ipcMain.handle(UPDATE_IPC.getState, () => updates.getState());
+  ipcMain.on(UPDATE_IPC.check, () => updates.check());
+  ipcMain.on(UPDATE_IPC.install, () => updates.install());
+
   controller.start();
   createWindow(controller);
+  updates.start();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow(controller);
   });
-  app.on('before-quit', () => controller.stop());
+  app.on('before-quit', () => {
+    updates.stop();
+    controller.stop();
+  });
 }
 
 app.on('window-all-closed', () => {

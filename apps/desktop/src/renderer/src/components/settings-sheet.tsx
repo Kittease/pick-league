@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react';
 import type { AppState, Settings } from '../../../core/app-state.ts';
 import { FLASH_KEYS } from '../../../core/spells.ts';
 import { ZOOM_LEVELS } from '../../../core/zoom.ts';
+import { updateStatusText, useUpdateState } from '../hooks/use-update';
 
 function update(patch: Partial<Settings>) {
   void window.pickleague.updateSettings(patch);
@@ -50,6 +51,8 @@ export function SettingsSheet({ state }: { state: AppState }) {
   const [apiUrl, setApiUrl] = useState(settings.apiUrl);
   useEffect(() => setApiUrl(settings.apiUrl), [settings.apiUrl]);
   const urlValid = /^https?:\/\/\S+$/.test(apiUrl.trim());
+  // Mounted with the header, so the "update ready" toast shows even with the sheet closed.
+  const appUpdate = useUpdateState();
 
   return (
     <Sheet>
@@ -180,6 +183,37 @@ export function SettingsSheet({ state }: { state: AppState }) {
               ))}
             </div>
           </div>
+
+          {appUpdate && (
+            <div className="flex items-start justify-between gap-6 py-4">
+              <div className="flex flex-col gap-1">
+                <Label>
+                  Version <span className="num">{appUpdate.currentVersion}</span>
+                </Label>
+                <p className="text-xs text-muted-foreground" title={appUpdate.message ?? undefined}>
+                  {updateStatusText(appUpdate)}
+                </p>
+              </div>
+              {appUpdate.status === 'ready' ? (
+                <Button size="xs" onClick={() => window.pickleague.update.install()}>
+                  Restart to update
+                </Button>
+              ) : (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={
+                    appUpdate.status === 'disabled' ||
+                    appUpdate.status === 'checking' ||
+                    appUpdate.status === 'downloading'
+                  }
+                  onClick={() => window.pickleague.update.check()}
+                >
+                  Check now
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       </SheetContent>
     </Sheet>

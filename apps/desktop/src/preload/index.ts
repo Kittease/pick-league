@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { type AppState, IPC, type PickLeagueBridge, type WindowState } from '../core/app-state.ts';
+import { UPDATE_IPC, type UpdateState } from '../core/update.ts';
 
 const bridge: PickLeagueBridge = {
   getState: () => ipcRenderer.invoke(IPC.getState),
@@ -17,6 +18,16 @@ const bridge: PickLeagueBridge = {
       const handler = (_e: unknown, state: WindowState) => listener(state);
       ipcRenderer.on(IPC.windowState, handler);
       return () => ipcRenderer.removeListener(IPC.windowState, handler);
+    },
+  },
+  update: {
+    getState: () => ipcRenderer.invoke(UPDATE_IPC.getState),
+    check: () => ipcRenderer.send(UPDATE_IPC.check),
+    install: () => ipcRenderer.send(UPDATE_IPC.install),
+    onState(listener) {
+      const handler = (_e: unknown, state: UpdateState) => listener(state);
+      ipcRenderer.on(UPDATE_IPC.state, handler);
+      return () => ipcRenderer.removeListener(UPDATE_IPC.state, handler);
     },
   },
   getTierList: (role, filters) => ipcRenderer.invoke(IPC.tierList, role, filters),
