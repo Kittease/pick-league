@@ -44,6 +44,8 @@ export interface ApiStatus {
   url: string;
   latestPatch: string | null;
   matchCount: number | null;
+  /** Matches on `latestPatch` (what the stats of the current patch are built on). */
+  patchMatchCount: number | null;
   message: string | null;
 }
 

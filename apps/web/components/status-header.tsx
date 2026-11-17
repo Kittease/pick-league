@@ -1,6 +1,6 @@
 'use client';
 
-import { CollectionBanner, StatsFreshness } from '@pick-league/ui/components/stats-freshness';
+import { CollectionBanner } from '@pick-league/ui/components/collection-banner';
 import { compact } from '@pick-league/ui/lib/format';
 import { cn } from '@pick-league/ui/lib/utils';
 import type { ServerStatus } from '@/app/actions';
@@ -19,9 +19,9 @@ function Dot({ tone }: { tone: 'ok' | 'warn' | 'bad' }) {
 }
 
 /**
- * The desktop's header without what needs the League client: the API's patch and match count,
- * the stats freshness, and the line under it while collection is stopped. The relative times
- * only render in the browser (`live`), so the server's HTML never disagrees with them.
+ * The desktop's header without what needs the League client: the current patch and its match
+ * count, and the line under it while collection is stopped. That line's relative time only
+ * renders in the browser (`live`), so the server's HTML never disagrees with it.
  */
 export function StatusHeader({ status, live }: { status: ServerStatus; live: boolean }) {
   const { health, stats } = status;
@@ -40,16 +40,10 @@ export function StatusHeader({ status, live }: { status: ServerStatus; live: boo
             {!health
               ? 'unreachable'
               : health.latestPatch
-                ? `patch ${health.latestPatch} · ${compact(health.matchCount)} matches`
+                ? `patch ${health.latestPatch} · ${compact(health.patchMatchCount ?? health.matchCount)} matches`
                 : 'no data yet'}
           </span>
         </span>
-
-        {live && (
-          <span className="hidden min-w-0 sm:flex">
-            <StatsFreshness status={stats} refreshing={stats?.refreshing ?? false} />
-          </span>
-        )}
       </header>
       {live && <CollectionBanner status={stats} />}
     </>

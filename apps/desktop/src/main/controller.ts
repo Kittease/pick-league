@@ -129,6 +129,7 @@ export class Controller {
         url: this.api.baseUrl,
         latestPatch: null,
         matchCount: null,
+        patchMatchCount: null,
         message: null,
       },
       stats: { status: null, refreshing: false },
@@ -458,6 +459,7 @@ export class Controller {
           url: api.baseUrl,
           latestPatch: h.latestPatch,
           matchCount: h.matchCount,
+          patchMatchCount: h.patchMatchCount ?? null,
           message: hasData
             ? null
             : h.ok
@@ -476,6 +478,7 @@ export class Controller {
           url: api.baseUrl,
           latestPatch: null,
           matchCount: null,
+          patchMatchCount: null,
           message: errorInfo(e).message,
         },
       });

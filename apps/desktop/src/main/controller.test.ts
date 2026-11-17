@@ -70,7 +70,13 @@ function setup(options: { lcu?: Partial<LcuApi> } = {}) {
   const calls = { picks: 0, build: 0, draft: 0, spells: 0, applies: 0 };
   const api: ApiClient = {
     baseUrl: 'http://api.test',
-    health: async () => ({ ok: true, db: true, latestPatch: '15.22', matchCount: 10 }),
+    health: async () => ({
+      ok: true,
+      db: true,
+      latestPatch: '15.22',
+      matchCount: 10,
+      patchMatchCount: 6,
+    }),
     staticData: async () => Promise.reject(new Error('no static data in tests')),
     picks: async (req) => {
       calls.picks++;

@@ -1,4 +1,4 @@
-import { CollectionBanner, StatsFreshness } from '@pick-league/ui/components/stats-freshness';
+import { CollectionBanner } from '@pick-league/ui/components/collection-banner';
 import { compact } from '@pick-league/ui/lib/format';
 import { cn } from '@pick-league/ui/lib/utils';
 import type { AppState } from '../../../core/app-state.ts';
@@ -22,7 +22,7 @@ function Dot({ tone }: { tone: 'ok' | 'warn' | 'bad' | 'idle' }) {
 export function StatusBar({ state }: { state: AppState }) {
   const { lcu, api } = state;
   const chrome = useWindowState();
-  // Stats freshness and collection warnings only while the API answers.
+  // Collection warnings only while the API answers.
   const statsStatus = api.state === 'ok' ? state.stats.status : null;
   const lcuTone = lcu.state === 'connected' ? 'ok' : 'idle';
   const apiTone =
@@ -60,14 +60,12 @@ export function StatusBar({ state }: { state: AppState }) {
           <span className="text-muted-foreground">API</span>
           <span className="truncate">
             {api.state === 'ok'
-              ? `patch ${api.latestPatch} · ${compact(api.matchCount ?? 0)} matches`
+              ? `patch ${api.latestPatch} · ${compact(api.patchMatchCount ?? api.matchCount ?? 0)} matches`
               : api.state === 'checking'
                 ? 'checking…'
                 : (api.message ?? 'unreachable')}
           </span>
         </span>
-
-        <StatsFreshness status={statsStatus} refreshing={state.stats.refreshing} />
 
         <span className="ml-auto flex shrink-0 items-center gap-3">
           <span className="hidden text-muted-foreground xl:inline">
