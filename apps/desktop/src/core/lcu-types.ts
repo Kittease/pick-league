@@ -137,8 +137,12 @@ export interface LcuGameflowPlayer {
 /** `GET /lol-gameflow/v1/session`, read to recover the teams when the app starts in game. */
 export interface LcuGameflowSession {
   phase: LcuGameflowPhase;
+  /** Map of the queue (11 = Summoner's Rift, 12 = Howling Abyss, 30 = Arena…). */
+  map?: { id: number; name?: string };
   gameData: {
     gameId: number;
+    /** Queue of the lobby, set from champion select on. */
+    queue?: { id: number; mapId: number; gameMode?: string; description?: string };
     teamOne: LcuGameflowPlayer[];
     teamTwo: LcuGameflowPlayer[];
     playerChampionSelections?: {

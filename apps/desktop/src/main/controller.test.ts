@@ -7,7 +7,11 @@ import {
   gameflowSession,
   LOCKED_CHAMPION,
 } from '../core/fixtures.ts';
-import type { LcuChampSelectSession, LcuGameflowPhase } from '../core/lcu-types.ts';
+import type {
+  LcuChampSelectSession,
+  LcuGameflowPhase,
+  LcuGameflowSession,
+} from '../core/lcu-types.ts';
 import type { ApiClient } from './api-client.ts';
 import { Controller } from './controller.ts';
 import type { LcuApi } from './lcu/api.ts';
@@ -159,6 +163,48 @@ function setup(options: { lcu?: Partial<LcuApi> } = {}) {
   const state = (): AppState => controller.getState();
   return { controller, calls, lcu: lcuEvents, state };
 }
+
+describe('controller: queue map', () => {
+  const aram = (): LcuGameflowSession => ({
+    ...gameflowSession([32, 4]),
+    phase: 'ChampSelect',
+    map: { id: 12, name: 'Howling Abyss' },
+    gameData: {
+      ...gameflowSession([32, 4]).gameData,
+      queue: { id: 450, mapId: 12, gameMode: 'ARAM', description: 'ARAM' },
+    },
+  });
+
+  test("a champion select off Summoner's Rift is ignored: nothing shown, fetched or applied", async () => {
+    const { calls, lcu, state } = setup({ lcu: { getGameflowSession: async () => aram() } });
+    lcu.phase('ChampSelect');
+    lcu.session(champSelectSession());
+    await settle();
+    expect(state()).toMatchObject({ champSelect: null, unsupportedQueue: 'ARAM' });
+    expect(calls).toMatchObject({ picks: 0, build: 0, applies: 0, spells: 0 });
+
+    lcu.phase('GameStart');
+    lcu.session(null);
+    await settle();
+    expect(state()).toMatchObject({ champSelect: null, inGame: false });
+
+    lcu.phase('EndOfGame');
+    expect(state().unsupportedQueue).toBeNull();
+  });
+
+  test("a Summoner's Rift queue is shown as usual", async () => {
+    const rift = (): LcuGameflowSession => {
+      const s = aram();
+      return { ...s, map: { id: 11 }, gameData: { ...s.gameData, queue: { id: 420, mapId: 11 } } };
+    };
+    const { lcu, state } = setup({ lcu: { getGameflowSession: async () => rift() } });
+    lcu.phase('ChampSelect');
+    lcu.session(champSelectSession());
+    await settle();
+    expect(state().unsupportedQueue).toBeNull();
+    expect(state().champSelect).not.toBeNull();
+  });
+});
 
 describe('controller: champion select → game', () => {
   test('keeps the locked build through the game without refetching or applying again', async () => {

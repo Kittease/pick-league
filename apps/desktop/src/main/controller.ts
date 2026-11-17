@@ -33,6 +33,7 @@ import {
   type LobbyEvent,
   NO_LOBBY,
   nextLobby,
+  queueSupport,
   sessionFromGameflow,
 } from '../core/game-flow.ts';
 import { type ApiClient, ApiClientError } from './api-client.ts';
@@ -104,6 +105,11 @@ export class Controller {
   private staticLoading: Promise<void> | null = null;
   /** Increments for every champion select (session appears). */
   private selectSeq = 0;
+  /**
+   * Queue of the current champion select: shown only once known to be on Summoner's Rift
+   * (`checking` while the League client is asked, after which it is shown or ignored).
+   */
+  private queue: 'checking' | 'supported' | 'unsupported' = 'supported';
   /** `selectSeq` whose locked champion's build was applied (auto or by hand). */
   private autoAppliedSeq = -1;
   /** Auto-apply runs started in the current champion select. */
@@ -134,6 +140,7 @@ export class Controller {
       },
       stats: { status: null, refreshing: false },
       champSelect: null,
+      unsupportedQueue: null,
       inGame: false,
       mastery: {},
       availableCount: null,
@@ -344,6 +351,10 @@ export class Controller {
 
     if (next.stage === 'none') {
       if (prev.stage !== 'none') this.clearSelect();
+      // A game of another map read at startup (`recoverGame`) is over.
+      else if (this.state.unsupportedQueue !== null && !isInGamePhase(next.phase)) {
+        this.patch({ unsupportedQueue: null });
+      }
     } else if (next.stage === 'select') {
       // `leaving` → `select`: the same champion select carries on.
       if (next.session !== prev.session) {
@@ -370,17 +381,43 @@ export class Controller {
       });
       // Owned champions / mastery may have changed since the last game.
       void this.loadAccount();
+      this.queue = 'checking';
+      void this.checkQueue(this.selectSeq);
     }
+    if (this.queue !== 'supported') return;
     const view = deriveChampSelect(session, this.state.settings.fallbackRole);
     this.patch({ champSelect: view, inGame: false });
     this.schedulePicks();
     this.scheduleBuild();
   }
 
+  /**
+   * Asks the League client which map the champion select `seq` is for, then shows it (Summoner's
+   * Rift, or unknown) or ignores it (any other map: no data there).
+   */
+  private async checkQueue(seq: number): Promise<void> {
+    const api = this.lcuApi;
+    let support: ReturnType<typeof queueSupport> = { supported: true, name: null };
+    try {
+      support = queueSupport(api ? await api.getGameflowSession() : null);
+    } catch (e) {
+      this.deps.log(`queue not read, champion select shown: ${errorInfo(e).message}`);
+    }
+    if (seq !== this.selectSeq || this.queue !== 'checking') return;
+    this.queue = support.supported ? 'supported' : 'unsupported';
+    if (!support.supported) {
+      this.deps.log(`champion select ignored: not on Summoner's Rift (${support.name ?? '?'})`);
+      this.patch({ unsupportedQueue: support.name ?? '' });
+      return;
+    }
+    if (this.lobby.stage === 'select') this.showSelect(false);
+    else if (this.lobby.stage === 'game') this.showGame(true);
+  }
+
   /** Game started: keep its champion select and the locked champion's build, stop the picks. */
   private showGame(entering: boolean): void {
     const session = this.lobby.session;
-    if (!session) return;
+    if (!session || this.queue !== 'supported') return;
     if (entering) {
       if (this.picksTimer) clearTimeout(this.picksTimer);
       this.picksKey = '';
@@ -394,12 +431,14 @@ export class Controller {
   }
 
   private clearSelect(): void {
+    this.queue = 'supported';
     this.picksKey = '';
     this.buildKey = '';
     this.previewChampionId = null;
     this.cancelAutoApplyRetry();
     this.patch({
       champSelect: null,
+      unsupportedQueue: null,
       inGame: false,
       picks: { status: 'idle' },
       build: { status: 'idle' },
@@ -417,6 +456,13 @@ export class Controller {
         api.getGameflowSession(),
         api.getCurrentSummoner(),
       ]);
+      const support = queueSupport(gameflow);
+      if (!support.supported) {
+        if (api === this.lcuApi && this.state.unsupportedQueue === null) {
+          this.patch({ unsupportedQueue: support.name ?? '' });
+        }
+        return;
+      }
       const session = gameflow && me ? sessionFromGameflow(gameflow, me) : null;
       if (session && api === this.lcuApi) {
         this.deps.log('game in progress: teams read from the League client');

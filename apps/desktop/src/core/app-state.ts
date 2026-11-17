@@ -74,6 +74,11 @@ export interface AppState {
   stats: StatsState;
   champSelect: ChampSelectView | null;
   /**
+   * The lobby's queue is not on Summoner's Rift (ARAM, Arena…): its champion select is ignored
+   * (`champSelect` stays null, nothing is fetched or applied). The queue's name, or '' unknown.
+   */
+  unsupportedQueue: string | null;
+  /**
    * The game started: `champSelect` is the champion select it came from, kept with its build
    * until the game ends. Nothing is fetched (picks) nor applied anymore.
    */

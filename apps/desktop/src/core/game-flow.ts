@@ -22,6 +22,26 @@ const IN_GAME_PHASES = new Set<LcuGameflowPhase>([
   'PreEndOfGame',
 ]);
 
+/** Summoner's Rift: the only map the stats (and so the recommendations) are collected on. */
+export const SUMMONERS_RIFT_MAP_ID = 11;
+
+/**
+ * Whether the lobby's queue plays on Summoner's Rift, from `/lol-gameflow/v1/session`, and its
+ * name for the user otherwise. Unknown (no session, no map) counts as supported: champion
+ * select keeps working when the client does not say.
+ */
+export function queueSupport(session: LcuGameflowSession | null): {
+  supported: boolean;
+  name: string | null;
+} {
+  const mapId = session?.gameData?.queue?.mapId ?? session?.map?.id;
+  if (mapId === undefined || mapId === SUMMONERS_RIFT_MAP_ID)
+    return { supported: true, name: null };
+  const queue = session?.gameData?.queue;
+  const name = queue?.description || session?.map?.name || queue?.gameMode || null;
+  return { supported: false, name };
+}
+
 /** From the game launch until its end-of-game screen. */
 export function isInGamePhase(phase: LcuGameflowPhase | null): boolean {
   return phase !== null && IN_GAME_PHASES.has(phase);

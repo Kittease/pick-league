@@ -21,6 +21,22 @@ type Tab = 'picks' | 'build';
 
 function Waiting({ state }: { state: AppState }) {
   const connected = state.lcu.state === 'connected';
+  if (connected && state.unsupportedQueue !== null) {
+    return (
+      <main className="grid flex-1 place-items-center p-8">
+        <div className="flex max-w-md flex-col gap-3">
+          <span className="text-[10px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+            {state.unsupportedQueue || 'Other game mode'}
+          </span>
+          <h1 className="text-2xl font-semibold">Only Summoner's Rift is supported.</h1>
+          <p className="text-sm text-muted-foreground">
+            PickLeague only collects ranked matches on Summoner's Rift, so it has no picks or builds
+            for this mode. It comes back on its own in your next Summoner's Rift champ select.
+          </p>
+        </div>
+      </main>
+    );
+  }
   return (
     <main className="grid flex-1 place-items-center p-8">
       <div className="flex max-w-md flex-col gap-3">

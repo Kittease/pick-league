@@ -7,6 +7,8 @@ import {
   type LobbyEvent,
   NO_LOBBY,
   nextLobby,
+  queueSupport,
+  SUMMONERS_RIFT_MAP_ID,
   sessionFromGameflow,
 } from './game-flow.ts';
 import type { LcuGameflowSession } from './lcu-types.ts';
@@ -169,5 +171,27 @@ describe('champion select rebuilt from a game in progress', () => {
   test('null when the user is not playing (spectating)', () => {
     const other = { summonerId: 999, puuid: 'fake-puuid-someone-else' };
     expect(sessionFromGameflow(gameflowSession([4, 14]), other)).toBeNull();
+  });
+});
+
+describe("queue support (Summoner's Rift only)", () => {
+  const base = gameflowSession([4, 14]);
+  const withQueue = (mapId: number, description?: string): LcuGameflowSession => ({
+    ...base,
+    gameData: { ...base.gameData, queue: { id: 1, mapId, description } },
+  });
+
+  test("Summoner's Rift and unknown maps are supported", () => {
+    expect(queueSupport(withQueue(SUMMONERS_RIFT_MAP_ID))).toEqual({ supported: true, name: null });
+    expect(queueSupport(base)).toEqual({ supported: true, name: null });
+    expect(queueSupport(null)).toEqual({ supported: true, name: null });
+  });
+
+  test('other maps are not, with the queue name for the user', () => {
+    expect(queueSupport(withQueue(12, 'ARAM'))).toEqual({ supported: false, name: 'ARAM' });
+    expect(queueSupport({ ...base, map: { id: 30, name: 'Arena' } })).toEqual({
+      supported: false,
+      name: 'Arena',
+    });
   });
 });
