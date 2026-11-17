@@ -36,6 +36,10 @@ export function formatGames(n: number): string {
   return `${intFormat.format(n)} ${n === 1 ? 'game' : 'games'}`;
 }
 
+export function formatMatches(n: number): string {
+  return `${intFormat.format(n)} ${n === 1 ? 'match' : 'matches'}`;
+}
+
 /** 0.0281 → "+2.8%"; anything that rounds to zero → "0.0%", without a sign. */
 export function formatDelta(delta: number): string {
   const pct = Math.round(delta * 1000) / 10;

@@ -406,13 +406,39 @@ export interface RecommendedItem {
   reasons: Reason[];
 }
 
+/**
+ * One core build: a path of first three completed items (taken by enough matches), completed to
+ * the core size with the most built items, boots included at their usual slot.
+ */
+export interface CoreBuild {
+  /** Completed items in buy order (boots included at their usual slot). */
+  items: RecommendedItem[];
+  /** Matches whose first three completed items were this build's, in this order. */
+  games: number;
+  /** Win rate of those matches, 0..1. */
+  winRate: number;
+  /** Share of the matches with three completed items that took this path, 0..1. */
+  share: number;
+  /** Why this build: its record, how it compares with core build 1, the lane matchup. */
+  reasons: Reason[];
+}
+
 export interface ItemsRecommendation {
   /** Starting purchase, e.g. [World Atlas, Health Potion x2] → item ids, duplicates allowed. */
   starting: RecommendedItem[];
   /** Early purchases before the first completed item (components, boots), in buy order. */
   early: RecommendedItem[];
-  /** Completed items in buy order (boots included at their usual slot). */
+  /**
+   * Completed items in buy order (boots included at their usual slot): the items of
+   * `coreBuilds[0]`, kept for clients that only know one core build (its first item also
+   * carries the build's record among its reasons).
+   */
   core: RecommendedItem[];
+  /**
+   * 1 to 3 core builds, best first: the most successful one, then genuinely different paths with
+   * enough matches. Situational items apply to all of them.
+   */
+  coreBuilds: CoreBuild[];
   /** Adaptations to this game's enemies/allies. */
   situational: RecommendedItem[];
   /**

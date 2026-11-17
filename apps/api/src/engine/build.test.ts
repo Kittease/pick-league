@@ -168,6 +168,112 @@ describe('recommendBuild', () => {
     expect(nonBoots?.slice(0, 3)).toEqual([3190, 3050, 3109]);
   });
 
+  describe('core builds', () => {
+    const withPaths = (...paths: ChoiceRow[]) =>
+      data({ choices: [...data().choices.filter((r) => r.kind !== 'core3'), ...paths] });
+    const paths = [
+      c('core3', '3190,3050,3109', 400, 220),
+      c('core3', '3050,3190,3109', 300, 150), // permutation of build 1
+      c('core3', '3190,3050,3075', 100, 55), // same first item, one item differs
+      c('core3', '3075,3050,3065', 200, 112),
+      c('core3', '3050,3109,3065', 150, 84),
+      c('core3', '3109,3190,3050', 60, 33), // permutation of build 1
+      c('core3', '3065,3075,3011', 15, 8), // too few matches
+    ];
+    const firstThree = (items: { itemId: number }[]) =>
+      items
+        .map((i) => i.itemId)
+        .filter((id) => id !== 3047)
+        .slice(0, 3);
+
+    test('alternatives: other item sets with enough matches, best first, each filled with boots', () => {
+      const b = recommendBuild(req(LEONA), withPaths(...paths));
+      const builds = b?.items.coreBuilds ?? [];
+      expect(builds.map((x) => firstThree(x.items))).toEqual([
+        [3190, 3050, 3109],
+        [3075, 3050, 3065],
+        [3050, 3109, 3065],
+      ]);
+      expect(b?.items.core.map((i) => i.itemId)).toEqual(
+        builds[0]?.items.map((i) => i.itemId) ?? [],
+      );
+      // Build 1's record: on the build, and on the first core item for one-build clients.
+      expect(builds[0]?.items[0]?.reasons.some((r) => r.kind === 'base')).toBe(false);
+      expect(b?.items.core[0]?.reasons[0]?.label).toMatch(/^Most successful first three items: /);
+      for (const build of builds) {
+        expect(build.items).toHaveLength(5);
+        expect(build.items.map((i) => i.itemId)).toContain(3047);
+        expect(build.reasons.length).toBeGreaterThan(0);
+      }
+      expect(builds[1]?.items.map((i) => i.itemId)).toEqual([3075, 3047, 3050, 3065, 3109]);
+      expect(builds[1]).toMatchObject({ games: 200, winRate: 0.56 });
+      expect(builds[1]?.share).toBeCloseTo(200 / 1225, 4);
+      expect(builds[0]?.reasons[0]?.label).toMatch(
+        /^Most successful first three items: 55\.0% win rate, taken in 32\.7% of matches with three completed items \(400 matches\)$/,
+      );
+      expect(builds[1]?.reasons[0]).toMatchObject({ kind: 'base', games: 200 });
+      expect(builds[1]?.reasons[0]?.label).toMatch(
+        /^Starts with Thornmail instead of Locket of the Iron Solari: 56\.0% win rate/,
+      );
+      expect(builds[1]?.reasons[1]).toMatchObject({ kind: 'popularity', games: 200 });
+      expect(builds[1]?.reasons[1]?.label).toBe(
+        'vs core build 1: 56.0% vs 55.0% win rate, 2.0× less popular (200 matches vs 400 matches)',
+      );
+    });
+
+    test('the same first item counts as different with at least two other items', () => {
+      const b = recommendBuild(
+        req(LEONA),
+        withPaths(paths[0] as ChoiceRow, c('core3', '3190,3075,3065', 200, 112)),
+      );
+      const second = b?.items.coreBuilds[1];
+      expect(second && firstThree(second.items)).toEqual([3190, 3075, 3065]);
+      expect(second?.reasons[0]?.label).toMatch(
+        /^Thornmail \+ Spirit Visage instead of Zeke's Convergence \+ Knight's Vow: /,
+      );
+    });
+
+    test('no alternative when the data does not support one', () => {
+      // Only a permutation of build 1.
+      expect(recommendBuild(req(LEONA), data())?.items.coreBuilds).toHaveLength(1);
+      // A path doing clearly worse than the other 3-item paths.
+      const worse = recommendBuild(
+        req(LEONA),
+        withPaths(paths[0] as ChoiceRow, c('core3', '3075,3050,3065', 300, 120)),
+      );
+      expect(worse?.items.coreBuilds).toHaveLength(1);
+    });
+
+    test('a build whose items do notably better vs the lane opponent says so', () => {
+      const b = recommendBuild(req({ ...LEONA, enemies: [{ championId: 412, role: 'UTILITY' }] }), {
+        ...withPaths(...paths),
+        vs: [vs(CUR, 89, 412, 'UTILITY', 300, 150)],
+        // Thornmail: 75 % vs Thresh when built.
+        choiceMatchups: [
+          {
+            opponentId: 412,
+            opponentPosition: 'UTILITY',
+            kind: 'item',
+            choice: '3075',
+            games: 60,
+            wins: 45,
+          },
+        ],
+      });
+      const [first, second] = b?.items.coreBuilds ?? [];
+      expect(first?.reasons.some((r) => r.kind === 'matchup')).toBe(false);
+      expect(second?.reasons[0]).toMatchObject({
+        kind: 'matchup',
+        itemId: 3075,
+        championIds: [412],
+        games: 60,
+      });
+      expect(second?.reasons[0]?.label).toMatch(
+        /^\+\d+\.\d% vs Thresh when Thornmail is built \(60 matches\)$/,
+      );
+    });
+  });
+
   describe('items compared with players at the same point of their build', () => {
     const done = (choice: string, games: number, wins: number) =>
       c('items_done', choice, games, wins);

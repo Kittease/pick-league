@@ -11,6 +11,7 @@ import type {
   BuildRequest,
   BuildResponse,
   CompTrait,
+  CoreBuild,
   ItemsRecommendation,
   PatchId,
   Reason,
@@ -32,6 +33,7 @@ import { lanePhaseDiff, lanePhaseReason, lanePhaseRowsOf } from './lane-phase.ts
 import {
   formatDelta,
   formatGames,
+  formatMatches,
   formatRate,
   type PatchChoice,
   patchesLabel,
@@ -819,33 +821,114 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
     if (!next) break;
     coreIds.push(Number(next.row.choice));
   }
-  const pathRow = paths.find((r) => r.choice === coreIds.join(','));
   const allPaths = sumStats(paths);
-  const core3: Scored | null =
-    pathRow && allPaths.games > 0
-      ? {
-          row: pathRow,
-          delta: shrink(winRate(pathRow) - winRate(allPaths), pathRow.games, kOf('coreNext')),
-          share: pathRow.games / allPaths.games,
-        }
-      : null;
-  const extra = itemRows
-    .filter((r) => !coreIds.includes(Number(r.choice)) && !isBoots(Number(r.choice)))
-    .filter((r) => (r.avgPos ?? 0) >= coreIds.length - 0.5)
-    .sort((a, b) => b.games - a.games || Number(a.choice) - Number(b.choice));
-  for (const r of extra) {
-    if (coreIds.length >= B.coreSize) break;
-    coreIds.push(Number(r.choice));
-  }
-  const core: RecommendedItem[] = coreIds.map((itemId, i) => ({
-    itemId,
-    reasons: [
-      ...(i === 0 ? [...fallback, ...baseReason(core3, 'Most successful first three items')] : []),
-      ...itemReason(itemId),
-    ],
-  }));
+  const scorePath = (row: ChoiceRow): Scored => ({
+    row,
+    delta: shrink(winRate(row) - winRate(allPaths), row.games, kOf('coreNext')),
+    share: allPaths.games > 0 ? row.games / allPaths.games : 0,
+  });
+  const pathRow = paths.find((r) => r.choice === coreIds.join(','));
+  const core3: Scored | null = pathRow && allPaths.games > 0 ? scorePath(pathRow) : null;
 
-  // Boots, adjusted for the lane opponent and enemy traits, inserted at their usual slot.
+  // Alternative core builds: other paths with enough matches and a genuinely different item set
+  // (a different first item, or at least 2 items not in a build already chosen), best first.
+  const A = B.altCores;
+  const chosen: { path: number[]; scored: Scored | null }[] = [
+    { path: [...coreIds], scored: core3 },
+  ];
+  const differs = (a: readonly number[], b: readonly number[]) => {
+    const missing = a.filter((id) => !b.includes(id)).length;
+    return missing > 0 && (a[0] !== b[0] || missing >= 2);
+  };
+  const altCandidates = paths
+    .filter((r) => r.games >= A.minGames)
+    .map(scorePath)
+    .filter((s) => s.delta >= A.minDelta)
+    .sort(
+      (a, b) =>
+        b.delta + B.popularityWeight * b.share - (a.delta + B.popularityWeight * a.share) ||
+        b.row.games - a.row.games ||
+        byKey(a.row.choice, b.row.choice),
+    );
+  for (const s of altCandidates) {
+    if (chosen.length >= A.max || coreIds.length < 3) break;
+    const path = parseIntList(s.row.choice);
+    if (chosen.every((c) => differs(path, c.path))) chosen.push({ path, scored: s });
+  }
+
+  /** A path completed to the core size with the most built (non-boots) items bought after it. */
+  const fillCore = (path: readonly number[]): number[] => {
+    const ids = [...path];
+    const extra = itemRows
+      .filter((r) => !ids.includes(Number(r.choice)) && !isBoots(Number(r.choice)))
+      .filter((r) => (r.avgPos ?? 0) >= path.length - 0.5)
+      .sort((a, b) => b.games - a.games || Number(a.choice) - Number(b.choice));
+    for (const r of extra) {
+      if (ids.length >= B.coreSize) break;
+      ids.push(Number(r.choice));
+    }
+    return ids;
+  };
+  coreIds.push(...fillCore(coreIds).slice(coreIds.length));
+
+  const pathName = (path: readonly number[]) => path.map((id) => names.item(id)).join(' + ');
+  const firstPath = chosen[0]?.path ?? [];
+  const firstScored = chosen[0]?.scored ?? null;
+  const buildReasons = (path: readonly number[], s: Scored | null, index: number): Reason[] => {
+    if (!s) return [...fallback];
+    const record = `${formatRate(winRate(s.row))} win rate, taken in ${formatRate(s.share)} of matches with three completed items (${formatMatches(s.row.games)})`;
+    if (index === 0) {
+      return [
+        ...fallback,
+        {
+          kind: 'base',
+          label: `Most successful first three items: ${record}`,
+          delta: round(s.delta),
+          games: s.row.games,
+        },
+      ];
+    }
+    const added = path.filter((id) => !firstPath.includes(id));
+    const dropped = firstPath.filter((id) => !path.includes(id));
+    const what =
+      path[0] !== firstPath[0]
+        ? `Starts with ${names.item(path[0] ?? 0)} instead of ${names.item(firstPath[0] ?? 0)}`
+        : `${pathName(added)} instead of ${pathName(dropped)}`;
+    const reasons: Reason[] = [
+      ...fallback,
+      { kind: 'base', label: `${what}: ${record}`, delta: round(s.delta), games: s.row.games },
+    ];
+    if (firstScored) {
+      const gap = s.delta - firstScored.delta;
+      const ratio = s.row.games / Math.max(1, firstScored.row.games);
+      const popularity =
+        ratio >= 1.1
+          ? `${ratio.toFixed(1)}× as popular`
+          : ratio <= 1 / 1.1
+            ? `${(1 / ratio).toFixed(1)}× less popular`
+            : 'as popular';
+      reasons.push({
+        kind: 'popularity',
+        label: `vs core build 1: ${formatRate(winRate(s.row))} vs ${formatRate(winRate(firstScored.row))} win rate, ${popularity} (${formatMatches(s.row.games)} vs ${formatMatches(firstScored.row.games)})`,
+        delta: round(gap),
+        games: s.row.games,
+      });
+    }
+    return reasons;
+  };
+  const coreBuilds: CoreBuild[] = chosen.map(({ path, scored }, index) => {
+    const ids = index === 0 ? coreIds : fillCore(path);
+    return {
+      items: ids.map((itemId) => ({ itemId, reasons: itemReason(itemId) })),
+      games: scored?.row.games ?? 0,
+      winRate: round(winRate(scored?.row)),
+      share: round(scored?.share ?? 0),
+      reasons: buildReasons(path, scored, index),
+    };
+  });
+
+  // Boots, adjusted for the lane opponent and enemy traits, inserted at their usual slot of
+  // every core build.
   const bootsRows = byKind('boots');
   const bootsBase = bestChoice(bootsRows, kOf('boots'));
   if (bootsBase) {
@@ -866,9 +949,12 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
       if (r) reasons.unshift(r);
     }
     const row = bootsRows.find((r) => r.choice === bootsKey) ?? bootsBase.row;
-    const slot = Math.max(0, Math.min(core.length, Math.round(row.avgPos ?? 1)));
-    core.splice(slot, 0, { itemId: Number(bootsKey), reasons });
+    for (const build of coreBuilds) {
+      const slot = Math.max(0, Math.min(build.items.length, Math.round(row.avgPos ?? 1)));
+      build.items.splice(slot, 0, { itemId: Number(bootsKey), reasons: [...reasons] });
+    }
   }
+  const core = coreBuilds[0]?.items ?? [];
 
   // Support quest upgrade, adjusted for the lane opponent and enemy traits like boots.
   const questRows = byKind('quest_item');
@@ -976,7 +1062,7 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
 
   // A core item that does notably better with the own team (duo partner, active ally trait) says
   // so, for the context where it gains most (same test as a situational swap).
-  for (const item of core) {
+  for (const item of coreBuilds.flatMap((b) => b.items)) {
     let best: { ctx: Context; delta: number; games: number } | null = null;
     for (const ctx of allyContexts) {
       const r = ctx.rows.find((x) => x.kind === 'item' && Number(x.choice) === item.itemId);
@@ -994,6 +1080,31 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
       ...(best.ctx.championIds ? { championIds: best.ctx.championIds } : {}),
       ...(best.ctx.trait ? { trait: best.ctx.trait } : {}),
     });
+  }
+
+  // A core build whose first three items include one doing notably better vs the lane opponent
+  // says so (same test as a situational swap), for the item that gains most.
+  if (primaryMatchup) {
+    for (const [index, build] of coreBuilds.entries()) {
+      const path = chosen[index]?.path ?? [];
+      let best: { itemId: number; delta: number; games: number } | null = null;
+      for (const id of path) {
+        const r = primaryMatchup.rows.find((x) => x.kind === 'item' && Number(x.choice) === id);
+        const delta = r ? contextGain(primaryMatchup, r) : null;
+        if (r && delta !== null && (!best || delta > best.delta))
+          best = { itemId: id, delta, games: r.games };
+      }
+      if (!best) continue;
+      const note = primaryMatchup.note ? `${primaryMatchup.note}, ` : '';
+      build.reasons.unshift({
+        kind: 'matchup',
+        label: `${formatDelta(best.delta)} ${primaryMatchup.label} when ${names.item(best.itemId)} is built (${note}${formatMatches(best.games)})`,
+        delta: round(best.delta),
+        games: best.games,
+        itemId: best.itemId,
+        ...(primaryMatchup.championIds ? { championIds: primaryMatchup.championIds } : {}),
+      });
+    }
   }
 
   // One answer per context (lane opponent, active enemy traits, duo partners, active ally
@@ -1039,20 +1150,26 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
     const trait = ctx.trait as CompTrait;
     // Fallback: Data Dragon tag rules, restricted to items this champion+role actually builds.
     // A core item that already answers the trait gets the reason even when the list is full.
+    const told = new Set<CoreBuild>();
     for (const rule of TAG_RULES) {
       if (rule.trait !== trait || (rule.damage && rule.damage !== damage)) continue;
-      const inCore = core.find((c) => itemMatchesRule(c.itemId, data.items.get(c.itemId), rule));
-      if (inCore) {
-        inCore.reasons.unshift({
+      // Said once per core build that has one; situational items follow core build 1.
+      for (const build of coreBuilds) {
+        if (told.has(build)) continue;
+        const inBuild = build.items.find((c) =>
+          itemMatchesRule(c.itemId, data.items.get(c.itemId), rule),
+        );
+        inBuild?.reasons.unshift({
           kind: 'tag_rule',
-          label: `Enemy team is ${TRAIT_LABELS[trait]}: ${names.item(inCore.itemId)} already ${rule.why}`,
+          label: `Enemy team is ${TRAIT_LABELS[trait]}: ${names.item(inBuild.itemId)} already ${rule.why}`,
           delta: 0,
           games: 0,
-          itemId: inCore.itemId,
+          itemId: inBuild.itemId,
           trait,
         });
-        break;
+        if (inBuild) told.add(build);
       }
+      if (core.some((c) => itemMatchesRule(c.itemId, data.items.get(c.itemId), rule))) break;
       if (full()) break;
       const candidate = itemRows
         .map((r) => Number(r.choice))
@@ -1075,7 +1192,20 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
   return {
     starting,
     early,
-    core,
+    // Clients that only know one core build: build 1, its path reasons on its first item.
+    core: core.map((item) =>
+      item.itemId === coreIds[0]
+        ? {
+            ...item,
+            reasons: [
+              ...fallback,
+              ...baseReason(core3, 'Most successful first three items'),
+              ...item.reasons,
+            ],
+          }
+        : item,
+    ),
+    coreBuilds,
     situational,
     ...(questUpgrade ? { questUpgrade } : {}),
   };
