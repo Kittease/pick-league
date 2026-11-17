@@ -134,6 +134,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       db: true,
       latestPatch: CUR,
       matchCount: 3800,
+      patchMatchCount: 3000,
     });
   });
 

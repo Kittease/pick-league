@@ -19,13 +19,20 @@ import { ApiError } from '../errors.ts';
 
 export async function health(q: Queryable): Promise<HealthResponse> {
   try {
-    const [latest, [row]] = await Promise.all([
-      getLatestPatch(q),
-      q<{ n: number }[]>`SELECT count(*)::int AS n FROM matches`,
-    ]);
-    return { ok: true, db: true, latestPatch: latest?.id ?? null, matchCount: row?.n ?? 0 };
+    const latest = await getLatestPatch(q);
+    const [row] = await q<{ n: number; onPatch: number }[]>`
+      SELECT count(*)::int AS n,
+             count(*) FILTER (WHERE patch = ${latest?.id ?? ''})::int AS "onPatch"
+      FROM matches`;
+    return {
+      ok: true,
+      db: true,
+      latestPatch: latest?.id ?? null,
+      matchCount: row?.n ?? 0,
+      patchMatchCount: row?.onPatch ?? 0,
+    };
   } catch {
-    return { ok: false, db: false, latestPatch: null, matchCount: 0 };
+    return { ok: false, db: false, latestPatch: null, matchCount: 0, patchMatchCount: 0 };
   }
 }
 

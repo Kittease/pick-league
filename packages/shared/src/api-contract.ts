@@ -168,6 +168,8 @@ export interface HealthResponse {
   latestPatch: PatchId | null;
   /** Matches stored across kept patches. */
   matchCount: number;
+  /** Matches stored on `latestPatch` (what the current patch's stats are built on); 0 without one. */
+  patchMatchCount: number;
 }
 
 // ---------------------------------------------------------------------------
