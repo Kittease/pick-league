@@ -797,20 +797,6 @@ export function DraftPlanner({
         <TurnStatus turn={turn} draft={draft} />
         {/* DOM order = Tab order: the search comes last, so Tab from it goes to the grid. */}
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <span
-            className="flex items-center gap-2"
-            title="Tournament draft: 3 bans each, picks B1 R1 R2 B2 B3 R3, 2 bans each, picks R4 B4 B5 R5 (with blue first pick). Changing it starts a new draft."
-          >
-            <Switch
-              id="draft-competitive"
-              checked={competitive}
-              onCheckedChange={changeFormat}
-              aria-label="Competitive draft"
-            />
-            <Label htmlFor="draft-competitive" className="text-xs">
-              Competitive
-            </Label>
-          </span>
           {competitive && (
             <span
               className="flex items-center gap-2"
@@ -827,6 +813,20 @@ export function DraftPlanner({
               </Label>
             </span>
           )}
+          <span
+            className="flex items-center gap-2"
+            title="Tournament draft: 3 bans each, picks B1 R1 R2 B2 B3 R3, 2 bans each, picks R4 B4 B5 R5 (with blue first pick). Changing it starts a new draft."
+          >
+            <Switch
+              id="draft-competitive"
+              checked={competitive}
+              onCheckedChange={changeFormat}
+              aria-label="Competitive draft"
+            />
+            <Label htmlFor="draft-competitive" className="text-xs">
+              Competitive
+            </Label>
+          </span>
           <Button
             size="xs"
             variant="outline"
