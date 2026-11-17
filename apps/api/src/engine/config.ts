@@ -118,6 +118,20 @@ export const ENGINE_CONFIG = {
     maxSituational: 4,
     /** Completed items in the core. */
     coreSize: 4,
+    /**
+     * Alternative core builds (after the most successful one): other 3-item paths with a
+     * different item set — a different first item or at least 2 different items from every
+     * build already chosen — ranked like `bestChoice` (shrunk delta among the 3-item paths +
+     * popularity bonus).
+     */
+    altCores: {
+      /** Core builds returned at most, the most successful one included. */
+      max: 3,
+      /** Matches a path needs to be offered as an alternative. */
+      minGames: 20,
+      /** Shrunk win-rate delta vs every 3-item path an alternative needs at least. */
+      minDelta: -0.01,
+    },
     /** An early component is listed if bought by at least this share of players. */
     earlyItemMinShare: 0.3,
     maxEarlyItems: 4,
