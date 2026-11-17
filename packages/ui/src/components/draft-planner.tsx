@@ -125,6 +125,23 @@ function saveFormat(format: DraftFormat): void {
   }
 }
 
+/** Competitive drafts: the team with first pick chosen last time (blue when unavailable). */
+const FIRST_PICK_KEY = 'pickleague.draftFirstPick';
+function loadFirstPick(): Team {
+  try {
+    return localStorage.getItem(FIRST_PICK_KEY) === 'red' ? 'red' : 'blue';
+  } catch {
+    return 'blue';
+  }
+}
+function saveFirstPick(team: Team): void {
+  try {
+    localStorage.setItem(FIRST_PICK_KEY, team);
+  } catch {
+    // Storage unavailable: the choice is only kept for this session.
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Teams
 // ---------------------------------------------------------------------------
@@ -556,7 +573,7 @@ export function DraftPlanner({
   handleRef?: RefObject<DraftHandle | null>;
 }) {
   const api = usePickLeagueData();
-  const [draft, setDraft] = useState<Draft>(() => emptyDraft(loadFormat()));
+  const [draft, setDraft] = useState<Draft>(() => emptyDraft(loadFormat(), loadFirstPick()));
   /**
    * Role the user chose per team for its next pick (may be one it already has: the pick then
    * moves that champion to an open role); cleared after each pick.
@@ -642,8 +659,11 @@ export function DraftPlanner({
     if (last?.kind === 'pick') setPreferred((p) => ({ ...p, [last.team]: last.role }));
     setDraft(undo(draft));
   };
-  const reset = (format: DraftFormat = draft.format) => {
-    setDraft(emptyDraft(format));
+  const reset = (
+    format: DraftFormat = draft.format,
+    firstPick: Team = draft.firstPick ?? 'blue',
+  ) => {
+    setDraft(emptyDraft(format, firstPick));
     setPreferred(NO_PREFERENCE);
     setBuildOf(null);
     setSearch('');
@@ -652,6 +672,11 @@ export function DraftPlanner({
     const format: DraftFormat = competitive ? 'competitive' : 'soloq';
     saveFormat(format);
     reset(format);
+  };
+  const changeFirstPick = (blueFirst: boolean) => {
+    const firstPick: Team = blueFirst ? 'blue' : 'red';
+    saveFirstPick(firstPick);
+    reset(draft.format, firstPick);
   };
   const chooseRole = (team: Team, r: Position) => {
     setPreferred((p) => ({ ...p, [team]: r }));
@@ -716,7 +741,7 @@ export function DraftPlanner({
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <span
             className="flex items-center gap-2"
-            title="Tournament draft: 3 bans each, picks B1 R1 R2 B2 B3 R3, 2 bans each, picks R4 B4 B5 R5. Changing it starts a new draft."
+            title="Tournament draft: 3 bans each, picks B1 R1 R2 B2 B3 R3, 2 bans each, picks R4 B4 B5 R5 (with blue first pick). Changing it starts a new draft."
           >
             <Switch
               id="draft-competitive"
@@ -728,6 +753,22 @@ export function DraftPlanner({
               Competitive
             </Label>
           </span>
+          {competitive && (
+            <span
+              className="flex items-center gap-2"
+              title="Off: blue side takes the side and leaves first pick to red, who then bans and picks first (R1 B1 B2 R2 …). Changing it starts a new draft."
+            >
+              <Switch
+                id="draft-blue-first"
+                checked={(draft.firstPick ?? 'blue') === 'blue'}
+                onCheckedChange={changeFirstPick}
+                aria-label="Blue side has first pick"
+              />
+              <Label htmlFor="draft-blue-first" className="text-xs">
+                Blue first pick
+              </Label>
+            </span>
+          )}
           <Button
             size="xs"
             variant="outline"
@@ -943,7 +984,9 @@ function TurnStatus({ turn, draft }: { turn: DraftTurn | null; draft: Draft }) {
       </span>
       <span className="text-[11px] text-muted-foreground">
         {phase}
-        {draft.format === 'competitive' ? ' · competitive' : ''}
+        {draft.format === 'competitive'
+          ? ` · competitive${draft.firstPick === 'red' ? ' · red first pick' : ''}`
+          : ''}
       </span>
     </span>
   );

@@ -11,6 +11,7 @@ import {
   ban,
   banPhase,
   COMPETITIVE_TURNS,
+  COMPETITIVE_TURNS_RED_FIRST,
   championPool,
   currentTurn,
   DRAFT_PICKS_LIMIT,
@@ -332,6 +333,21 @@ describe('draft: competitive format', () => {
     expect(banPhase({ format: 'competitive' }, 3)).toBe(1);
     expect(banPhase({ format: 'competitive' }, 4)).toBe(2);
     expect(banPhase({ format: 'soloq' }, 5)).toBe(1);
+  });
+
+  test('red first pick: every blue turn goes to red and back (R1 B1 B2 R2 …)', () => {
+    expect(draftTurns('competitive', 'red')).toBe(COMPETITIVE_TURNS_RED_FIRST);
+    expect(draftTurns('soloq', 'red')).toBe(DRAFT_TURNS);
+    const picks = COMPETITIVE_TURNS_RED_FIRST.filter((t) => t.kind === 'pick').map(turnLabel);
+    expect(picks).toEqual(['R1', 'B1', 'B2', 'R2', 'R3', 'B3', 'B4', 'R4', 'R5', 'B5']);
+    expect(COMPETITIVE_TURNS_RED_FIRST[0]).toEqual({ kind: 'ban', team: 'red', number: 1 });
+
+    let d = emptyDraft('competitive', 'red');
+    expect(currentTurn(d)).toEqual({ kind: 'ban', team: 'red', number: 1 });
+    for (let i = 1; i <= 6; i++) d = ban(d, 100 + i);
+    expect(currentTurn(d)).toEqual({ kind: 'pick', team: 'red', number: 1 });
+    expect(d.firstPick).toBe('red');
+    expect(emptyDraft('competitive')).toEqual({ format: 'competitive', actions: [] });
   });
 
   test('a competitive draft plays to the end with the same rules', () => {

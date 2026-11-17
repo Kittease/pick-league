@@ -81,9 +81,28 @@ export const COMPETITIVE_TURNS: readonly DraftTurn[] = (() => {
   ];
 })();
 
-/** Every turn of a draft of that format, in order. */
-export function draftTurns(format: DraftFormat): readonly DraftTurn[] {
-  return format === 'competitive' ? COMPETITIVE_TURNS : DRAFT_TURNS;
+/**
+ * A competitive draft where red has first pick: blue's turns go to red and red's to blue (bans
+ * included), e.g. picks R1 B1 B2 R2 R3 B3. Since 2026 the team choosing first takes either the
+ * side or first pick, so blue side no longer always picks first.
+ */
+export const COMPETITIVE_TURNS_RED_FIRST: readonly DraftTurn[] = COMPETITIVE_TURNS.map((t) => ({
+  ...t,
+  team: otherTeam(t.team),
+}));
+
+/**
+ * Every turn of a draft of that format, in order. `firstPick`: the team picking first in a
+ * competitive draft (solo/duo always starts with blue).
+ */
+export function draftTurns(format: DraftFormat, firstPick: Team = 'blue'): readonly DraftTurn[] {
+  if (format !== 'competitive') return DRAFT_TURNS;
+  return firstPick === 'red' ? COMPETITIVE_TURNS_RED_FIRST : COMPETITIVE_TURNS;
+}
+
+/** Every turn of that draft, in order. */
+export function turnsOf(draft: Pick<Draft, 'format' | 'firstPick'>): readonly DraftTurn[] {
+  return draftTurns(draft.format, draft.firstPick);
 }
 
 export type DraftAction =
@@ -96,22 +115,25 @@ export type DraftAction =
  */
 export interface Draft {
   readonly format: DraftFormat;
+  /** Competitive drafts: the team with first pick (blue when absent; ignored in solo/duo). */
+  readonly firstPick?: Team;
   readonly actions: readonly DraftAction[];
 }
 
 export const EMPTY_DRAFT: Draft = { format: 'soloq', actions: [] };
 
-export function emptyDraft(format: DraftFormat): Draft {
-  return format === 'soloq' ? EMPTY_DRAFT : { format, actions: [] };
+export function emptyDraft(format: DraftFormat, firstPick: Team = 'blue'): Draft {
+  if (format === 'soloq') return EMPTY_DRAFT;
+  return firstPick === 'red' ? { format, firstPick, actions: [] } : { format, actions: [] };
 }
 
 /** The turn to play, or null once the 10 picks are in. */
 export function currentTurn(draft: Draft): DraftTurn | null {
-  return draftTurns(draft.format)[draft.actions.length] ?? null;
+  return turnsOf(draft)[draft.actions.length] ?? null;
 }
 
 export function isComplete(draft: Draft): boolean {
-  return draft.actions.length >= draftTurns(draft.format).length;
+  return draft.actions.length >= turnsOf(draft).length;
 }
 
 /**
