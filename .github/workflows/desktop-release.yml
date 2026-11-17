@@ -23,10 +23,19 @@ jobs:
         env:
           # No code signing: Windows SmartScreen warns on first launch.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      # latest.yml + .blockmap feed the in-app auto-update (electron-updater reads the latest
+      # release, so it must be published: not a draft, not a prerelease).
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: apps/desktop/dist/*-setup.exe
+          files: |
+            apps/desktop/dist/*-setup.exe
+            apps/desktop/dist/*.blockmap
+            apps/desktop/dist/latest.yml
+          draft: false
+          prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: true
           generate_release_notes: true
       - uses: actions/upload-artifact@v4
         with:
