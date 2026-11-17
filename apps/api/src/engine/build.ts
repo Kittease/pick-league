@@ -830,17 +830,16 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
   const pathRow = paths.find((r) => r.choice === coreIds.join(','));
   const core3: Scored | null = pathRow && allPaths.games > 0 ? scorePath(pathRow) : null;
 
-  // Alternative core builds: other paths with enough matches and a genuinely different item set
-  // (a different first item, or at least 2 items not in a build already chosen), best first.
+  // Core builds: the 3-item paths with enough matches, ranked like every other choice (shrunk
+  // win-rate delta vs all paths plus a popularity bonus), each with a genuinely different item
+  // set from the ones before it (a different first item, or at least 2 other items). Without
+  // such a path, the item-by-item pick above stands alone.
   const A = B.altCores;
-  const chosen: { path: number[]; scored: Scored | null }[] = [
-    { path: [...coreIds], scored: core3 },
-  ];
   const differs = (a: readonly number[], b: readonly number[]) => {
     const missing = a.filter((id) => !b.includes(id)).length;
     return missing > 0 && (a[0] !== b[0] || missing >= 2);
   };
-  const altCandidates = paths
+  const candidates = paths
     .filter((r) => r.games >= A.minGames)
     .map(scorePath)
     .filter((s) => s.delta >= A.minDelta)
@@ -850,11 +849,14 @@ function recommendItems(input: ItemsInput): ItemsRecommendation {
         b.row.games - a.row.games ||
         byKey(a.row.choice, b.row.choice),
     );
-  for (const s of altCandidates) {
-    if (chosen.length >= A.max || coreIds.length < 3) break;
+  const chosen: { path: number[]; scored: Scored | null }[] = [];
+  for (const s of candidates) {
+    if (chosen.length >= A.max) break;
     const path = parseIntList(s.row.choice);
     if (chosen.every((c) => differs(path, c.path))) chosen.push({ path, scored: s });
   }
+  if (chosen.length === 0) chosen.push({ path: [...coreIds], scored: core3 });
+  coreIds.splice(0, coreIds.length, ...(chosen[0]?.path ?? []));
 
   /** A path completed to the core size with the most built (non-boots) items bought after it. */
   const fillCore = (path: readonly number[]): number[] => {

@@ -152,18 +152,38 @@ describe('recommendBuild', () => {
     expect(b?.runes.reasons.map((r) => r.kind)).toEqual(['base', 'popularity']);
   });
 
-  test('first three items picked one at a time, among games with three items', () => {
+  test('core build 1 is the best ranked 3-item path, never one with too few matches', () => {
     const b = recommendBuild(
       req(LEONA),
       data({
         choices: [
           ...data().choices.filter((r) => r.kind !== 'core3'),
-          c('core3', '3190,3050,3065', 30, 24), // 80 % on 30 games
+          c('core3', '3190,3050,3065', 13, 12), // 92 % on 13 matches: below altCores.minGames
           c('core3', '3190,3050,3109', 300, 165),
           c('core3', '3075,3050,3065', 400, 216),
         ],
       }),
     );
+    const first = b?.items.coreBuilds[0];
+    expect(first?.games).toBeGreaterThanOrEqual(300);
+    const nonBoots = b?.items.core.map((i) => i.itemId).filter((id) => id !== 3047);
+    expect(nonBoots?.slice(0, 3)).not.toEqual([3190, 3050, 3065]);
+    expect(b?.items.core.map((i) => i.itemId)).toEqual(first?.items.map((i) => i.itemId) ?? []);
+  });
+
+  test('without a path with enough matches, the first three items are picked one at a time', () => {
+    const b = recommendBuild(
+      req(LEONA),
+      data({
+        choices: [
+          ...data().choices.filter((r) => r.kind !== 'core3'),
+          c('core3', '3190,3050,3065', 3, 2),
+          c('core3', '3190,3050,3109', 15, 9),
+          c('core3', '3075,3050,3065', 10, 5),
+        ],
+      }),
+    );
+    expect(b?.items.coreBuilds).toHaveLength(1);
     const nonBoots = b?.items.core.map((i) => i.itemId).filter((id) => id !== 3047);
     expect(nonBoots?.slice(0, 3)).toEqual([3190, 3050, 3109]);
   });
