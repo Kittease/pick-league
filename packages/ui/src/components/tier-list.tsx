@@ -78,18 +78,35 @@ type Loaded<T> =
   | { status: 'ok'; data: T }
   | { status: 'error'; code: string | null; message: string };
 
+/** The tier list's lane tab: one role, or every role at once. */
+type Lane = Position | 'ALL';
+
+/** A tier list entry with the role it was ranked in (several per champion under `ALL`). */
+type RoleEntry = TierListEntry & { role: Position };
+
+/** The tier lists of the shown lane: one role's, or the 5 roles' merged by score. */
+interface LaneTierList {
+  patch: string;
+  filters: TierListFilters;
+  entries: RoleEntry[];
+}
+
+const rowKey = (e: { role: Position; championId: number }) => `${e.role}:${e.championId}`;
+
 /**
- * Tier list of a role and filters, cached per role + filters for a few minutes; reset when the
- * API changes.
+ * Tier list of a lane (one role, or all 5 merged: scores are deltas vs each role's average, so
+ * they compare across roles) and filters, cached per role + filters for a few minutes; reset
+ * when the API changes.
  */
-function useTierList(role: Position, filters: TierListFilters, apiKey: string) {
+function useTierList(lane: Lane, filters: TierListFilters, apiKey: string) {
   const api = usePickLeagueData();
   const cache = useRef(new Map<string, { at: number; result: ApiResult<TierListResponse> }>());
-  const [state, setState] = useState<Loaded<TierListResponse>>({ status: 'loading' });
+  const [state, setState] = useState<Loaded<LaneTierList>>({ status: 'loading' });
   const [nonce, setNonce] = useState(0);
   const lastKey = useRef(apiKey);
+  const shown = useRef('');
   const { platform, rank } = filters;
-  const key = `${role}|${platform}|${rank}`;
+  const key = `${lane}|${platform}|${rank}`;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: nonce re-runs the fetch on retry
   useEffect(() => {
@@ -97,25 +114,48 @@ function useTierList(role: Position, filters: TierListFilters, apiKey: string) {
       cache.current.clear();
       lastKey.current = apiKey;
     }
-    const hit = cache.current.get(key);
-    if (hit?.result.ok && Date.now() - hit.at < CACHE_MS) {
-      setState({ status: 'ok', data: hit.result.data });
+    const roles: readonly Position[] = lane === 'ALL' ? POSITIONS : [lane];
+    const fresh = (role: Position) => {
+      const hit = cache.current.get(`${role}|${platform}|${rank}`);
+      return hit?.result.ok && Date.now() - hit.at < CACHE_MS ? hit.result : null;
+    };
+    const merge = (results: ApiResult<TierListResponse>[]): Loaded<LaneTierList> => {
+      const failed = results.find((r) => !r.ok);
+      if (failed && !failed.ok)
+        return { status: 'error', code: failed.code, message: failed.message };
+      const lists = results.flatMap((r) => (r.ok ? [r.data] : []));
+      const entries = lists
+        .flatMap((l) => l.entries.map((e) => ({ ...e, role: l.role })))
+        .sort((a, b) => b.score - a.score);
+      return {
+        status: 'ok',
+        data: { patch: lists[0]?.patch ?? '', filters: { platform, rank }, entries },
+      };
+    };
+    const cached = roles.map(fresh);
+    if (cached.every((r) => r !== null)) {
+      shown.current = key;
+      setState(merge(cached as ApiResult<TierListResponse>[]));
       return;
     }
     let alive = true;
     // Same list re-fetched (stats refreshed): keep showing the old one until the new one lands.
     setState((prev) =>
-      prev.status === 'ok' &&
-      prev.data.role === role &&
-      prev.data.filters?.platform === platform &&
-      prev.data.filters?.rank === rank
-        ? prev
-        : { status: 'loading' },
+      prev.status === 'ok' && shown.current === key ? prev : { status: 'loading' },
     );
-    void api.getTierList(role, { platform, rank }).then((result) => {
+    void Promise.all(
+      roles.map(
+        (role, i) =>
+          cached[i] ??
+          api.getTierList(role, { platform, rank }).then((result) => {
+            cache.current.set(`${role}|${platform}|${rank}`, { at: Date.now(), result });
+            return result;
+          }),
+      ),
+    ).then((results) => {
       if (!alive) return;
-      cache.current.set(key, { at: Date.now(), result });
-      setState(result.ok ? { status: 'ok', data: result.data } : { status: 'error', ...result });
+      shown.current = key;
+      setState(merge(results));
     });
     return () => {
       alive = false;
@@ -123,9 +163,10 @@ function useTierList(role: Position, filters: TierListFilters, apiKey: string) {
   }, [key, apiKey, nonce, api]);
 
   const retry = useCallback(() => {
-    cache.current.delete(key);
+    const roles: readonly Position[] = lane === 'ALL' ? POSITIONS : [lane];
+    for (const role of roles) cache.current.delete(`${role}|${platform}|${rank}`);
     setNonce((n) => n + 1);
-  }, [key]);
+  }, [lane, platform, rank]);
   return { state, retry };
 }
 
@@ -295,6 +336,7 @@ function SortHeader({
 function EntryRow({
   entry,
   name,
+  roleLabel,
   lookup,
   mastery,
   currentPatch,
@@ -305,6 +347,8 @@ function EntryRow({
 }: {
   entry: TierListEntry;
   name: string;
+  /** Every lane shown: the entry's role, under the name. */
+  roleLabel?: string;
   lookup: StaticLookup | null;
   mastery: Record<number, MasteryEntry> | undefined;
   currentPatch: string;
@@ -340,6 +384,9 @@ function EntryRow({
         />
         <span className="flex min-w-0 flex-col leading-tight">
           <span className="truncate text-sm font-medium">{name}</span>
+          {roleLabel && (
+            <span className="truncate text-[10px] text-muted-foreground">{roleLabel}</span>
+          )}
           {merged && (
             <span
               className="truncate text-[10px] text-gold"
@@ -612,21 +659,22 @@ export function TierListPage({
   /** Filled with what the keyboard shortcuts drive. */
   handleRef?: RefObject<TierListHandle | null>;
 }) {
-  const [role, setRole] = useState<Position>(initialRole);
+  const [lane, setLane] = useState<Lane>(initialRole);
   const [search, setSearch] = useState('');
   const [ownedOnly, setOwnedOnly] = useState(false);
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: 'score', desc: true });
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [buildOf, setBuildOf] = useState<number | null>(null);
+  /** Selected row (`rowKey`), and the champion + role whose build is open. */
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [buildOf, setBuildOf] = useState<RoleEntry | null>(null);
   // A new API, patch or stats refresh (manual or background) drops the cached tier lists.
   const apiKey = dataKey;
   const [filters, setFilters] = useTierListFilters();
   const [minConfidence] = useMinConfidence();
-  const { state: tl, retry } = useTierList(role, filters, apiKey);
+  const { state: tl, retry } = useTierList(lane, filters, apiKey);
 
   useEffect(() => {
-    onBusyChange?.(selectedId !== null || buildOf !== null);
-  }, [selectedId, buildOf, onBusyChange]);
+    onBusyChange?.(selectedKey !== null || buildOf !== null);
+  }, [selectedKey, buildOf, onBusyChange]);
 
   const data = tl.status === 'ok' ? tl.data : null;
   const owned = useMemo(
@@ -654,8 +702,9 @@ export function TierListPage({
     });
   }, [data, search, ownedOnly, owned, minConfidence, sort, nameOf]);
 
-  const selected = data?.entries.find((e) => e.championId === selectedId) ?? null;
-  const rowIds = useMemo(() => rows.map((e) => e.championId), [rows]);
+  const selected = data?.entries.find((e) => rowKey(e) === selectedKey) ?? null;
+  const rowIds = useMemo(() => rows.map(rowKey), [rows]);
+  const championCount = useMemo(() => new Set(rows.map((e) => e.championId)).size, [rows]);
   const roving = useRoving(rowIds, 'vertical');
 
   const narrow = selected !== null;
@@ -688,7 +737,7 @@ export function TierListPage({
         if (action === 'clear-search') setSearch('');
         else if (action === 'blur-search') searchRef.current?.blur();
         else if (action === 'close-build') setBuildOf(null);
-        else setSelectedId(null);
+        else setSelectedKey(null);
       },
       focusSearch: () => {
         pendingFocus.current = true;
@@ -702,8 +751,8 @@ export function TierListPage({
   if (buildOf !== null) {
     return (
       <GenericBuild
-        championId={buildOf}
-        role={role}
+        championId={buildOf.championId}
+        role={buildOf.role}
         lookup={lookup}
         mastery={mastery}
         onBack={() => setBuildOf(null)}
@@ -718,14 +767,17 @@ export function TierListPage({
       {/* Role and filters span the whole page: they apply to the table and to the details. */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border px-3 pt-2 pb-1">
         <Tabs
-          value={role}
+          value={lane}
           onValueChange={(v) => {
-            setRole(v as Position);
-            setSelectedId(null);
+            setLane(v as Lane);
+            setSelectedKey(null);
           }}
           className="gap-0"
         >
           <TabsList variant="line">
+            <TabsTrigger value="ALL" className="px-2.5">
+              All
+            </TabsTrigger>
             {POSITIONS.map((p) => (
               <TabsTrigger key={p} value={p} className="px-2.5">
                 {ROLE_LABEL[p]}
@@ -769,7 +821,7 @@ export function TierListPage({
                 if (enterListFromSearch(e, roving.focusFirst)) return;
                 // Enter opens the first champion shown.
                 const first = rows[0];
-                if (e.key === 'Enter' && first && search.trim()) setSelectedId(first.championId);
+                if (e.key === 'Enter' && first && search.trim()) setSelectedKey(rowKey(first));
               }}
               placeholder={SEARCH_PLACEHOLDER}
               aria-label="Search champion"
@@ -797,7 +849,7 @@ export function TierListPage({
                 setSort((s) => ({ key, desc: s.key === key ? !s.desc : key !== 'name' }))
               }
               narrow={narrow}
-              count={data ? rows.length : null}
+              count={data ? championCount : null}
             />
           )}
           {/* biome-ignore lint/a11y/noStaticElementInteractions: arrow keys move focus between the rows (roving tabindex), the rows themselves are buttons */}
@@ -818,24 +870,25 @@ export function TierListPage({
               <p className="p-6 text-sm text-muted-foreground">
                 {data.entries.length === 0
                   ? filters.platform === 'ALL' && filters.rank === 'MASTER'
-                    ? 'No champion has enough games in this role yet.'
-                    : 'No champion has enough games in this role with this server and rank yet.'
+                    ? `No champion has enough games in ${lane === 'ALL' ? 'any role' : 'this role'} yet.`
+                    : `No champion has enough games in ${lane === 'ALL' ? 'any role' : 'this role'} with this server and rank yet.`
                   : 'No champion matches the filters.'}
               </p>
             )}
             {data &&
               rows.map((e) => (
                 <EntryRow
-                  key={e.championId}
+                  key={rowKey(e)}
                   entry={e}
                   name={nameOf(e.championId)}
+                  roleLabel={lane === 'ALL' ? ROLE_LABEL[e.role] : undefined}
                   lookup={lookup}
                   mastery={mastery}
                   currentPatch={data.patch}
                   narrow={narrow}
-                  selected={e.championId === selectedId}
-                  onSelect={() => setSelectedId(e.championId === selectedId ? null : e.championId)}
-                  focus={roving.itemProps(e.championId)}
+                  selected={rowKey(e) === selectedKey}
+                  onSelect={() => setSelectedKey(rowKey(e) === selectedKey ? null : rowKey(e))}
+                  focus={roving.itemProps(rowKey(e))}
                 />
               ))}
           </div>
@@ -843,15 +896,15 @@ export function TierListPage({
         {selected && data && (
           <DetailPanel
             entry={selected}
-            role={role}
+            role={selected.role}
             currentPatch={data.patch}
             lookup={lookup}
             mastery={mastery}
             filters={filters}
             minConfidence={minConfidence}
             apiKey={apiKey}
-            onClose={() => setSelectedId(null)}
-            onViewBuild={() => setBuildOf(selected.championId)}
+            onClose={() => setSelectedKey(null)}
+            onViewBuild={() => setBuildOf(selected)}
           />
         )}
       </div>
