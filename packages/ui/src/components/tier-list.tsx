@@ -339,7 +339,6 @@ function EntryRow({
   roleLabel,
   lookup,
   mastery,
-  currentPatch,
   selected,
   onSelect,
   narrow,
@@ -351,14 +350,12 @@ function EntryRow({
   roleLabel?: string;
   lookup: StaticLookup | null;
   mastery: Record<number, MasteryEntry> | undefined;
-  currentPatch: string;
   selected: boolean;
   onSelect: () => void;
   narrow: boolean;
   /** Arrow-key navigation between rows (one tab stop for the whole list). */
   focus: RovingItemProps;
 }) {
-  const merged = entry.patchesUsed.length > 1;
   return (
     <button
       type="button"
@@ -386,14 +383,6 @@ function EntryRow({
           <span className="truncate text-sm font-medium">{name}</span>
           {roleLabel && (
             <span className="truncate text-[10px] text-muted-foreground">{roleLabel}</span>
-          )}
-          {merged && (
-            <span
-              className="truncate text-[10px] text-gold"
-              title={`Too few matchups on ${currentPatch} alone: both patches combined`}
-            >
-              {patchesText(entry.patchesUsed)} data
-            </span>
           )}
         </span>
       </span>
@@ -436,7 +425,6 @@ function Stat({ label, value, sub }: { label: string; value: React.ReactNode; su
 function DetailPanel({
   entry,
   role,
-  currentPatch,
   lookup,
   mastery,
   filters,
@@ -447,7 +435,6 @@ function DetailPanel({
 }: {
   entry: TierListEntry;
   role: Position;
-  currentPatch: string;
   lookup: StaticLookup | null;
   mastery: Record<number, MasteryEntry> | undefined;
   filters: TierListFilters;
@@ -459,7 +446,7 @@ function DetailPanel({
 }) {
   const champ = lookup?.champion(entry.championId);
   const name = champ?.name ?? `#${entry.championId}`;
-  const merged = entry.patchesUsed.length > 1;
+  const previous = entry.patchesUsed[1];
   return (
     <aside className="@container flex min-w-0 flex-1 flex-col border-l border-border bg-card/40 max-md:border-l-0">
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
@@ -501,10 +488,8 @@ function DetailPanel({
             <Stat label="Ban rate" value={percent(entry.banRate)} />
             <Stat
               label="Patch"
-              value={
-                <span className={cn(merged && 'text-gold')}>{patchesText(entry.patchesUsed)}</span>
-              }
-              sub={merged ? `too few matchups on ${currentPatch} alone` : undefined}
+              value={patchesText(entry.patchesUsed)}
+              sub={previous ? `${previous} counts as a prior` : undefined}
             />
           </div>
           <Button size="sm" variant="outline" onClick={onViewBuild} className="self-start">
@@ -884,7 +869,6 @@ export function TierListPage({
                   roleLabel={lane === 'ALL' ? ROLE_LABEL[e.role] : undefined}
                   lookup={lookup}
                   mastery={mastery}
-                  currentPatch={data.patch}
                   narrow={narrow}
                   selected={rowKey(e) === selectedKey}
                   onSelect={() => setSelectedKey(rowKey(e) === selectedKey ? null : rowKey(e))}
@@ -897,7 +881,6 @@ export function TierListPage({
           <DetailPanel
             entry={selected}
             role={selected.role}
-            currentPatch={data.patch}
             lookup={lookup}
             mastery={mastery}
             filters={filters}

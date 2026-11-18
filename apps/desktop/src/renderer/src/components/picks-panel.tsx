@@ -37,7 +37,6 @@ function CandidateRow({
   candidate,
   lookup,
   mastery,
-  currentPatch,
   previewing,
   defaultOpen,
   focus,
@@ -46,7 +45,6 @@ function CandidateRow({
   candidate: PickCandidate;
   lookup: StaticLookup | null;
   mastery: AppState['mastery'];
-  currentPatch: string;
   previewing: boolean;
   defaultOpen: boolean;
   /** Arrow-key navigation between rows (one tab stop for the whole list). */
@@ -57,7 +55,6 @@ function CandidateRow({
   const open = toggled ?? defaultOpen;
   const champ = lookup?.champion(candidate.championId);
   const name = champ?.name ?? `#${candidate.championId}`;
-  const merged = candidate.patchesUsed.length > 1;
   return (
     <Collapsible
       open={open}
@@ -78,14 +75,6 @@ function CandidateRow({
         <span className="flex min-w-0 flex-col gap-1.5">
           <span className="flex items-baseline gap-2">
             <span className="truncate text-sm font-semibold">{name}</span>
-            {merged && (
-              <span
-                className="text-[10px] text-gold"
-                title={`Too few matchups on ${currentPatch} alone: both patches combined`}
-              >
-                {patchesText(candidate.patchesUsed)} data
-              </span>
-            )}
           </span>
           {!open && <ReasonHeadline reasons={candidate.reasons} />}
           <ReasonStrip reasons={candidate.reasons} />
@@ -216,7 +205,6 @@ export function PicksPanel({ state, lookup }: { state: AppState; lookup: StaticL
               candidate={c}
               lookup={lookup}
               mastery={state.mastery}
-              currentPatch={data.patch}
               previewing={previewId === c.championId}
               defaultOpen={i === 0}
               focus={roving.itemProps(c.championId)}

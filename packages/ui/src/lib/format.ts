@@ -49,7 +49,7 @@ export const REASON_KIND_LABEL: Record<ReasonKind, string> = {
   item_swap: 'Item swap',
   tag_rule: 'Item rule',
   popularity: 'Popularity',
-  patch_fallback: 'Previous patch added',
+  patch_fallback: 'Previous patch data',
   lane_phase: 'Lane phase',
   side: 'Side',
   mastery: 'Your mastery',
