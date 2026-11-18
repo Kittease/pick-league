@@ -98,7 +98,20 @@ describe('sanitizeSettings', () => {
       fallbackRole: 'TOP' as const,
       ownedOnly: false,
     };
-    expect(sanitizeSettings(old)).toEqual({ ...old, zoom: 1, flashKey: 'F' });
+    expect(sanitizeSettings(old)).toEqual({
+      ...old,
+      zoom: 1,
+      flashKey: 'F',
+      masteryPicks: true,
+    });
+  });
+
+  test('picks are ranked for the mastery by default; a non-boolean falls back to it', () => {
+    expect(DEFAULT_SETTINGS.masteryPicks).toBe(true);
+    expect(sanitizeSettings({}).masteryPicks).toBe(true);
+    expect(sanitizeSettings({ masteryPicks: 'no' }).masteryPicks).toBe(true);
+    expect(sanitizeSettings({ masteryPicks: 0 }).masteryPicks).toBe(true);
+    expect(sanitizeSettings({ masteryPicks: false }).masteryPicks).toBe(false);
   });
 
   test('the removed demo mode field of older files is ignored', () => {

@@ -10,6 +10,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoApply: true,
   fallbackRole: 'UTILITY',
   ownedOnly: true,
+  masteryPicks: true,
   zoom: DEFAULT_ZOOM,
   flashKey: 'F',
 };
@@ -34,6 +35,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     apiUrl,
     autoApply: bool('autoApply'),
     ownedOnly: bool('ownedOnly'),
+    masteryPicks: bool('masteryPicks'),
     fallbackRole: isPosition(r.fallbackRole) ? r.fallbackRole : DEFAULT_SETTINGS.fallbackRole,
     zoom: nearestZoom(r.zoom),
     flashKey: isFlashKey(r.flashKey) ? r.flashKey : DEFAULT_SETTINGS.flashKey,

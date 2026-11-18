@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { draftRequestSchema, picksRequestSchema } from '@pick-league/shared';
+import { draftRequestSchema, MAX_MASTERIES, picksRequestSchema } from '@pick-league/shared';
 import {
   availableChampionIds,
   buildBuildRequest,
@@ -192,6 +192,52 @@ describe('buildPicksRequest', () => {
     const view = deriveChampSelect(session(), 'UTILITY');
     expect(buildPicksRequest(view, null).availableChampionIds).toBeUndefined();
     expect(buildPicksRequest(view, []).availableChampionIds).toBeUndefined();
+  });
+
+  test("sends the user's champions with mastery points", () => {
+    const view = deriveChampSelect(session(), 'UTILITY');
+    const request = buildPicksRequest(view, null, {
+      89: { level: 7, points: 123456 },
+      40: { level: 1, points: 0 },
+    });
+    expect(request.masteries).toEqual([{ championId: 89, points: 123456 }]);
+    expect(picksRequestSchema.safeParse(request).success).toBe(true);
+    // Integers, sorted by champion.
+    expect(
+      buildPicksRequest(view, null, {
+        412: { level: 5, points: 30000.7 },
+        117: { level: 3, points: 9000 },
+      }).masteries,
+    ).toEqual([
+      { championId: 117, points: 9000 },
+      { championId: 412, points: 30000 },
+    ]);
+  });
+
+  test('no masteries field until a champion has mastery points', () => {
+    const view = deriveChampSelect(session(), 'UTILITY');
+    expect('masteries' in buildPicksRequest(view, null, null)).toBe(false);
+    expect('masteries' in buildPicksRequest(view, null, {})).toBe(false);
+    expect(
+      'masteries' in
+        buildPicksRequest(view, null, { 89: { level: 1, points: 0 }, 40: { level: 1, points: 0 } }),
+    ).toBe(false);
+    expect(buildPicksRequest(view, null)).toEqual(buildPicksRequest(view, null, null));
+  });
+
+  test('capped at MAX_MASTERIES, keeping the most played champions', () => {
+    const view = deriveChampSelect(session(), 'UTILITY');
+    const mastery: Record<number, { level: number; points: number }> = {};
+    // Champion i has i × 100 points: the lowest ids are dropped.
+    for (let i = 1; i <= MAX_MASTERIES + 5; i++) mastery[i] = { level: 5, points: i * 100 };
+    const masteries = buildPicksRequest(view, null, mastery).masteries ?? [];
+    expect(masteries).toHaveLength(MAX_MASTERIES);
+    expect(masteries[0]).toEqual({ championId: 6, points: 600 });
+    expect(masteries.at(-1)).toEqual({
+      championId: MAX_MASTERIES + 5,
+      points: (MAX_MASTERIES + 5) * 100,
+    });
+    expect(picksRequestSchema.safeParse(buildPicksRequest(view, null, mastery)).success).toBe(true);
   });
 });
 

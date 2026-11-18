@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import type { BuildRequestInput, BuildResponse } from '@pick-league/shared';
+import type { BuildRequestInput, BuildResponse, PicksRequestInput } from '@pick-league/shared';
 import type { AppState } from '../core/app-state.ts';
 import {
   champSelectSession,
@@ -72,6 +72,8 @@ afterEach(() => {
  */
 function setup(options: { lcu?: Partial<LcuApi> } = {}) {
   const calls = { picks: 0, build: 0, draft: 0, spells: 0, applies: 0 };
+  /** Every picks request received, in order. */
+  const picksRequests: PicksRequestInput[] = [];
   const api: ApiClient = {
     baseUrl: 'http://api.test',
     health: async () => ({
@@ -84,6 +86,7 @@ function setup(options: { lcu?: Partial<LcuApi> } = {}) {
     staticData: async () => Promise.reject(new Error('no static data in tests')),
     picks: async (req) => {
       calls.picks++;
+      picksRequests.push(req);
       return { role: req.role, patch: '15.22', candidates: [] };
     },
     build: async (req) => {
@@ -161,8 +164,29 @@ function setup(options: { lcu?: Partial<LcuApi> } = {}) {
     },
   };
   const state = (): AppState => controller.getState();
-  return { controller, calls, lcu: lcuEvents, state };
+  return { controller, calls, picksRequests, lcu: lcuEvents, state };
 }
+
+describe('controller: mastery-aware picks', () => {
+  test("champion select picks carry the user's mastery until the setting is turned off", async () => {
+    const { controller, calls, picksRequests, lcu } = setup({
+      lcu: {
+        getMastery: async () => [{ championId: 89, championLevel: 7, championPoints: 123456 }],
+      },
+    });
+    lcu.phase('ChampSelect');
+    lcu.session(champSelectSession());
+    await settle();
+    expect(calls.picks).toBeGreaterThan(0);
+    expect(picksRequests.at(-1)?.masteries).toEqual([{ championId: 89, points: 123456 }]);
+
+    const sent = picksRequests.length;
+    await controller.updateSettings({ masteryPicks: false });
+    await settle();
+    expect(picksRequests.length).toBeGreaterThan(sent);
+    expect(picksRequests.at(-1)).not.toHaveProperty('masteries');
+  });
+});
 
 describe('controller: queue map', () => {
   const aram = (): LcuGameflowSession => ({

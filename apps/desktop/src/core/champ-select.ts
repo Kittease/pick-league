@@ -3,13 +3,15 @@
  * Runtime-agnostic (used by the main process and its tests).
  */
 
-import type {
-  BuildRequestInput,
-  DraftRequestInput,
-  DraftSide,
-  PicksRequestInput,
-  Position,
+import {
+  type BuildRequestInput,
+  type DraftRequestInput,
+  type DraftSide,
+  MAX_MASTERIES,
+  type PicksRequestInput,
+  type Position,
 } from '@pick-league/shared';
+import type { MasteryEntry } from '@pick-league/ui/lib/types';
 import type {
   LcuChampSelectAction,
   LcuChampSelectPlayer,
@@ -182,10 +184,34 @@ export function availableChampionIds(owned: readonly LcuOwnedChampion[]): number
 
 export const DEFAULT_PICKS_LIMIT = 20;
 
+/**
+ * The user's masteries as the picks request sends them: champions with points only (integers),
+ * sorted by champion id; over `MAX_MASTERIES`, the ones with the most points. Null when none has
+ * points (masteries not read yet: no adjustment rather than every champion as never played).
+ */
+function requestMasteries(
+  mastery: Readonly<Record<number, MasteryEntry>>,
+): { championId: number; points: number }[] | null {
+  const played = Object.entries(mastery).flatMap(([id, entry]) => {
+    const championId = Number(id);
+    const points = Math.floor(entry.points);
+    return Number.isInteger(championId) && championId > 0 && points > 0
+      ? [{ championId, points }]
+      : [];
+  });
+  if (played.length === 0) return null;
+  const kept =
+    played.length > MAX_MASTERIES
+      ? [...played].sort((a, b) => b.points - a.points).slice(0, MAX_MASTERIES)
+      : played;
+  return kept.sort((a, b) => a.championId - b.championId);
+}
+
 /** Body of `POST /recommendations/picks` for the current state of champion select. */
 export function buildPicksRequest(
   view: ChampSelectView,
   available: readonly number[] | null,
+  mastery: Readonly<Record<number, MasteryEntry>> | null = null,
   limit = DEFAULT_PICKS_LIMIT,
 ): PicksRequestInput {
   const request: PicksRequestInput = {
@@ -197,6 +223,8 @@ export function buildPicksRequest(
   };
   if (available && available.length > 0)
     request.availableChampionIds = [...available].sort((a, b) => a - b);
+  const masteries = mastery ? requestMasteries(mastery) : null;
+  if (masteries) request.masteries = masteries;
   return request;
 }
 

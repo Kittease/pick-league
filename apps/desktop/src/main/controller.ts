@@ -208,7 +208,11 @@ export class Controller {
       void this.pollStats();
       this.refetch();
     }
-    if (next.fallbackRole !== prev.fallbackRole || next.ownedOnly !== prev.ownedOnly) {
+    if (
+      next.fallbackRole !== prev.fallbackRole ||
+      next.ownedOnly !== prev.ownedOnly ||
+      next.masteryPicks !== prev.masteryPicks
+    ) {
       if (this.lobby.stage === 'select') this.showSelect(false);
     }
     this.emit();
@@ -601,6 +605,7 @@ export class Controller {
     const request: PicksRequestInput = buildPicksRequest(
       view,
       this.state.settings.ownedOnly ? this.available : null,
+      this.state.settings.masteryPicks ? this.state.mastery : null,
     );
     const key = requestKey(request);
     if (key === this.picksKey) return;

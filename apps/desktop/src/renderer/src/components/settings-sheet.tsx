@@ -143,6 +143,18 @@ export function SettingsSheet({ state }: { state: AppState }) {
             />
           </Row>
 
+          <Row
+            id="mastery-picks"
+            title="Rank picks for my mastery"
+            hint="Champions you know well move up: players win more on champions they have mastery on. Your mastery points are sent with the request, nothing else."
+          >
+            <Switch
+              id="mastery-picks"
+              checked={settings.masteryPicks}
+              onCheckedChange={(v) => update({ masteryPicks: v })}
+            />
+          </Row>
+
           <div className="flex flex-col gap-2 border-b border-border py-4">
             <Label>Role when none is assigned</Label>
             <p className="text-xs text-muted-foreground">Blind pick and custom games.</p>

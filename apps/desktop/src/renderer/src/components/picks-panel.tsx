@@ -162,6 +162,9 @@ export function PicksPanel({ state, lookup }: { state: AppState; lookup: StaticL
         {state.settings.ownedOnly && state.availableCount !== null && (
           <span>· from your {state.availableCount} champions</span>
         )}
+        {state.settings.masteryPicks && Object.keys(state.mastery).length > 0 && (
+          <span>· ranked for your mastery</span>
+        )}
         {hidden > 0 && <span>· {hidden} below the confidence filter</span>}
         <span className="ml-auto hidden xl:inline">
           score = sum of win-rate deltas (points), shrunk by sample size

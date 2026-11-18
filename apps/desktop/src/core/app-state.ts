@@ -27,6 +27,8 @@ export interface Settings {
   fallbackRole: Position;
   /** Only recommend champions the account can play. */
   ownedOnly: boolean;
+  /** Rank champion select picks for the user's own mastery of each champion. */
+  masteryPicks: boolean;
   /** Zoom factor of the whole UI (1 = 100%), one of ZOOM_LEVELS. */
   zoom: number;
   /** Key Flash goes on when summoner spells are applied. */
