@@ -236,7 +236,9 @@ both enemy bot laners).
 The API owns the stats layer: materialized views (`packages/db/migrations/0002_stats_views.sql`)
 refreshed in the background every `STATS_REFRESH_MINUTES` (default 60) when matches changed; a
 Postgres advisory lock keeps several API instances from refreshing at the same time.
-Engine weights and thresholds live in `apps/api/src/engine/config.ts`.
+Engine weights and thresholds live in `apps/api/src/engine/config.ts`. The calibration script
+prints, per kind of effect, the fitted weight of the engine's shrinkage for a grid of `k` (the `k`
+to keep is the one with a weight of ~1).
 
 Settings (env): `DATABASE_URL`, `PORT`, `LOG_LEVEL`, `CACHE_TTL_SECONDS` (600),
 `RATE_LIMIT_PER_MINUTE` (120 per IP, 0 = off), `RATE_LIMIT_BURST` (30), `TRUST_PROXY` (use
@@ -251,6 +253,8 @@ PORT=3001 bun run dev:api
 DATABASE_URL_TEST=postgres://postgres:postgres@localhost:55432/pickleague_test bun test apps/api
 # perf check: seeds synthetic matches into pickleague_api_perf, times refresh + requests
 DATABASE_URL_TEST=... PERF_MATCHES=20000 bun run --filter @pick-league/api perf
+# re-measure the engine's shrinkage constants on the stored matches (read-only, a few minutes)
+docker compose build api && docker compose run --rm api bun run apps/api/scripts/calibrate.ts --patch 16.22
 ```
 
 ### Layout
