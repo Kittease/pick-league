@@ -13,3 +13,5 @@ apps/desktop/*
 *.md
 Dockerfile
 docker-compose*.yml
+.claude
+plans
