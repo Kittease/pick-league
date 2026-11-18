@@ -25,8 +25,14 @@ export const ENGINE_CONFIG = {
     strength: 1200,
     /** Each pair statistic: a matchup, a duo, another ally or enemy, a composition trait, a lane phase. */
     pair: 1200,
-    /** Builds: one factor per champion+role, from its previous-patch games (choices stay comparable). */
-    build: 3000,
+    /**
+     * Builds: one factor per champion+role, from its previous-patch games (choices stay comparable).
+     * Much larger than the strength cap: a build splits the champion's games between many choices
+     * and contexts (situational items need 15 games vs one enemy trait or lane opponent), so with
+     * 3,000 games a 19,000-game champion lost its situational items and alternative cores on the
+     * first day of 16.23.
+     */
+    build: 10_000,
     /** `patchesUsed` lists the previous patch from this share of the effective games. */
     listedShare: 0.1,
     /** A `patch_fallback` reason says so from this share. */
