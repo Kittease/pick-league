@@ -12,6 +12,7 @@ import {
   previousWeight,
   shrink,
   sumByKey,
+  sumWeighted,
 } from './math.ts';
 import { assignRoles, rolePlayRates } from './roles.ts';
 import { skillMaxOrder, synthesiseSkillSequence } from './skills.ts';
@@ -139,6 +140,40 @@ describe('sumByKey', () => {
       { id: 1, patch: '15.22', games: 100, wins: 46 },
       { id: 2, patch: '15.22', games: 5, wins: 1 },
     ]);
+  });
+});
+
+describe('sumWeighted', () => {
+  const rows = [
+    { key: 'a', patch: '15.22', games: 100, wins: 40 },
+    { key: 'a', patch: '15.21', games: 1000, wins: 600 },
+    { key: 'b', patch: '15.22', games: 5, wins: 1 },
+    { key: 'c', patch: '15.21', games: 1, wins: 1 },
+  ];
+  test('weights of 1: plain sums', () => {
+    expect(
+      sumWeighted(
+        rows,
+        () => 1,
+        (r) => r.key,
+      ),
+    ).toEqual([
+      { key: 'a', patch: '15.22', games: 1100, wins: 640 },
+      { key: 'b', patch: '15.22', games: 5, wins: 1 },
+      { key: 'c', patch: '15.21', games: 1, wins: 1 },
+    ]);
+  });
+  test('previous patch at 0.25: rounded games, same weighted win rate, empty groups dropped', () => {
+    const out = sumWeighted(
+      rows,
+      (p) => (p === '15.21' ? 0.25 : 1),
+      (r) => r.key,
+    );
+    // 100 + 0.25 × 1,000 = 350 games; (40 + 150) / 350 win rate. "c" rounds to 0 games.
+    expect(out.map((r) => r.key)).toEqual(['a', 'b']);
+    expect(out[0]?.games).toBe(350);
+    expect((out[0]?.wins ?? 0) / (out[0]?.games ?? 1)).toBeCloseTo((150 + 40) / 350, 12);
+    expect(out[1]).toEqual({ key: 'b', patch: '15.22', games: 5, wins: 1 });
   });
 });
 

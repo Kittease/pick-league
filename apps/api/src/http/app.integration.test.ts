@@ -424,7 +424,13 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       SELECT DISTINCT partner_position AS position FROM stats_choice_duos
       WHERE patch = ${CUR} AND champion_id = ${championId} AND position = 'UTILITY'`;
     expect(partners.map((p) => p.position)).toEqual(['BOTTOM']);
-    const withPartner = await repo.loadChoiceDuos(db, [CUR], championId, 'UTILITY', [allyId]);
+    const withPartner = await repo.loadChoiceDuos(
+      db,
+      [{ patch: CUR, weight: 1 }],
+      championId,
+      'UTILITY',
+      [allyId],
+    );
     expect(withPartner.length).toBeGreaterThan(0);
 
     // Ally traits: items (and the build stage), each within the champion's games with that trait and its item rows.

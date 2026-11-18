@@ -723,7 +723,7 @@ describe('recommendBuild', () => {
     });
   });
 
-  test('says when the previous patch is added to the current one', () => {
+  test('says when the previous patch weighs most', () => {
     const b = recommendBuild(
       req(LEONA),
       data({
@@ -739,9 +739,49 @@ describe('recommendBuild', () => {
     expect(b?.patchesUsed).toEqual([CUR, '15.21']);
     expect(b?.runes.reasons[0]).toMatchObject({
       kind: 'patch_fallback',
-      label: '15.22 + 15.21 data: only 40 games on 15.22',
+      label: 'Mostly 15.21 data: 40 games on 15.22 so far',
       games: 1000,
     });
+  });
+
+  test('no patch reason while the current patch weighs most, both patches still listed', () => {
+    const b = recommendBuild(
+      req(LEONA),
+      data({
+        previousPatch: '15.21',
+        patch: {
+          patches: [CUR, '15.21'],
+          previousWeight: 1,
+          previousShare: 0.3,
+          currentGames: 700,
+        },
+      }),
+    );
+    expect(b?.patchesUsed).toEqual([CUR, '15.21']);
+    expect(b?.runes.reasons.some((r) => r.kind === 'patch_fallback')).toBe(false);
+  });
+
+  test('no games on the current patch yet: says so, unless the whole role has none', () => {
+    const previousOnly = {
+      previousPatch: '15.21',
+      patch: { patches: [CUR, '15.21'], previousWeight: 0.6, previousShare: 1, currentGames: 0 },
+    };
+    // Other supports have games on 15.22 (Leona's own row is the fixture's, kept for the roles).
+    const b = recommendBuild(req(LEONA), data(previousOnly));
+    expect(b?.runes.reasons[0]).toMatchObject({
+      kind: 'patch_fallback',
+      label: '15.21 data: no games on 15.22 yet',
+      games: 1000,
+    });
+    // No support row on 15.22 at all: every build would say it, so none does.
+    const noRole = recommendBuild(
+      req(LEONA),
+      data({
+        ...previousOnly,
+        roleStats: data().roleStats.filter((r) => r.position !== 'UTILITY'),
+      }),
+    );
+    expect(noRole?.runes.reasons.some((r) => r.kind === 'patch_fallback')).toBe(false);
   });
 
   test('support quest upgrade: the most played one (no measurable difference), with its reasons', () => {

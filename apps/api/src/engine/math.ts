@@ -191,3 +191,29 @@ export function sumByKey<T extends GamesWins>(rows: readonly T[], key: (r: T) =>
   }
   return [...out.values()];
 }
+
+/**
+ * Rows summed per key with a weight per patch (other fields from the first row): games rounded,
+ * wins scaled so that wins / games stays the weighted win rate; groups rounding to 0 games are
+ * dropped. The same sum as the build loaders of the stats repository.
+ */
+export function sumWeighted<T extends GamesWins & { patch: PatchId }>(
+  rows: readonly T[],
+  weightOf: (patch: PatchId) => number,
+  key: (r: T) => string,
+): T[] {
+  const groups = new Map<string, { first: T; games: number; wins: number }>();
+  for (const r of rows) {
+    const w = weightOf(r.patch);
+    if (w <= 0) continue;
+    const k = key(r);
+    const g = groups.get(k) ?? { first: r, games: 0, wins: 0 };
+    g.games += w * r.games;
+    g.wins += w * r.wins;
+    groups.set(k, g);
+  }
+  return [...groups.values()].flatMap(({ first, games, wins }) => {
+    const rounded = Math.round(games);
+    return rounded > 0 ? [{ ...first, games: rounded, wins: (wins * rounded) / games }] : [];
+  });
+}

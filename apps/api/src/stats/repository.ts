@@ -1,7 +1,9 @@
 /**
  * Reads the stats materialized views and static tables. All lookups are on the views' unique
  * indexes (patch + role/champion prefixes), so they stay fast at ~150k matches per patch.
- * Loaders that return no `patch` column sum their rows over the patches given (see `choosePatches`).
+ * Loaders that return no `patch` column (the build's) sum their rows over the patches given, each
+ * patch's rows multiplied by its weight (`PatchWeight`: the previous patch weighted by
+ * `previousPatchPrior.build`): games are rounded and wins scaled to keep the weighted win rate.
  *
  * Champion ids are `smallint` columns, but requests may carry any positive integer (the desktop
  * forwards ids from the League client). Every loader drops ids outside the column range first
@@ -233,22 +235,35 @@ export async function loadThresholds(
   }));
 }
 
+/** A patch whose rows are summed with a weight (1 = fully). */
+export interface PatchWeight {
+  patch: PatchId;
+  weight: number;
+}
+
 export async function loadChoices(
   q: Queryable,
-  patches: PatchId[],
+  weights: readonly PatchWeight[],
   championId: number,
   position: Position,
 ): Promise<ChoiceRow[]> {
-  if (!isStoredChampionId(championId)) return [];
+  if (!isStoredChampionId(championId) || weights.length === 0) return [];
   const rows = await q<
     { kind: ChoiceKind; choice: string; games: number; wins: number; avg_pos: number | null }[]
   >`
-    SELECT kind, choice, sum(games)::int AS games, sum(wins)::int AS wins,
-           (sum(avg_pos * games) / nullif(sum(games) FILTER (WHERE avg_pos IS NOT NULL), 0))::float8
+    -- wins scaled so that wins / games is exactly the weighted win rate after rounding the games
+    SELECT s.kind, s.choice, round(sum(s.games * pw.weight))::int AS games,
+           (sum(s.wins * pw.weight) * round(sum(s.games * pw.weight))
+             / nullif(sum(s.games * pw.weight), 0))::float8 AS wins,
+           (sum(s.avg_pos * s.games * pw.weight)
+             / nullif(sum(s.games * pw.weight) FILTER (WHERE s.avg_pos IS NOT NULL), 0))::float8
              AS avg_pos
-    FROM stats_choices
-    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
-    GROUP BY kind, choice`;
+    FROM stats_choices s
+    JOIN unnest(${weights.map((w) => w.patch)}::text[], ${weights.map((w) => w.weight)}::float8[])
+           AS pw(patch, weight) ON pw.patch = s.patch
+    WHERE s.champion_id = ${championId} AND s.position = ${position}
+    GROUP BY s.kind, s.choice
+    HAVING round(sum(s.games * pw.weight)) > 0`;
   return rows.map((r) => ({
     kind: r.kind,
     choice: r.choice,
@@ -260,13 +275,15 @@ export async function loadChoices(
 
 export async function loadChoiceMatchups(
   q: Queryable,
-  patches: PatchId[],
+  weights: readonly PatchWeight[],
   championId: number,
   position: Position,
   opponentIdsIn: number[],
 ): Promise<ChoiceMatchupRow[]> {
   const opponentIds = storedChampionIds(opponentIdsIn);
-  if (!isStoredChampionId(championId) || opponentIds.length === 0) return [];
+  if (!isStoredChampionId(championId) || opponentIds.length === 0 || weights.length === 0) {
+    return [];
+  }
   const rows = await q<
     {
       opponent_id: number;
@@ -277,12 +294,17 @@ export async function loadChoiceMatchups(
       wins: number;
     }[]
   >`
-    SELECT opponent_id, opponent_position, kind, choice,
-           sum(games)::int AS games, sum(wins)::int AS wins
-    FROM stats_choice_matchups
-    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
-      AND opponent_id IN ${q(opponentIds)}
-    GROUP BY opponent_id, opponent_position, kind, choice`;
+    SELECT s.opponent_id, s.opponent_position, s.kind, s.choice,
+           round(sum(s.games * pw.weight))::int AS games,
+           (sum(s.wins * pw.weight) * round(sum(s.games * pw.weight))
+             / nullif(sum(s.games * pw.weight), 0))::float8 AS wins
+    FROM stats_choice_matchups s
+    JOIN unnest(${weights.map((w) => w.patch)}::text[], ${weights.map((w) => w.weight)}::float8[])
+           AS pw(patch, weight) ON pw.patch = s.patch
+    WHERE s.champion_id = ${championId} AND s.position = ${position}
+      AND s.opponent_id IN ${q(opponentIds)}
+    GROUP BY s.opponent_id, s.opponent_position, s.kind, s.choice
+    HAVING round(sum(s.games * pw.weight)) > 0`;
   return rows.map((r) => ({
     opponentId: r.opponent_id,
     opponentPosition: r.opponent_position,
@@ -295,20 +317,25 @@ export async function loadChoiceMatchups(
 
 export async function loadChoiceTraits(
   q: Queryable,
-  patches: PatchId[],
+  weights: readonly PatchWeight[],
   championId: number,
   position: Position,
   traits: CompTrait[],
 ): Promise<ChoiceTraitRow[]> {
-  if (!isStoredChampionId(championId) || traits.length === 0) return [];
+  if (!isStoredChampionId(championId) || traits.length === 0 || weights.length === 0) return [];
   const rows = await q<
     { trait: CompTrait; kind: ChoiceKind; choice: string; games: number; wins: number }[]
   >`
-    SELECT trait, kind, choice, sum(games)::int AS games, sum(wins)::int AS wins
-    FROM stats_choice_traits
-    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
-      AND trait IN ${q(traits)}
-    GROUP BY trait, kind, choice`;
+    SELECT s.trait, s.kind, s.choice, round(sum(s.games * pw.weight))::int AS games,
+           (sum(s.wins * pw.weight) * round(sum(s.games * pw.weight))
+             / nullif(sum(s.games * pw.weight), 0))::float8 AS wins
+    FROM stats_choice_traits s
+    JOIN unnest(${weights.map((w) => w.patch)}::text[], ${weights.map((w) => w.weight)}::float8[])
+           AS pw(patch, weight) ON pw.patch = s.patch
+    WHERE s.champion_id = ${championId} AND s.position = ${position}
+      AND s.trait IN ${q(traits)}
+    GROUP BY s.trait, s.kind, s.choice
+    HAVING round(sum(s.games * pw.weight)) > 0`;
   return rows.map((r) => ({
     trait: r.trait,
     kind: r.kind,
@@ -321,13 +348,15 @@ export async function loadChoiceTraits(
 /** Item choices of champion + role with the given duo partners (stats_choice_duos, summed). */
 export async function loadChoiceDuos(
   q: Queryable,
-  patches: PatchId[],
+  weights: readonly PatchWeight[],
   championId: number,
   position: Position,
   partnerIdsIn: number[],
 ): Promise<ChoiceDuoRow[]> {
   const partnerIds = storedChampionIds(partnerIdsIn);
-  if (!isStoredChampionId(championId) || partnerIds.length === 0) return [];
+  if (!isStoredChampionId(championId) || partnerIds.length === 0 || weights.length === 0) {
+    return [];
+  }
   const rows = await q<
     {
       partner_id: number;
@@ -338,12 +367,17 @@ export async function loadChoiceDuos(
       wins: number;
     }[]
   >`
-    SELECT partner_id, partner_position, kind, choice,
-           sum(games)::int AS games, sum(wins)::int AS wins
-    FROM stats_choice_duos
-    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
-      AND partner_id IN ${q(partnerIds)}
-    GROUP BY partner_id, partner_position, kind, choice`;
+    SELECT s.partner_id, s.partner_position, s.kind, s.choice,
+           round(sum(s.games * pw.weight))::int AS games,
+           (sum(s.wins * pw.weight) * round(sum(s.games * pw.weight))
+             / nullif(sum(s.games * pw.weight), 0))::float8 AS wins
+    FROM stats_choice_duos s
+    JOIN unnest(${weights.map((w) => w.patch)}::text[], ${weights.map((w) => w.weight)}::float8[])
+           AS pw(patch, weight) ON pw.patch = s.patch
+    WHERE s.champion_id = ${championId} AND s.position = ${position}
+      AND s.partner_id IN ${q(partnerIds)}
+    GROUP BY s.partner_id, s.partner_position, s.kind, s.choice
+    HAVING round(sum(s.games * pw.weight)) > 0`;
   return rows.map((r) => ({
     partnerId: r.partner_id,
     partnerPosition: r.partner_position,
@@ -357,20 +391,25 @@ export async function loadChoiceDuos(
 /** Item choices of champion + role when the allies have a trait (stats_choice_ally_traits, summed). */
 export async function loadChoiceAllyTraits(
   q: Queryable,
-  patches: PatchId[],
+  weights: readonly PatchWeight[],
   championId: number,
   position: Position,
   traits: CompTrait[],
 ): Promise<ChoiceTraitRow[]> {
-  if (!isStoredChampionId(championId) || traits.length === 0) return [];
+  if (!isStoredChampionId(championId) || traits.length === 0 || weights.length === 0) return [];
   const rows = await q<
     { trait: CompTrait; kind: ChoiceKind; choice: string; games: number; wins: number }[]
   >`
-    SELECT trait, kind, choice, sum(games)::int AS games, sum(wins)::int AS wins
-    FROM stats_choice_ally_traits
-    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
-      AND trait IN ${q(traits)}
-    GROUP BY trait, kind, choice`;
+    SELECT s.trait, s.kind, s.choice, round(sum(s.games * pw.weight))::int AS games,
+           (sum(s.wins * pw.weight) * round(sum(s.games * pw.weight))
+             / nullif(sum(s.games * pw.weight), 0))::float8 AS wins
+    FROM stats_choice_ally_traits s
+    JOIN unnest(${weights.map((w) => w.patch)}::text[], ${weights.map((w) => w.weight)}::float8[])
+           AS pw(patch, weight) ON pw.patch = s.patch
+    WHERE s.champion_id = ${championId} AND s.position = ${position}
+      AND s.trait IN ${q(traits)}
+    GROUP BY s.trait, s.kind, s.choice
+    HAVING round(sum(s.games * pw.weight)) > 0`;
   return rows.map((r) => ({
     trait: r.trait,
     kind: r.kind,
@@ -381,26 +420,31 @@ export async function loadChoiceAllyTraits(
 }
 
 /**
- * stats_champion_with of one champion + role with the given allies, summed over `patches`
- * (index stats_champion_with_champion).
+ * stats_champion_with of one champion + role with the given allies, summed over the weighted
+ * patches (index stats_champion_with_champion).
  */
 export async function loadWithForChampion(
   q: Queryable,
-  patches: PatchId[],
+  weights: readonly PatchWeight[],
   championId: number,
   position: Position,
   allyIdsIn: number[],
 ): Promise<WithRow[]> {
   const allyIds = storedChampionIds(allyIdsIn);
-  if (!isStoredChampionId(championId) || allyIds.length === 0) return [];
+  if (!isStoredChampionId(championId) || allyIds.length === 0 || weights.length === 0) return [];
   const rows = await q<{ ally_position: Position; ally_id: number; games: number; wins: number }[]>`
-    SELECT ally_position, ally_id, sum(games)::int AS games, sum(wins)::int AS wins
-    FROM stats_champion_with
-    WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
-      AND ally_id IN ${q(allyIds)}
-    GROUP BY ally_position, ally_id`;
+    SELECT s.ally_position, s.ally_id, round(sum(s.games * pw.weight))::int AS games,
+           (sum(s.wins * pw.weight) * round(sum(s.games * pw.weight))
+             / nullif(sum(s.games * pw.weight), 0))::float8 AS wins
+    FROM stats_champion_with s
+    JOIN unnest(${weights.map((w) => w.patch)}::text[], ${weights.map((w) => w.weight)}::float8[])
+           AS pw(patch, weight) ON pw.patch = s.patch
+    WHERE s.champion_id = ${championId} AND s.position = ${position}
+      AND s.ally_id IN ${q(allyIds)}
+    GROUP BY s.ally_position, s.ally_id
+    HAVING round(sum(s.games * pw.weight)) > 0`;
   return rows.map((r) => ({
-    patch: patches[0] as PatchId, // summed over `patches`: labelled with the newest
+    patch: weights[0]?.patch as PatchId, // summed over the patches: labelled with the newest
     position,
     championId,
     allyPosition: r.ally_position,
@@ -412,23 +456,28 @@ export async function loadWithForChampion(
 
 export async function loadVsForChampion(
   q: Queryable,
-  patches: PatchId[],
+  weights: readonly PatchWeight[],
   championId: number,
   position: Position,
   enemyIdsIn: number[],
 ): Promise<VsRow[]> {
   const enemyIds = storedChampionIds(enemyIdsIn);
-  if (!isStoredChampionId(championId) || enemyIds.length === 0) return [];
+  if (!isStoredChampionId(championId) || enemyIds.length === 0 || weights.length === 0) return [];
   const rows = await q<
     { enemy_position: Position; enemy_id: number; games: number; wins: number }[]
   >`
-    SELECT enemy_position, enemy_id, sum(games)::int AS games, sum(wins)::int AS wins
-    FROM stats_champion_vs
-    WHERE patch IN ${q(patches)} AND position = ${position} AND champion_id = ${championId}
-      AND enemy_id IN ${q(enemyIds)}
-    GROUP BY enemy_position, enemy_id`;
+    SELECT s.enemy_position, s.enemy_id, round(sum(s.games * pw.weight))::int AS games,
+           (sum(s.wins * pw.weight) * round(sum(s.games * pw.weight))
+             / nullif(sum(s.games * pw.weight), 0))::float8 AS wins
+    FROM stats_champion_vs s
+    JOIN unnest(${weights.map((w) => w.patch)}::text[], ${weights.map((w) => w.weight)}::float8[])
+           AS pw(patch, weight) ON pw.patch = s.patch
+    WHERE s.position = ${position} AND s.champion_id = ${championId}
+      AND s.enemy_id IN ${q(enemyIds)}
+    GROUP BY s.enemy_position, s.enemy_id
+    HAVING round(sum(s.games * pw.weight)) > 0`;
   return rows.map((r) => ({
-    patch: patches[0] as PatchId, // summed over `patches`: labelled with the newest
+    patch: weights[0]?.patch as PatchId, // summed over the patches: labelled with the newest
     position,
     championId,
     enemyPosition: r.enemy_position,

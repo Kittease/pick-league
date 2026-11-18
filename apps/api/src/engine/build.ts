@@ -36,7 +36,6 @@ import {
   formatMatches,
   formatRate,
   type PatchChoice,
-  patchesLabel,
   round,
   sampleConfidence,
   shrink,
@@ -67,27 +66,27 @@ import type {
 export interface BuildData {
   currentPatch: PatchId;
   previousPatch: PatchId | null;
-  /** Patches whose stats are used (see `choosePatches`). */
+  /** Patches used and the previous patch's weight (see `previousPatchPrior.build`). */
   patch: PatchChoice;
-  /** Champion + role on `patch.patches`. */
+  /** Champion + role, summed, the previous patch weighted (see `previousPatchPrior.build`). */
   baseline: GamesWins;
   /** stats_champion_roles of both patches (to guess enemy roles). */
   roleStats: readonly RoleStatRow[];
-  /** stats_choices of champion + role on the patches used (summed). */
+  /** stats_choices of champion + role on the patches used (summed, the previous patch weighted: see `previousPatchPrior.build`). */
   choices: readonly ChoiceRow[];
-  /** stats_choice_matchups of champion + role on the patches used (summed), vs the request's enemies. */
+  /** stats_choice_matchups of champion + role on the patches used (summed, the previous patch weighted: see `previousPatchPrior.build`), vs the request's enemies. */
   choiceMatchups: readonly ChoiceMatchupRow[];
-  /** stats_choice_traits of champion + role on the patches used (summed). */
+  /** stats_choice_traits of champion + role on the patches used (summed, the previous patch weighted: see `previousPatchPrior.build`). */
   choiceTraits: readonly ChoiceTraitRow[];
-  /** stats_choice_duos of champion + role on the patches used (summed), with the request's allies. */
+  /** stats_choice_duos of champion + role on the patches used (summed, the previous patch weighted: see `previousPatchPrior.build`), with the request's allies. */
   choiceDuos: readonly ChoiceDuoRow[];
-  /** stats_choice_ally_traits of champion + role on the patches used (summed). */
+  /** stats_choice_ally_traits of champion + role on the patches used (summed, the previous patch weighted: see `previousPatchPrior.build`). */
   choiceAllyTraits: readonly ChoiceTraitRow[];
-  /** stats_champion_comp_traits (both sides) of champion + role on the patches used (summed). */
+  /** stats_champion_comp_traits (both sides) of champion + role on the patches used (summed, the previous patch weighted: see `previousPatchPrior.build`). */
   compTraits: readonly CompTraitRow[];
-  /** stats_champion_vs of champion + role on the patches used (summed), vs the request's enemies. */
+  /** stats_champion_vs of champion + role on the patches used (summed, the previous patch weighted: see `previousPatchPrior.build`), vs the request's enemies. */
   vs: readonly VsRow[];
-  /** stats_champion_with of champion + role on the patches used (summed), with the request's allies. */
+  /** stats_champion_with of champion + role on the patches used (summed, the previous patch weighted: see `previousPatchPrior.build`), with the request's allies. */
   with: readonly WithRow[];
   /** stats_champion_traits of the champion, its allies and enemies (both patches). */
   championTraits: readonly ChampionTraitRow[];
@@ -304,12 +303,21 @@ export function recommendBuild(req: BuildRequest, data: BuildData): BuildRespons
   const baseline = data.baseline;
   const baseWr = winRate(baseline);
   const byKind = (kind: ChoiceKind) => data.choices.filter((c) => c.kind === kind);
+  // Said while the previous patch weighs most, unless the whole role has no current games yet.
+  const roleHasCurrentGames = data.roleStats.some(
+    (r) => r.patch === data.currentPatch && r.position === role && r.games > 0,
+  );
   const fallback: Reason[] =
-    data.patch.previousWeight > 0
+    data.previousPatch &&
+    roleHasCurrentGames &&
+    data.patch.previousShare >= ENGINE_CONFIG.previousPatchPrior.reasonShare
       ? [
           {
             kind: 'patch_fallback',
-            label: `${patchesLabel(data.patch.patches)} data: only ${formatGames(data.patch.currentGames)} on ${data.currentPatch}`,
+            label:
+              data.patch.currentGames > 0
+                ? `Mostly ${data.previousPatch} data: ${formatGames(data.patch.currentGames)} on ${data.currentPatch} so far`
+                : `${data.previousPatch} data: no games on ${data.currentPatch} yet`,
             delta: 0,
             games: baseline.games,
           },

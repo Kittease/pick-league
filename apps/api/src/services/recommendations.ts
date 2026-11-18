@@ -11,17 +11,19 @@ import type {
   PicksResponse,
 } from '@pick-league/shared';
 import {
-  choosePatches,
   DUO_ROLES,
   draftPairs,
   draftRoles,
+  ENGINE_CONFIG,
   evaluateDraft,
   LANE_ROLES,
+  type PatchChoice,
+  patchesUsedFor,
+  previousWeight,
   recommendBuild,
   recommendPicks,
   sideTraits,
-  sumByKey,
-  sumStats,
+  sumWeighted,
 } from '../engine/index.ts';
 import { ApiError } from '../errors.ts';
 import * as repo from '../stats/repository.ts';
@@ -112,14 +114,32 @@ export async function build(q: Queryable, req: BuildRequest): Promise<BuildRespo
     );
   const cur = find(ctx.current);
   const prev = find(ctx.previous);
-  const pc = choosePatches(ctx.current, ctx.previous, cur?.games ?? 0, prev?.games ?? 0);
-  const baseline = sumStats(
-    pc.previousWeight > 0 ? [cur, prev].flatMap((r) => r ?? []) : cur ? [cur] : [],
-  );
+  // One weight for every previous-patch row of the champion+role (its choices, their contexts,
+  // its pairs), so the choices stay comparable with each other and with the baseline.
+  const curGames = cur?.games ?? 0;
+  const prevGames = ctx.previous ? (prev?.games ?? 0) : 0;
+  const w = previousWeight(prevGames, ENGINE_CONFIG.previousPatchPrior.build);
+  const weights: repo.PatchWeight[] = [
+    { patch: ctx.current, weight: 1 },
+    ...(ctx.previous && w > 0 ? [{ patch: ctx.previous, weight: w }] : []),
+  ];
+  const effective = curGames + w * prevGames;
+  const games = Math.round(effective);
+  // Wins scaled like the loaders' (same win rate on the rounded games).
+  const weightedWins = (cur?.wins ?? 0) + w * (prev?.wins ?? 0);
+  const baseline = { games, wins: games > 0 ? (weightedWins * games) / effective : 0 };
   if (baseline.games === 0) {
     throw new ApiError('NO_DATA', `No games of champion ${req.championId} as ${req.role} yet`);
   }
-  const { patches } = pc;
+  const previousShare = effective > 0 ? (w * prevGames) / effective : 0;
+  const pc: PatchChoice = {
+    patches: patchesUsedFor({ current: ctx.current, previous: ctx.previous }, previousShare),
+    previousWeight: w,
+    previousShare,
+    currentGames: curGames,
+  };
+  const patches = weights.map((x) => x.patch);
+  const weightOf = (patch: PatchId) => weights.find((x) => x.patch === patch)?.weight ?? 0;
   // Only lane opponents matter for choice matchups; enemies with unknown roles are all candidates.
   const laneRoles = LANE_ROLES[req.role];
   const opponentIds = req.enemies
@@ -151,19 +171,19 @@ export async function build(q: Queryable, req: BuildRequest): Promise<BuildRespo
     items,
     names,
   ] = await Promise.all([
-    repo.loadChoices(q, patches, req.championId, req.role),
-    repo.loadChoiceMatchups(q, patches, req.championId, req.role, opponentIds),
-    repo.loadChoiceTraits(q, patches, req.championId, req.role, enemyTraits),
-    repo.loadChoiceDuos(q, patches, req.championId, req.role, partnerIds),
-    repo.loadChoiceAllyTraits(q, patches, req.championId, req.role, allyTraits),
+    repo.loadChoices(q, weights, req.championId, req.role),
+    repo.loadChoiceMatchups(q, weights, req.championId, req.role, opponentIds),
+    repo.loadChoiceTraits(q, weights, req.championId, req.role, enemyTraits),
+    repo.loadChoiceDuos(q, weights, req.championId, req.role, partnerIds),
+    repo.loadChoiceAllyTraits(q, weights, req.championId, req.role, allyTraits),
     repo.loadCompTraits(q, patches, req.role, req.championId),
-    repo.loadVsForChampion(q, patches, req.championId, req.role, opponentIds),
-    repo.loadWithForChampion(q, patches, req.championId, req.role, partnerIds),
+    repo.loadVsForChampion(q, weights, req.championId, req.role, opponentIds),
+    repo.loadWithForChampion(q, weights, req.championId, req.role, partnerIds),
     repo.loadLanePhaseOfChampion(q, patches, req.role, req.championId, opponentIds),
     repo.loadItems(q, ctx.current),
     repo.loadNames(q, ctx.patches),
   ]);
-  const compTraits = sumByKey(compTraitRows, (r) => `${r.side}|${r.trait}`);
+  const compTraits = sumWeighted(compTraitRows, weightOf, (r) => `${r.side}|${r.trait}`);
   const result = recommendBuild(req, {
     currentPatch: ctx.current,
     previousPatch: ctx.previous,
