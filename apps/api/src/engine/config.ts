@@ -5,10 +5,10 @@
  * `delta * n / (n + k)` (empirical-Bayes style), where `k` is the "prior strength" below: a delta
  * backed by `k` games keeps half of its value.
  *
- * The `k` values come from the data (patch 16.22, ~122k matches, Nov 2026): for each kind of delta,
- * the spread that is real (variance of the observed deltas minus their binomial noise, τ²) gives
- * `k = p(1 − p) / τ²`. A held-out check (stats from 80 % of the matches, scored on the other 20 %)
- * found the resulting pick score predicts wins ~4× better than the previous hand-set one.
+ * The `k` values come from the data (patch 16.22, ~300k matches, Nov 2026): a held-out fit
+ * (statistics from 80 % of the matches, the other 20 % — about 60k matches — scored) picks, for
+ * each kind of delta, the `k` at which that component's fitted weight is 1. Re-measure them with
+ * `apps/api/scripts/calibrate.ts`.
  */
 import type { CompTrait, Position } from '@pick-league/shared';
 
@@ -52,15 +52,17 @@ export const ENGINE_CONFIG = {
      * Shrinkage prior strength per kind (games). Pair deltas (matchup, duo, other enemies and
      * allies) are measured against what the role usually does vs/with that champion (the other
      * champion's own strength is the same for every candidate), so these `k` fit that interaction
-     * alone: it is small, hence the large values.
+     * alone: it is small, hence the large values. Each pair `k` is the one at which the held-out
+     * weight of its kind is ~1 (lane 600, other bot laner 1,600, other enemies 3,500, duo 4,000,
+     * other allies 10,000); with them the summed score has a held-out slope of 0.98 ± 0.04.
      */
     shrinkK: {
       base: 250,
-      matchup: 1200,
-      laneSecondary: 2500,
-      duo: 1600,
-      otherEnemy: 5000,
-      otherAlly: 4700,
+      matchup: 600,
+      laneSecondary: 1600,
+      duo: 4000,
+      otherEnemy: 3500,
+      otherAlly: 10000,
       /** No measurable effect of enemy traits on 16.22, a small one for ally traits (k ≈ 2,800). */
       comp: 3000,
     },
@@ -231,15 +233,13 @@ export const ENGINE_CONFIG = {
   },
 
   /**
-   * Draft evaluation (POST /recommendations/draft): the picks engine's deltas summed per team.
-   * Weights from a held-out logistic fit on 16.22 (25k test matches): summed champion strengths
-   * came out at ~0.92 of a calibrated win-rate difference and pair terms at ~0.62 (noisier), so
-   * they are scaled down to match; the resulting probabilities matched the observed results
-   * bucket by bucket (e.g. predicted 45.3 % → 44.8 % won, 59.3 % → 56.5 %).
+   * Draft evaluation (POST /recommendations/draft): the picks engine's deltas summed per team,
+   * with weight 1. With the `k` above the summed score is calibrated as it is (held-out slope
+   * 0.98 ± 0.04 on ~60k matches of 16.22), so no extra scaling.
    */
   draft: {
-    baseWeight: 0.9,
-    pairWeight: 0.6,
+    baseWeight: 1,
+    pairWeight: 1,
     /** The probability stays within these bounds (a draft never decides a match alone). */
     minProbability: 0.05,
     maxProbability: 0.95,

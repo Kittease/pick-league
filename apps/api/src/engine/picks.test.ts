@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { type PicksResponse, type Position, picksRequestSchema } from '@pick-league/shared';
+import { ENGINE_CONFIG } from './config.ts';
 import { lane, names, role, thresholds, traitsOf, vs, withAlly } from './fixtures.ts';
 import { type PicksData, recommendPicks } from './picks.ts';
 import type { CompTraitRow, MasteryRow } from './types.ts';
@@ -62,14 +63,16 @@ describe('recommendPicks', () => {
     const naut = result.candidates[0];
     const matchup = naut?.reasons.find((r) => r.kind === 'matchup');
     expect(matchup?.games).toBe(1000);
-    // 6 % − the usual 1.5 %, shrunk with k = 1,200.
-    expect(matchup?.delta).toBeCloseTo((0.045 * 1000) / 2200, 3);
+    // 6 % − the usual 1.5 %, shrunk with k = 600.
+    const k = ENGINE_CONFIG.picks.shrinkK;
+    expect(matchup?.delta).toBeCloseTo((0.045 * 1000) / (1000 + k.matchup), 3);
     expect(matchup?.label).toBe(
-      '+2.0% vs Janna compared with other supports (likely lane, support, 1,000 games)',
+      '+2.8% vs Janna compared with other supports (likely lane, support, 1,000 games)',
     );
     expect(matchup?.championIds).toEqual([40]);
     const duo = result.candidates[1]?.reasons.find((r) => r.kind === 'duo');
-    expect(duo?.label).toBe('+1.7% with Jinx compared with other supports (bot duo, 1,000 games)');
+    expect(duo?.delta).toBeCloseTo((0.045 * 1000) / (1000 + k.duo), 3);
+    expect(duo?.label).toBe('+0.9% with Jinx compared with other supports (bot duo, 1,000 games)');
   });
 
   test("an enemy's own strength does not favour candidates with small samples", () => {

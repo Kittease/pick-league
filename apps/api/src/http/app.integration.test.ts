@@ -273,7 +273,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(ids).not.toContain(89);
     expect(ids).not.toContain(PLANTED.matchup.opponentId);
     const reason = body.candidates[0]?.reasons.find((r) => r.kind === 'matchup');
-    // Shrunk with k = 1,200: lane matchup effects are small.
+    // Shrunk with k = 600: lane matchup effects are small.
     expect(reason?.delta).toBeGreaterThan(0.01);
     expect(reason?.games).toBeGreaterThan(50);
     expect(reason?.label).toMatch(
