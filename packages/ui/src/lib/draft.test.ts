@@ -393,6 +393,25 @@ describe('draft: evaluation request', () => {
     expect(draftEvaluationRequest(d, 'red')).toMatchObject({ side: 'red', allies: blue.enemies });
     expect(draftEvaluationRequest(EMPTY_DRAFT)).toEqual({ allies: [], enemies: [], side: 'blue' });
   });
+
+  test('a competitive draft sends no side: the side edge only describes ranked matchmaking', () => {
+    let d = emptyDraft('competitive');
+    for (let i = 1; i <= 6; i++) d = ban(d, 100 + i);
+    d = play(d, FULL_PICKS.slice(0, 3));
+    const blue = draftRequestSchema.parse(draftEvaluationRequest(d));
+    expect(blue).toEqual({
+      allies: [{ championId: 1, role: 'TOP' }],
+      enemies: [
+        { championId: 11, role: 'JUNGLE' },
+        { championId: 12, role: 'MIDDLE' },
+      ],
+      side: null,
+    });
+    expect(draftEvaluationRequest(d, 'red').side).toBeNull();
+    expect(draftEvaluationRequest(emptyDraft('competitive', 'red')).side).toBeNull();
+    // Ranked solo/duo keeps its side.
+    expect(draftEvaluationRequest(afterBans(), 'red').side).toBe('red');
+  });
 });
 
 describe('draft: build request', () => {

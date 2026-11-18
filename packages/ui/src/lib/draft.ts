@@ -352,7 +352,10 @@ export function draftBuildRequest(
 
 /**
  * Body of `POST /recommendations/draft` from `team`'s point of view: its picks and the other
- * team's, all with their roles, and its side (blue or red), at any point of the draft.
+ * team's, all with their roles, at any point of the draft. A ranked solo/duo draft also sends the
+ * team's side (blue or red). A competitive draft sends none: the side edge is measured on ranked
+ * matches, where matchmaking decides which side gets the stronger players, and says nothing about
+ * a tournament game.
  */
 export function draftEvaluationRequest(draft: Draft, team: Team = 'blue'): DraftRequestInput {
   const known = (t: Team) => {
@@ -362,7 +365,11 @@ export function draftEvaluationRequest(draft: Draft, team: Team = 'blue'): Draft
       return id ? [{ championId: id, role: p }] : [];
     });
   };
-  return { allies: known(team), enemies: known(otherTeam(team)), side: team };
+  return {
+    allies: known(team),
+    enemies: known(otherTeam(team)),
+    side: draft.format === 'competitive' ? null : team,
+  };
 }
 
 /** "Kai'Sa" → "kaisa": search ignores case, spaces and punctuation. */

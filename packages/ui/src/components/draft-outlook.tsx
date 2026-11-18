@@ -123,8 +123,8 @@ export function WinProbability({
             </div>
             <p className="text-[11px] text-muted-foreground">
               From high-elo matches: each champion's strength in its role, lane matchups and duos
-              (each pair once), and the side. Champions not picked yet count as average. Deltas are
-              from {allies.label.toLowerCase()}'s point of view.
+              (each pair once), and in ranked games the side. Champions not picked yet count as
+              average. Deltas are from {allies.label.toLowerCase()}'s point of view.
             </p>
             <ReasonList reasons={data.reasons} kindLabels={DRAFT_KIND_LABELS} />
           </div>
