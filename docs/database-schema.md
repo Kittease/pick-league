@@ -369,8 +369,9 @@ CREATE INDEX match_fetch_queue_pending_idx
   ON match_fetch_queue (platform, fetch_rank, discovered_at, match_id) WHERE status = 'PENDING';
 -- Claimed lowest fetch_rank first, so better-placed players' matches are fetched first.
 -- DONE / SKIPPED_OLD_PATCH rows are kept as a "seen" set and purged with their patch.
--- Once a match turns out to be from an older patch, every PENDING row of that platform with a
--- lower or equal game id is marked SKIPPED_OLD_PATCH in one statement.
+-- Once a match turns out to be from a patch no longer collected (older than the previous one, or
+-- the previous one once the platform has stored a match of the latest), every PENDING row of that
+-- platform with a lower or equal game id is marked SKIPPED_OLD_PATCH in one statement.
 
 -- Lowest-priority work: mastery + rank for non-ladder players.
 -- Only consumed when the higher-priority queues leave rate-limit budget unused.

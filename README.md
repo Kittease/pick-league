@@ -51,6 +51,8 @@ Master. Matches of better-placed players are always fetched first. The `masterTr
 
 - **Deploy**: `git pull && docker compose up -d --build`.
 - **Riot key**: edit `.env`, then `docker compose up -d worker` (a plain restart keeps the old key).
+- **Backfill the previous patch**: set `COLLECT_PREVIOUS_PATCH=true` in `.env`, `docker compose
+  up -d worker`; remove it and run the same command when done.
 - **Logs**: `docker compose logs -f worker` (rotated, 3 × 10 MB per container); timers:
   `journalctl -u 'pickleague-*'`.
 - **Backups**: `deploy/backup.sh` runs nightly at 04:30 UTC and keeps the last 3 dumps
