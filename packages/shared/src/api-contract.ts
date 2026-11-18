@@ -429,11 +429,15 @@ export interface PickCandidate {
   /** 0..1, derived from sample sizes. */
   confidence: number;
   /**
-   * Patches whose data was used for this champion, newest first: the current one, plus the
-   * previous one when the current has too few games of champion+role.
+   * Patches whose data is used for this champion, newest first: the current one, plus the
+   * previous one while it still weighs at least 10 % (the previous patch counts as a prior worth a
+   * capped number of games).
    */
   patchesUsed: PatchId[];
-  /** Games of champion+role on `patchesUsed`. */
+  /**
+   * Effective games of champion+role: the current patch's, plus the previous patch's up to the
+   * prior's cap.
+   */
   games: number;
   /** Baseline win rate of champion+role on `patchesUsed`. */
   winRate: number;
@@ -540,7 +544,10 @@ export interface BuildResponse {
   role: Position;
   /** Patches whose data was used, newest first (see `PickCandidate.patchesUsed`). */
   patchesUsed: PatchId[];
-  /** Games of champion+role on `patchesUsed`. */
+  /**
+   * Effective games of champion+role: the current patch's, plus the previous patch's up to the
+   * prior's cap.
+   */
   games: number;
   /** 0..1 */
   confidence: number;
@@ -695,18 +702,22 @@ export interface TierListEntry {
   score: number;
   /** Win rate of champion+role on `patchesUsed`. */
   winRate: number;
-  /** Games of champion+role on `patchesUsed`. */
+  /**
+   * Effective games of champion+role: the current patch's, plus the previous patch's up to the
+   * prior's cap.
+   */
   games: number;
-  /** Share of the matches on `patchesUsed` where this champion was picked in the role (its games / half the role's games: two players per role per match; ~2 summed over a role). */
+  /** Share of the matches where this champion was picked in the role, on the patches used, weighted like the games (its games / half the role's games: two players per role per match; ~2 summed over a role). */
   pickRate: number;
   /**
-   * Share of matches of `patchesUsed` where this champion was banned (by either team). With a rank
+   * Share of matches where this champion was banned (by either team), on the patches used,
+   * weighted like the games. With a rank
    * filter: share of the counted players' matches (a match counts once per counted player in it).
    */
   banRate: number;
   /** 0..1, derived from the sample size. */
   confidence: number;
-  /** Current patch, plus the previous one when the current has too few games (like the picks engine). */
+  /** Current patch, plus the previous one while it still weighs at least 10 % (like the picks engine). */
   patchesUsed: PatchId[];
 }
 
@@ -744,7 +755,10 @@ export interface TierListChampionResponse {
   championId: number;
   /** Same per-champion patch choice as its tier list entry. */
   patchesUsed: PatchId[];
-  /** Games and win rate of champion+role on `patchesUsed`: the baseline of every delta below. */
+  /**
+   * Effective games of champion+role: the current patch's, plus the previous patch's up to the
+   * prior's cap, and its win rate: the baseline of every delta below.
+   */
   games: number;
   winRate: number;
   /**

@@ -3,7 +3,6 @@ import { stageReference } from './build.ts';
 import { thresholds, traitsOf } from './fixtures.ts';
 import {
   blendPatches,
-  choosePatches,
   formatDelta,
   formatGames,
   mixLike,
@@ -11,7 +10,6 @@ import {
   patchesUsedFor,
   previousWeight,
   shrink,
-  sumByKey,
   sumWeighted,
 } from './math.ts';
 import { assignRoles, rolePlayRates } from './roles.ts';
@@ -34,30 +32,6 @@ describe('formatting', () => {
     expect(formatDelta(-0.0004)).toBe('0.0%');
     expect(formatGames(1240)).toBe('1,240 games');
     expect(formatGames(1)).toBe('1 game');
-  });
-});
-
-describe('choosePatches', () => {
-  test('keeps the current patch alone from the threshold on', () => {
-    expect(choosePatches('15.22', '15.21', 150, 900, 150)).toEqual({
-      patches: ['15.22'],
-      previousWeight: 0,
-      previousShare: 0,
-      currentGames: 150,
-    });
-  });
-  test('adds the previous patch below the threshold', () => {
-    expect(choosePatches('15.22', '15.21', 40, 10, 150)).toEqual({
-      patches: ['15.22', '15.21'],
-      previousWeight: 1,
-      previousShare: 0.2,
-      currentGames: 40,
-    });
-    expect(patchesLabel(['15.22', '15.21'])).toBe('15.22 + 15.21');
-  });
-  test('stays on the current patch when there is no previous data', () => {
-    expect(choosePatches('15.22', '15.21', 40, 0, 150).previousWeight).toBe(0);
-    expect(choosePatches('15.22', null, 40, 0, 150).patches).toEqual(['15.22']);
   });
 });
 
@@ -122,24 +96,11 @@ describe('previous patch prior', () => {
   });
 
   test('patchesUsedFor lists the previous patch from 10 % of the effective games', () => {
+    expect(patchesLabel(['15.22', '15.21'])).toBe('15.22 + 15.21');
     const pair = { current: '15.22', previous: '15.21' };
     expect(patchesUsedFor(pair, 0.09)).toEqual(['15.22']);
     expect(patchesUsedFor(pair, 0.1)).toEqual(['15.22', '15.21']);
     expect(patchesUsedFor({ current: '15.22', previous: null }, 1)).toEqual(['15.22']);
-  });
-});
-
-describe('sumByKey', () => {
-  test('adds games and wins of rows sharing a key', () => {
-    const rows = [
-      { id: 1, patch: '15.22', games: 10, wins: 6 },
-      { id: 2, patch: '15.22', games: 5, wins: 1 },
-      { id: 1, patch: '15.21', games: 90, wins: 40 },
-    ];
-    expect(sumByKey(rows, (r) => String(r.id))).toEqual([
-      { id: 1, patch: '15.22', games: 100, wins: 46 },
-      { id: 2, patch: '15.22', games: 5, wins: 1 },
-    ]);
   });
 });
 

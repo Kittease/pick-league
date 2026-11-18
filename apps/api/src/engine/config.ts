@@ -14,11 +14,6 @@ import type { CompTrait, Position } from '@pick-league/shared';
 
 export const ENGINE_CONFIG = {
   /**
-   * Use the current patch alone for a champion+role when it has at least this many games, else the
-   * current and previous patches combined.
-   */
-  patchFallbackMinGames: 150,
-  /**
    * The previous patch as a prior. Each statistic's previous-patch sample always contributes but
    * counts for at most `cap` games (weight `min(1, cap / previous games)`), so it fades as games
    * of the current patch arrive, with no threshold. Simulated inside 16.22: the strength estimate
