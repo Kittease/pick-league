@@ -16,6 +16,7 @@ import { championGameLength, indexGameLength } from './game-length.ts';
 import { lanePhaseDiff, lanePhaseRowsOf } from './lane-phase.ts';
 import {
   blendPatches,
+  listedGames,
   mixLike,
   type PatchPair,
   round,
@@ -140,7 +141,7 @@ export function buildTierListChampion(
     patch: currentPatch,
     championId,
     patchesUsed: b.patches,
-    games: shownGames(b.games),
+    games: listedGames(b.blend, b.patches),
     winRate: round(b.winRate),
     matchups: relations(
       vs,

@@ -306,8 +306,9 @@ describe('evaluateDraft with a previous patch', () => {
     const delta = (100 * (0.55 - roleCur) + CAP * (0.55 - rolePrev)) / games;
     const strength = (delta * games) / (games + K.base);
     expect(r.winProbability).toBeCloseTo(0.5 + D.baseWeight * strength, 4);
-    expect(r.reasons[0]).toMatchObject({ kind: 'base', games: 1300, championIds: [412] });
-    expect(r.reasons[0]?.label).toMatch(/Thresh: 55\.0% win rate as support \(1,300 games\)$/);
+    // Shown: the real games of both patches, not the 1,300 they count for.
+    expect(r.reasons[0]).toMatchObject({ kind: 'base', games: 5100, championIds: [412] });
+    expect(r.reasons[0]?.label).toMatch(/Thresh: 55\.0% win rate as support \(5,100 games\)$/);
     expect(r.patchesUsed).toEqual([CUR, PREV]);
   });
 
@@ -395,5 +396,53 @@ describe('evaluateDraft with a previous patch', () => {
     expect(r.reasons[0]?.label).toBe(
       '−0.5% Blue side: wins 49.5% of matches on 15.22 + 15.21 (4,000 games)',
     );
+  });
+});
+
+describe('evaluateDraft shown games', () => {
+  const PREV = '15.21';
+  // Nautilus: 100 games on 15.22 and 5,000 on 15.21 (counting for 1,200: listed), or 20,000 and
+  // 1,300 (5.7 % of the effective games: not listed). Lulu is the rest of the role.
+  const listed = [
+    role(CUR, 111, 'UTILITY', 100, 55),
+    role(PREV, 111, 'UTILITY', 5000, 2750),
+    role(CUR, 117, 'UTILITY', 2000, 1000),
+    role(PREV, 117, 'UTILITY', 5000, 2500),
+  ];
+  const unlisted = [
+    role(CUR, 111, 'UTILITY', 20_000, 10_400),
+    role(PREV, 111, 'UTILITY', 1300, 650),
+    role(CUR, 117, 'UTILITY', 20_000, 9_600),
+    role(PREV, 117, 'UTILITY', 1300, 650),
+  ];
+  const evaluate = (roleStats: DraftData['roleStats']) =>
+    evaluateDraft(
+      req({ allies: [{ championId: 111, role: 'UTILITY' }] }),
+      data({ previousPatch: PREV, roleStats, sides: [] }),
+    );
+
+  test('base reasons show the real games of the patches listed, the strength unchanged', () => {
+    const one = evaluate(listed);
+    expect(one.winProbability).toBeCloseTo(0.5224, 4);
+    expect(one.reasons).toEqual([
+      {
+        kind: 'base',
+        label: '+2.2% Nautilus: 55.0% win rate as support (5,100 games)',
+        delta: 0.0224,
+        games: 5100,
+        championIds: [111],
+      },
+    ]);
+    const two = evaluate(unlisted);
+    expect(two.winProbability).toBeCloseTo(0.5186, 4);
+    expect(two.reasons).toEqual([
+      {
+        kind: 'base',
+        label: '+1.9% Nautilus: 51.9% win rate as support (20,000 games)',
+        delta: 0.0186,
+        games: 20_000,
+        championIds: [111],
+      },
+    ]);
   });
 });

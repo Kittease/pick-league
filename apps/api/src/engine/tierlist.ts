@@ -16,12 +16,12 @@ import { ENGINE_CONFIG } from './config.ts';
 import {
   type Blend,
   blendPatches,
+  listedGames,
   mixLike,
   type PatchPair,
   patchesUsedFor,
   round,
   sampleConfidence,
-  shownGames,
   shrink,
   sumStats,
   winRate,
@@ -171,7 +171,7 @@ export function buildTierList(
       championId,
       score: round(shrink(b.delta, b.games, K.base), 5),
       winRate: round(b.winRate),
-      games: shownGames(b.games),
+      games: listedGames(b.blend, b.patches),
       // Share of matches where the champion is picked in this role: the role's games are two per
       // match (one per team). Also right under server/rank filters, where `patchMatches` counts
       // players of every role, not matches.

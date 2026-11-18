@@ -171,7 +171,10 @@ export interface Reason {
   label: string;
   /** Win-rate delta after shrinkage (0.028 = +2.8 points). 0 when not applicable. */
   delta: number;
-  /** Sample size behind the delta. 0 when not applicable. */
+  /**
+   * Sample size behind the delta. 0 when not applicable. `base` / `patch_fallback`: the
+   * champion+role's real games on its patches used; pair reasons: the weighted sample.
+   */
   games: number;
   /** Other champion(s) involved (matchup opponent, duo partner…) — lets the UI show icons. */
   championIds?: number[];
@@ -435,8 +438,9 @@ export interface PickCandidate {
    */
   patchesUsed: PatchId[];
   /**
-   * Effective games of champion+role: the current patch's, plus the previous patch's up to the
-   * prior's cap.
+   * Real games of champion+role on `patchesUsed`: the current patch's, plus all of the previous
+   * patch's when it is listed. Shrinkage and confidence use the effective games instead (the
+   * previous patch counting for at most the prior's cap).
    */
   games: number;
   /** Baseline win rate of champion+role on `patchesUsed`. */
@@ -703,8 +707,9 @@ export interface TierListEntry {
   /** Win rate of champion+role on `patchesUsed`. */
   winRate: number;
   /**
-   * Effective games of champion+role: the current patch's, plus the previous patch's up to the
-   * prior's cap.
+   * Real games of champion+role on `patchesUsed`: the current patch's, plus all of the previous
+   * patch's when it is listed. Shrinkage and confidence use the effective games instead (the
+   * previous patch counting for at most the prior's cap).
    */
   games: number;
   /** Share of the matches where this champion was picked in the role, on the patches used, weighted like the games (its games / half the role's games: two players per role per match; ~2 summed over a role). */
@@ -756,8 +761,8 @@ export interface TierListChampionResponse {
   /** Same per-champion patch choice as its tier list entry. */
   patchesUsed: PatchId[];
   /**
-   * Effective games of champion+role: the current patch's, plus the previous patch's up to the
-   * prior's cap, and its win rate: the baseline of every delta below.
+   * Real games of champion+role on `patchesUsed` (as `TierListEntry.games`), and its win rate:
+   * the baseline of every delta below.
    */
   games: number;
   winRate: number;

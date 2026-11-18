@@ -105,8 +105,9 @@ describe('buildTierList', () => {
       }),
     );
     const naut = t.entries.find((e) => e.championId === 111);
-    // 1,300 previous games count for 1,200: share 1,200 / 21,200 = 5.7 %.
-    expect(naut?.games).toBe(21_200);
+    // 1,300 previous games count for 1,200: share 1,200 / 21,200 = 5.7 %, so only the current
+    // patch's games are shown.
+    expect(naut?.games).toBe(20_000);
     expect(naut?.patchesUsed).toEqual([CUR]);
     const w = CAP / 1300;
     expect(naut?.winRate).toBeCloseTo((10_400 + w * 650) / 21_200, 4);
@@ -127,7 +128,8 @@ describe('buildTierList', () => {
       }),
     );
     const naut = t.entries.find((e) => e.championId === 111);
-    expect(naut?.games).toBe(1200);
+    // Shown: its real 5,000 games; they count for 1,200.
+    expect(naut?.games).toBe(5000);
     expect(naut?.patchesUsed).toEqual([CUR, PREV]);
     expect(naut?.winRate).toBeCloseTo(0.55, 4);
     // Against the previous patch's role average (50 %), on 1,200 games.
@@ -171,5 +173,37 @@ describe('assignTiers', () => {
     expect(assignTiers([0, -0.01, -0.02])).toEqual(['B', 'B', 'C']);
     expect(assignTiers([0.02, 0.02, 0.02, 0.02])).toEqual(['A', 'A', 'A', 'A']);
     expect(assignTiers([0.01])).toEqual(['B']);
+  });
+});
+
+describe('buildTierList shown games', () => {
+  // Nautilus: 100 games on 15.22 and 5,000 on 15.21 (counting for 1,200: listed), or 20,000 and
+  // 1,300 (5.7 % of the effective games: not listed). Lulu is the rest of the role.
+  const listed = [
+    role(CUR, 111, 'UTILITY', 100, 55),
+    role(PREV, 111, 'UTILITY', 5000, 2750),
+    role(CUR, 117, 'UTILITY', 2000, 1000),
+    role(PREV, 117, 'UTILITY', 5000, 2500),
+  ];
+  const unlisted = [
+    role(CUR, 111, 'UTILITY', 20_000, 10_400),
+    role(PREV, 111, 'UTILITY', 1300, 650),
+    role(CUR, 117, 'UTILITY', 20_000, 9_600),
+    role(PREV, 117, 'UTILITY', 1300, 650),
+  ];
+  const naut = (roleStats: TierListData['roleStats']) =>
+    buildTierList('UTILITY', data({ roleStats, bans: [], patchMatches: [] })).entries.find(
+      (e) => e.championId === 111,
+    );
+
+  test('the real games of the patches listed; score and confidence on the effective games', () => {
+    // Both patches listed: 100 + 5,000 shown, scored on 100 + 1,200.
+    expect(naut(listed)).toMatchObject({ patchesUsed: [CUR, PREV], games: 5100 });
+    expect(naut(listed)?.score).toBeCloseTo(0.02243, 5);
+    expect(naut(listed)?.confidence).toBe(0.867);
+    // Previous patch not listed: the current patch's 20,000 shown, scored on 21,200.
+    expect(naut(unlisted)).toMatchObject({ patchesUsed: [CUR], games: 20_000 });
+    expect(naut(unlisted)?.score).toBeCloseTo(0.01865, 5);
+    expect(naut(unlisted)?.confidence).toBe(0.991);
   });
 });

@@ -137,8 +137,16 @@ export function patchesUsedFor(patches: PatchPair, previousShare: number): Patch
     : [patches.current];
 }
 
-/** Effective games as shown in responses and labels. */
+/** Effective games as shown for pair statistics (matchups, duos, traits…), rounded. */
 export const shownGames = (games: number): number => Math.round(games);
+
+/**
+ * Games shown for a champion+role: its real games on the patches listed as used, not the
+ * effective sample (which would read ~1,200 for every popular champion on a patch's first day).
+ */
+export function listedGames(blend: Blend, patches: readonly PatchId[]): number {
+  return blend.currentGames + (patches.length > 1 ? blend.previousGames : 0);
+}
 
 export interface PatchChoice {
   /** Patches listed as used (see `patchesUsedFor`), newest first. */

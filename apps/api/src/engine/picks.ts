@@ -39,6 +39,7 @@ import {
   formatDelta,
   formatGames,
   formatRate,
+  listedGames,
   type PatchPair,
   type PatchSample,
   round,
@@ -261,6 +262,7 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
     if (excluded.has(championId) || (available && !available.has(championId))) continue;
     const b = championBaseline(patchPair, inRole, roleWinRate, championId);
     if (b.games < ENGINE_CONFIG.minCandidateGames) continue;
+    const ownGames = listedGames(b.blend, b.patches);
     const champName = names.champion(championId);
     const components: Component[] = [];
     /** The candidate's delta with a pair on one patch: vs its own baseline and the usual term. */
@@ -279,9 +281,9 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
     components.push({
       reason: {
         kind: 'base',
-        label: `${formatRate(b.winRate)} win rate as ${ROLE_LABELS[role]} (${formatGames(shownGames(b.games))})`,
+        label: `${formatRate(b.winRate)} win rate as ${ROLE_LABELS[role]} (${formatGames(ownGames)})`,
         delta: round(baseDelta),
-        games: shownGames(b.games),
+        games: ownGames,
       },
       contribution: W.base * baseDelta,
       weight: W.base,
@@ -477,7 +479,7 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
             ? `Mostly ${data.previousPatch} data: ${formatGames(b.blend.currentGames)} of ${who} so far`
             : `${data.previousPatch} data: no games of ${who} yet`,
         delta: 0,
-        games: shownGames(b.games),
+        games: ownGames,
       });
     }
     candidates.push({
@@ -485,7 +487,7 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
       score: round(score, 5),
       confidence: round(confidence, 3),
       patchesUsed: b.patches,
-      games: shownGames(b.games),
+      games: ownGames,
       winRate: round(b.winRate),
       reasons,
     });

@@ -280,3 +280,29 @@ function gameLength(
 ): GameLengthRow {
   return { patch, position: 'UTILITY', championId, bucket, games, wins };
 }
+
+describe('buildTierListChampion shown games', () => {
+  // Nautilus: 100 games on 15.22 and 5,000 on 15.21 (counting for 1,200: listed), or 20,000 and
+  // 1,300 (5.7 % of the effective games: not listed). Lulu is the rest of the role.
+  const listed = [
+    role(CUR, 111, 'UTILITY', 100, 55),
+    role(PREV, 111, 'UTILITY', 5000, 2750),
+    role(CUR, 117, 'UTILITY', 2000, 1000),
+    role(PREV, 117, 'UTILITY', 5000, 2500),
+  ];
+  const unlisted = [
+    role(CUR, 111, 'UTILITY', 20_000, 10_400),
+    role(PREV, 111, 'UTILITY', 1300, 650),
+    role(CUR, 117, 'UTILITY', 20_000, 9_600),
+    role(PREV, 117, 'UTILITY', 1300, 650),
+  ];
+
+  test('the real games of the patches listed, the win rate still blended', () => {
+    const one = buildTierListChampion('UTILITY', 111, data({ roleStats: listed }));
+    expect(one).toMatchObject({ patchesUsed: [CUR, PREV], games: 5100, winRate: 0.55 });
+    const two = buildTierListChampion('UTILITY', 111, data({ roleStats: unlisted }));
+    expect(two).toMatchObject({ patchesUsed: [CUR], games: 20_000 });
+    // (10,400 + 1,200 / 1,300 × 650) / 21,200: the previous patch still weighs in.
+    expect(two.winRate).toBeCloseTo(0.5189, 4);
+  });
+});

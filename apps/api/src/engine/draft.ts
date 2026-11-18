@@ -28,6 +28,7 @@ import {
   formatDelta,
   formatGames,
   formatRate,
+  listedGames,
   type PatchPair,
   type PatchSample,
   patchesLabel,
@@ -120,6 +121,8 @@ interface Drafted extends RoleGuess {
   patches: PatchId[];
   /** Effective games of the champion+role (previous patch as a capped prior), not rounded. */
   games: number;
+  /** Real games of the champion+role on the patches listed (shown in the label). */
+  listedGames: number;
   /** Blended win rate (for the label). */
   winRate: number;
   /** Win rate minus the role average, per patch then blended (not shrunk). */
@@ -163,6 +166,7 @@ export function evaluateDraft(
       ...g,
       patches: b.patches,
       games: b.games,
+      listedGames: listedGames(b.blend, b.patches),
       winRate: b.winRate,
       delta: b.delta,
       factor: 0.5 + 0.5 * g.probability,
@@ -289,8 +293,8 @@ export function evaluateDraft(
       const strength = shrink(d.delta, d.games, K.base);
       add(sign * D.baseWeight * d.factor * strength, {
         kind: 'base',
-        label: `${formatDelta(sign * D.baseWeight * d.factor * strength)} ${sign < 0 ? 'enemy ' : ''}${name(d)}: ${formatRate(d.winRate)} win rate as ${where(d)} (${formatGames(shownGames(d.games))})`,
-        games: shownGames(d.games),
+        label: `${formatDelta(sign * D.baseWeight * d.factor * strength)} ${sign < 0 ? 'enemy ' : ''}${name(d)}: ${formatRate(d.winRate)} win rate as ${where(d)} (${formatGames(d.listedGames)})`,
+        games: d.listedGames,
         championIds: [d.championId],
       });
     }
