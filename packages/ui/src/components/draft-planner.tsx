@@ -450,7 +450,7 @@ function banCandidate(e: TierListEntry): PickCandidate {
     reasons: [
       {
         kind: 'base',
-        label: `Tier ${e.tier} in this lane: banned in ${percent(e.banRate)} of matches, picked in ${percent(e.pickRate)} of the lane's matches`,
+        label: `Tier ${e.tier} in this lane: banned in ${percent(e.banRate)} of matches, picked in ${percent(e.pickRate)} of matches`,
         delta: e.score,
         games: e.games,
       },

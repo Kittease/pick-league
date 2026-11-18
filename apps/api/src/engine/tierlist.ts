@@ -128,7 +128,10 @@ export function buildTierList(
       score: round(score, 5),
       winRate: round(baseWr),
       games: base.games,
-      pickRate: roleTotal.games > 0 ? round(base.games / roleTotal.games) : 0,
+      // Share of matches where the champion is picked in this role: the role's games are two per
+      // match (one per team). Also right under server/rank filters, where `patchMatches` counts
+      // players of every role, not matches.
+      pickRate: roleTotal.games > 0 ? round((2 * base.games) / roleTotal.games) : 0,
       banRate: patchMatches > 0 ? round(banned / patchMatches) : 0,
       confidence: round(sampleConfidence(base.games, ENGINE_CONFIG.confidenceK.base), 3),
       patchesUsed: patches,

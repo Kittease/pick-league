@@ -697,7 +697,7 @@ export interface TierListEntry {
   winRate: number;
   /** Games of champion+role on `patchesUsed`. */
   games: number;
-  /** Share of the role's games on `patchesUsed` played by this champion (~1 summed over a role). */
+  /** Share of the matches on `patchesUsed` where this champion was picked in the role (its games / half the role's games: two players per role per match; ~2 summed over a role). */
   pickRate: number;
   /**
    * Share of matches of `patchesUsed` where this champion was banned (by either team). With a rank

@@ -580,8 +580,9 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       expect(e.banRate).toBeLessThan(1);
       expect(e.confidence).toBeGreaterThan(0);
     }
+    // Two players per role per match: pick rates are games over half the role's games.
     expect(current.reduce((s, e) => s + e.pickRate, 0)).toBeCloseTo(
-      current.reduce((s, e) => s + e.games, 0) / body.roleGames,
+      (2 * current.reduce((s, e) => s + e.games, 0)) / body.roleGames,
       2,
     );
 

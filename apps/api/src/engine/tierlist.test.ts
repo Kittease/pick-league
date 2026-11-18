@@ -46,9 +46,9 @@ describe('buildTierList', () => {
     const naut = t.entries[0];
     expect(naut?.patchesUsed).toEqual([CUR]);
     expect(naut?.winRate).toBe(0.55);
-    expect(naut?.pickRate).toBeCloseTo(2000 / t.roleGames, 4);
+    expect(naut?.pickRate).toBeCloseTo((2 * 2000) / t.roleGames, 4);
     expect(naut?.banRate).toBe(0.1);
-    // Role average ≈ 50 %: delta ≈ +5 points, shrunk with k = 300.
+    // Role average ≈ 50 %: delta ≈ +5 points, shrunk with k = 250.
     expect(naut?.score).toBeGreaterThan(0.04);
     expect(naut?.score).toBeLessThan(0.05);
 
@@ -56,12 +56,28 @@ describe('buildTierList', () => {
     expect(janna?.patchesUsed).toEqual([CUR, PREV]);
     expect(janna?.games).toBe(650);
     expect(janna?.winRate).toBeCloseTo(360 / 650, 4);
-    // 650 of the role's 6,060 + 1,200 games on both patches; banned in 60 of 3,600 matches.
-    expect(janna?.pickRate).toBeCloseTo(650 / 7260, 4);
+    // 650 of the 3,630 matches' worth of support games on both patches (7,260 role games);
+    // banned in 60 of 3,600 matches.
+    expect(janna?.pickRate).toBeCloseTo((2 * 650) / 7260, 4);
     expect(janna?.banRate).toBeCloseTo(60 / 3600, 4);
     // Smaller sample than Nautilus with the same raw delta → shrunk harder.
     expect(janna?.score).toBeLessThan(naut?.score ?? 0);
     expect(janna?.confidence).toBeLessThan(naut?.confidence ?? 1);
+  });
+
+  test('pick rate is a share of matches: a champion in every match of the role is at 100 %', () => {
+    // 1,000 matches, two support slots each: Nautilus on one team and Lulu on the other every time.
+    const t = buildTierList(
+      'UTILITY',
+      data({
+        previousPatch: null,
+        roleStats: [role(CUR, 111, 'UTILITY', 1000, 550), role(CUR, 117, 'UTILITY', 1000, 450)],
+        bans: [],
+        patchMatches: [{ patch: CUR, matches: 1000 }],
+      }),
+    );
+    expect(t.roleGames).toBe(2000);
+    expect(t.entries.map((e) => e.pickRate)).toEqual([1, 1]);
   });
 
   test('empty role', () => {
