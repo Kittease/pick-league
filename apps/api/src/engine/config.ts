@@ -28,11 +28,12 @@ export const ENGINE_CONFIG = {
     /**
      * Builds: one factor per champion+role, from its previous-patch games (choices stay comparable).
      * Much larger than the strength cap: a build splits the champion's games between many choices
-     * and contexts (situational items need 15 games vs one enemy trait or lane opponent), so with
-     * 3,000 games a 19,000-game champion lost its situational items and alternative cores on the
-     * first day of 16.23.
+     * and contexts (a situational item needs 15 games vs one enemy trait or lane opponent). On the
+     * first day of 16.23, Rell support (19,000 games on 16.22) kept 1 of her 4 situational items
+     * with a cap of 10,000 and none with 3,000; only the few champions played more than this are
+     * scaled down at all.
      */
-    build: 10_000,
+    build: 20_000,
     /** `patchesUsed` lists the previous patch from this share of the effective games. */
     listedShare: 0.1,
     /** A `patch_fallback` reason says so from this share. */
