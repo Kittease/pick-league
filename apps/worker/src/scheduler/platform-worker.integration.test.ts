@@ -8,16 +8,17 @@ import {
   migrate,
   upsertPatchStaticData,
 } from '@pick-league/db';
-import type {
-  AccountDto,
-  ChampionMasteryDto,
-  LadderTier,
-  LeagueEntryDto,
-  LeagueListDto,
-  MatchDto,
-  Platform,
-  StaticPatchData,
-  TimelineDto,
+import {
+  type AccountDto,
+  type ChampionMasteryDto,
+  comparePatches,
+  type LadderTier,
+  type LeagueEntryDto,
+  type LeagueListDto,
+  type MatchDto,
+  type Platform,
+  type StaticPatchData,
+  type TimelineDto,
 } from '@pick-league/shared';
 import matchFixture from '../parser/fixtures/match.json';
 import timelineFixture from '../parser/fixtures/timeline.json';
@@ -165,10 +166,15 @@ class FakeRiot implements RiotApi {
 class FakePatches implements PatchView {
   ready = true;
   generation = 1;
+  latest: string | null = '15.22';
+  previous: string | null = '15.21';
   refreshRequests = 0;
   classify(patch: string): PatchVerdict {
-    if (patch === '15.22') return 'keep';
-    return patch === '15.23' ? 'too_new' : 'old';
+    if (this.latest === null) return 'too_new';
+    const c = comparePatches(patch, this.latest);
+    if (c > 0) return 'too_new';
+    if (c === 0) return 'keep';
+    return patch === this.previous ? 'previous' : 'old';
   }
   requestRefresh() {
     this.refreshRequests++;
@@ -222,6 +228,14 @@ d('PlatformWorker (Postgres)', () => {
   afterAll(async () => {
     await db?.end();
   });
+
+  /** Stores one match of the latest patch (a high game id): the patch is live on EUW1. */
+  const goLive = async (w: PlatformWorker = worker, id = 'EUW1_7000009000') => {
+    riot.matches.set(id, makeMatch(id, '15.22.715.1234'));
+    await enqueueMatchIds(db, 'EUW1', [id]);
+    expect(await w.processMatch({ matchId: id, platform: 'EUW1', attempts: 0 })).toBe('added');
+    riot.calls = [];
+  };
 
   const ladder = (n: number, games: (i: number) => number) =>
     Array.from({ length: n }, (_, i) => ({
@@ -484,6 +498,7 @@ d('PlatformWorker (Postgres)', () => {
   });
 
   test('previous patch: skipped, and older ids are skipped without fetching nor listing', async () => {
+    await goLive();
     riot.matches.set('EUW1_7000000100', makeMatch('EUW1_7000000100', '15.21.700.1'));
     await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000100', 'EUW1_7000000050']);
     const q = (matchId: string) => ({ matchId, platform: 'EUW1' as const, attempts: 0 });
@@ -492,7 +507,11 @@ d('PlatformWorker (Postgres)', () => {
     expect(await worker.processMatch(q('EUW1_7000000050'))).toBe('skipped');
     expect(riot.calls).toEqual([]);
     const statuses = await db`SELECT status FROM match_fetch_queue ORDER BY match_id`;
-    expect(statuses.map((s) => s.status)).toEqual(['SKIPPED_OLD_PATCH', 'SKIPPED_OLD_PATCH']);
+    expect(statuses.map((s) => s.status)).toEqual([
+      'SKIPPED_OLD_PATCH',
+      'SKIPPED_OLD_PATCH',
+      'DONE', // the latest-patch match stored by goLive
+    ]);
 
     // Listing stops at the first id known to be from an old patch.
     riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
@@ -507,6 +526,7 @@ d('PlatformWorker (Postgres)', () => {
   });
 
   test("listing cut-off ignores other platforms' ids and unparseable ids", async () => {
+    await goLive();
     riot.matches.set('EUW1_7000000100', makeMatch('EUW1_7000000100', '15.21.700.1'));
     await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000100']);
     const q = { matchId: 'EUW1_7000000100', platform: 'EUW1' as const, attempts: 0 };
@@ -549,6 +569,7 @@ d('PlatformWorker (Postgres)', () => {
   const oldIds = (n: number) => Array.from({ length: n }, (_, i) => `EUW1_${7000001000 + i}`);
 
   test('an old match skips every pending id below it in one statement', async () => {
+    await goLive();
     const ids = oldIds(30);
     for (const id of ids) riot.matches.set(id, makeMatch(id, '15.21.700.1'));
     await enqueueMatchIds(db, 'EUW1', [...ids, 'EUW1_7000005000']);
@@ -560,6 +581,7 @@ d('PlatformWorker (Postgres)', () => {
   });
 
   test('rollover: a backlog of old-patch matches is skipped with one match request', async () => {
+    await goLive();
     const ids = oldIds(50);
     for (const id of ids) riot.matches.set(id, makeMatch(id, '15.21.700.1'));
     await enqueueMatchIds(db, 'EUW1', ids);
@@ -581,7 +603,128 @@ d('PlatformWorker (Postgres)', () => {
     await drainQueue(worker);
     const oldFetched = riot.calls.filter((c) => old.some((id) => c === `match:${id}`));
     expect(oldFetched.length).toBeLessThanOrEqual(7);
-    expect(await count(db, 'matches')).toBe(4);
+    // The first probe stores a 15.22 match: the patch turns live. 15.21 matches fetched before that
+    // one were still collected (the previous patch is kept until then), so they may be stored too.
+    const stored = await db<{ id: string }[]>`SELECT id FROM matches WHERE patch = '15.22'`;
+    expect(stored.map((r) => r.id).sort()).toEqual(kept);
+    const others = await db<{ status: string }[]>`
+      SELECT DISTINCT status FROM match_fetch_queue WHERE match_id NOT IN ${db(kept)}`;
+    for (const r of others) expect(['SKIPPED_OLD_PATCH', 'DONE']).toContain(r.status);
+    expect((await worker.progress()).latestPatchLive).toBe(true);
+  });
+
+  test('previous patch: still collected while the latest patch has no stored match on the platform', async () => {
+    riot.matches.set('EUW1_7000000100', makeMatch('EUW1_7000000100', '15.21.700.1'));
+    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000100']);
+    expect(await worker.processMatch(queued('EUW1_7000000100'))).toBe('added');
+    const [m] = await db`SELECT patch FROM matches WHERE id = 'EUW1_7000000100'`;
+    expect(m?.patch).toBe('15.21');
+    expect((await queueRow('EUW1_7000000100'))?.status).toBe('DONE');
+    expect((await worker.progress()).latestPatchLive).toBe(false);
+
+    // Listings are not cut either.
+    riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
+    await worker.refreshLadder();
+    riot.matchIds.set(ladderPuuid(0), ['EUW1_7000000090', 'EUW1_7000000080']);
+    expect(await worker.listPlayerMatches(ladderPuuid(0))).toBe(2);
+  });
+
+  test('previous patch: skipped once a match of the latest patch is stored', async () => {
+    riot.matches.set('EUW1_7000000100', makeMatch('EUW1_7000000100', '15.21.700.1'));
+    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000100']);
+    expect(await worker.processMatch(queued('EUW1_7000000100'))).toBe('added');
+    await goLive();
+    expect((await worker.progress()).latestPatchLive).toBe(true);
+
+    riot.matches.set('EUW1_7000000060', makeMatch('EUW1_7000000060', '15.21.700.1'));
+    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000060', 'EUW1_7000000050']);
+    expect(await worker.processMatch(queued('EUW1_7000000060'))).toBe('skipped');
+    expect(riot.calls).toEqual(['match:EUW1_7000000060']);
+    expect((await queueRow('EUW1_7000000050'))?.status).toBe('SKIPPED_OLD_PATCH');
+    riot.calls = [];
+    expect(await worker.processMatch(queued('EUW1_7000000050'))).toBe('skipped');
+    expect(riot.calls).toEqual([]);
+
+    // Listing stops at the first id known to be from a patch no longer collected.
+    riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
+    await worker.refreshLadder();
+    riot.matchIds.set(ladderPuuid(0), [
+      'EUW1_7000000300',
+      'EUW1_7000000200',
+      'EUW1_7000000055',
+      'EUW1_7000000040',
+    ]);
+    expect(await worker.listPlayerMatches(ladderPuuid(0))).toBe(2);
+  });
+
+  test('older than the previous patch: skipped even before the latest patch is live', async () => {
+    riot.matches.set('EUW1_7000000010', makeMatch('EUW1_7000000010', '15.20.700.1'));
+    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000010']);
+    expect(await worker.processMatch(queued('EUW1_7000000010'))).toBe('skipped');
+    expect(riot.calls).toEqual(['match:EUW1_7000000010']);
+    expect(await count(db, 'matches')).toBe(0);
+    expect((await worker.progress()).latestPatchLive).toBe(false);
+  });
+
+  test('restart: whether the latest patch is live is read from the stored matches', async () => {
+    const restarted = () =>
+      new PlatformWorker({
+        platform: 'EUW1',
+        db,
+        riot,
+        patches,
+        clock: fixedClock,
+        options: { idleMs: 10 },
+      });
+    riot.matches.set('EUW1_7000000100', makeMatch('EUW1_7000000100', '15.21.700.1'));
+    riot.matches.set('EUW1_7000000080', makeMatch('EUW1_7000000080', '15.21.700.1'));
+    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000100', 'EUW1_7000000080']);
+
+    // No latest-patch match stored yet: a fresh worker still collects the previous patch.
+    expect(await restarted().processMatch(queued('EUW1_7000000100'))).toBe('added');
+
+    // One is stored: a fresh worker knows the patch is live without seeing it itself.
+    await goLive();
+    const after = restarted();
+    expect(await after.processMatch(queued('EUW1_7000000080'))).toBe('skipped');
+    expect((await after.progress()).latestPatchLive).toBe(true);
+  });
+
+  test('liveness is per platform', async () => {
+    await db`
+      INSERT INTO matches (id, platform, patch, game_version, queue_id, started_at, duration_s,
+                           is_remake, is_early_surrender, winning_team)
+      VALUES ('KR_7000009000', 'KR', '15.22', '15.22.715.1234', 420, now(), 1800, false, false, 100)`;
+    riot.matches.set('EUW1_7000000100', makeMatch('EUW1_7000000100', '15.21.700.1'));
+    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000100']);
+    expect(await worker.processMatch(queued('EUW1_7000000100'))).toBe('added');
+    expect((await worker.progress()).latestPatchLive).toBe(false);
+  });
+
+  test('a new patch in Data Dragon: the former latest stays collected until the new one is live', async () => {
+    await goLive();
+    await upsertPatchStaticData(db, staticPatch('15.23'));
+    patches.latest = '15.23';
+    patches.previous = '15.22';
+    patches.generation++;
+    const ids = {
+      prev: 'EUW1_7000000100', // 15.21
+      former: 'EUW1_7000009100', // 15.22
+      newest: 'EUW1_7000010000', // 15.23
+      formerLate: 'EUW1_7000009200', // 15.22, below the first 15.23 one
+    };
+    riot.matches.set(ids.prev, makeMatch(ids.prev, '15.21.700.1'));
+    riot.matches.set(ids.former, makeMatch(ids.former, '15.22.715.1234'));
+    riot.matches.set(ids.newest, makeMatch(ids.newest, '15.23.100.1'));
+    riot.matches.set(ids.formerLate, makeMatch(ids.formerLate, '15.22.715.1234'));
+    await enqueueMatchIds(db, 'EUW1', Object.values(ids));
+
+    expect(await worker.processMatch(queued(ids.former))).toBe('added');
+    expect((await worker.progress()).latestPatchLive).toBe(false);
+    expect(await worker.processMatch(queued(ids.prev))).toBe('skipped');
+    expect(await worker.processMatch(queued(ids.newest))).toBe('added');
+    expect((await worker.progress()).latestPatchLive).toBe(true);
+    expect(await worker.processMatch(queued(ids.formerLate))).toBe('skipped');
   });
 
   test('patch newer than Data Dragon: deferred and a patch refresh is requested', async () => {
@@ -783,12 +926,23 @@ d('PlatformWorker (Postgres)', () => {
     riot.matchIds.set(ladderPuuid(1), ['EUW1_7000000502']);
     riot.matches.set('EUW1_7000000501', makeMatch('EUW1_7000000501', '15.21.1.1', ladderPuuid(0)));
     riot.matches.set('EUW1_7000000502', makeMatch('EUW1_7000000502', '15.22.1.1', ladderPuuid(0)));
+    // The latest patch is already live on EUW1 (a stored match without participants, so nothing
+    // is enqueued for enrichment): the 15.21 match is from a patch no longer collected.
+    await db`
+      INSERT INTO matches (id, platform, patch, game_version, queue_id, started_at, duration_s,
+                           is_remake, is_early_surrender, winning_team)
+      VALUES ('EUW1_7000009000', 'EUW1', '15.22', '15.22.715.1234', 420, now(), 1800, false, false, 100)`;
+    const listed = async () => {
+      const [row] = await db<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM matches WHERE id <> 'EUW1_7000009000'`;
+      return row?.n ?? -1;
+    };
 
     const ac = new AbortController();
     const running = worker.start(ac.signal);
     for (let i = 0; i < 200; i++) {
       const n = await count(db, 'player_enrichment_queue');
-      const m = await count(db, 'matches');
+      const m = await listed();
       const [p] =
         await db`SELECT count(*)::int AS n FROM match_fetch_queue WHERE status = 'PENDING'`;
       if (m === 1 && n === 0 && p?.n === 0) break;
@@ -798,7 +952,7 @@ d('PlatformWorker (Postgres)', () => {
     await running;
 
     // Only the latest patch is stored: the 15.21 match is skipped before its timeline.
-    const m = await count(db, 'matches');
+    const m = await listed();
     expect(m).toBe(1);
     expect(riot.calls).not.toContain('timeline:EUW1_7000000501');
     // Each match fetched once even though two players listed EUW1_7000000502.

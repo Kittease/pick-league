@@ -65,7 +65,9 @@ d('PatchTracker (Postgres)', () => {
     ddragon.versions.unshift({ patch: '15.23', ddragonVersion: '15.23.1' });
     await tracker.refresh();
     expect([tracker.latest, tracker.previous, tracker.generation]).toEqual(['15.23', '15.22', 2]);
-    expect(tracker.classify('15.22')).toBe('old');
+    expect(tracker.classify('15.22')).toBe('previous');
+    expect(tracker.classify('15.21')).toBe('old');
+    expect(tracker.classify('15.23')).toBe('keep');
     expect(await patchIds(db)).toEqual(['15.23', '15.22', '15.21']);
 
     await db.unsafe('DROP TRIGGER fail_delete ON patches');

@@ -38,6 +38,7 @@ import {
   markMatchSkipped,
   markWorkerAuthRejected,
   pickProbeMatch,
+  platformHasMatchOnPatch,
   playersNeedingDailyRefresh,
   playersWithListingRequested,
   type QueuedEnrichment,
@@ -134,10 +135,14 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   concurrency: { listing: 2, match: 3, daily: 1, enrichment: 2 },
 };
 
-/** What the worker needs to know about patches (only the latest is collected). */
+/**
+ * What the worker needs to know about patches (the latest is collected, the previous one until the
+ * latest is live on the platform).
+ */
 export interface PatchView {
   readonly ready: boolean;
   readonly generation: number;
+  readonly latest: string | null;
   classify(patch: string): PatchVerdict;
   requestRefresh(): void;
 }
@@ -170,6 +175,8 @@ export interface PlatformProgress {
   playedToList: number;
   pendingMatches: number;
   enrichmentQueue: number;
+  /** Whether this platform has stored a match of the latest patch. */
+  latestPatchLive: boolean;
   matchesAdded: number;
   playersPolled: number;
   matchesSkipped: number;
@@ -246,7 +253,7 @@ export class PlatformWorker {
   /** Players whose listing started while `loadPendingListings` was querying (null otherwise). */
   private listingsStartedDuringLoad: Set<string> | null = null;
   /**
-   * Highest game id seen with a patch older than the latest: older ids are skipped unfetched, and
+   * Highest game id seen with a patch that is no longer collected: older ids are skipped unfetched, and
    * listings stop there (the first previous-patch match bounds every history).
    */
   private oldPatchMaxGameId = 0;
@@ -254,10 +261,19 @@ export class PlatformWorker {
   private oldPatchCutoffMs = 0;
   /** Lowest game id seen with a patch newer than Data Dragon: newer ids wait for the patch. */
   private tooNewMinGameId: number | null = null;
-  /** Lowest game id seen with the latest patch (or newer): newer ids are not from an old patch. */
+  /** Lowest game id seen with a patch that is still collected: newer ids are not from an old patch. */
   private keepMinGameId: number | null = null;
   /** Patch generation the bounds above belong to. */
   private generation = -1;
+  /**
+   * Whether this platform has stored a match of the latest patch (read from `matches` at each
+   * patch generation, then set by the first one stored). Until then the patch is not live here
+   * (Data Dragon publishes a patch about a day before the servers play it) and the previous
+   * patch is still collected.
+   */
+  private latestLive = false;
+  /** The read of `latestLive` for the current generation. */
+  private liveness: Promise<void> = Promise.resolve();
   /**
    * After a patch change (and at startup), the backlog may hold a lot of matches of the patch that
    * just became old. Before claiming in FIFO order, single matches are fetched by game id: the
@@ -565,7 +581,7 @@ export class PlatformWorker {
   private async fetchMatch(queued: QueuedMatch, signal?: AbortSignal): Promise<MatchOutcome> {
     const { matchId } = queued;
     const gameId = gameIdOf(matchId);
-    this.syncGeneration();
+    await this.syncGeneration();
     if (this.isKnownOldPatch(gameId)) {
       if (await markMatchSkipped(this.db, matchId)) this.counters.matchesSkipped++;
       return 'skipped';
@@ -590,7 +606,8 @@ export class PlatformWorker {
     }
 
     const verdict = this.patches.classify(patch);
-    if (verdict === 'old') {
+    const generation = this.generation;
+    if (verdict === 'old' || (verdict === 'previous' && !this.collectsPrevious())) {
       if (await markMatchSkipped(this.db, matchId)) this.counters.matchesSkipped++;
       if (gameId !== null && gameId > this.oldPatchMaxGameId) {
         this.oldPatchMaxGameId = gameId;
@@ -624,6 +641,9 @@ export class PlatformWorker {
       throw err;
     }
     const result = await insertParsedMatch(this.db, parsed);
+    if (verdict === 'keep' && generation === this.patches.generation) {
+      this.latestStored(matchId, gameId);
+    }
     if (!result.inserted) return 'exists';
     this.counters.matchesAdded++;
     if (this.run) this.run.matches++;
@@ -636,14 +656,54 @@ export class PlatformWorker {
     return 'added';
   }
 
-  /** New patch generation: the too-new / kept bounds are reset and a probe starts. */
-  private syncGeneration(): void {
-    if (this.generation === this.patches.generation) return;
-    this.generation = this.patches.generation;
-    this.tooNewMinGameId = null;
-    this.keepMinGameId = null;
+  /**
+   * New patch generation: the too-new / kept bounds are reset, a probe starts, and whether the
+   * latest patch is live on this platform is read again.
+   */
+  private syncGeneration(): Promise<void> {
+    if (this.generation !== this.patches.generation) {
+      const generation = this.patches.generation;
+      this.generation = generation;
+      this.tooNewMinGameId = null;
+      this.keepMinGameId = null;
+      this.probe = { active: true, first: true, inFlight: this.probe.inFlight };
+      this.probed.clear();
+      // Not known yet: the previous patch stays collected meanwhile.
+      this.latestLive = false;
+      this.liveness = this.readLatestLive(generation).catch((err) => {
+        // Read again at the next call.
+        if (this.generation === generation) this.generation = -1;
+        throw err;
+      });
+    }
+    return this.liveness;
+  }
+
+  private async readLatestLive(generation: number): Promise<void> {
+    const latest = this.patches.latest;
+    if (latest === null) return;
+    const live = await platformHasMatchOnPatch(this.db, this.platform, latest);
+    // Never undo a flip that happened while reading, nor write into a newer generation.
+    if (live && this.generation === generation) this.latestLive = true;
+  }
+
+  /** The previous patch is collected until the latest one is live on this platform. */
+  private collectsPrevious(): boolean {
+    return !this.latestLive;
+  }
+
+  /**
+   * A match of the latest patch is stored: the patch is live on this platform and the previous
+   * one is old from now on. Ids kept so far may be from the previous patch, so the search for
+   * where the latest patch starts begins again below this match.
+   */
+  private latestStored(matchId: string, gameId: number | null): void {
+    if (this.latestLive) return;
+    this.latestLive = true;
+    this.keepMinGameId = gameId;
     this.probe = { active: true, first: true, inFlight: this.probe.inFlight };
     this.probed.clear();
+    this.log.info('latest patch is live', { matchId });
   }
 
   /**
@@ -652,7 +712,7 @@ export class PlatformWorker {
    */
   private async nextProbe(exclude: ReadonlySet<string>): Promise<QueuedMatch | null | undefined> {
     if (!this.patches.ready) return undefined;
-    this.syncGeneration();
+    await this.syncGeneration();
     if (!this.probe.active) return undefined;
     if (this.probe.inFlight !== null) return null;
     const m = await pickProbeMatch(this.db, this.platform, {
@@ -868,6 +928,7 @@ export class PlatformWorker {
       playedToList: new Set([...this.played, ...this.listingInFlight]).size,
       pendingMatches: await countPendingMatches(this.db, this.platform),
       enrichmentQueue: await countEnrichmentQueue(this.db, this.platform),
+      latestPatchLive: this.latestLive,
       ...this.counters,
     };
   }

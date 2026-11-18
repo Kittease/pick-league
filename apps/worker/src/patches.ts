@@ -15,10 +15,11 @@ import { type Clock, isAbortError, systemClock } from './clock.ts';
 import { errorMessage, type Logger, silentLogger } from './log.ts';
 
 /**
- * Where a match's patch stands for collection: only the latest patch is fetched. The previous one
- * stays in the database (fetched while it was the latest) but is no longer collected.
+ * Where a match's patch stands for collection: the latest patch is collected; the previous one is
+ * collected on a platform until that platform has stored a match of the latest (the platform
+ * worker decides); older ones never.
  */
-export type PatchVerdict = 'keep' | 'old' | 'too_new';
+export type PatchVerdict = 'keep' | 'previous' | 'old' | 'too_new';
 
 export const KEPT_PATCHES = 2;
 
@@ -63,7 +64,11 @@ export class PatchTracker {
   classify(patch: PatchId): PatchVerdict {
     if (this.latest === null) return 'too_new';
     const c = comparePatches(patch, this.latest);
-    return c > 0 ? 'too_new' : c < 0 ? 'old' : 'keep';
+    if (c > 0) return 'too_new';
+    if (c === 0) return 'keep';
+    return this.previous !== null && comparePatches(patch, this.previous) === 0
+      ? 'previous'
+      : 'old';
   }
 
   /**
