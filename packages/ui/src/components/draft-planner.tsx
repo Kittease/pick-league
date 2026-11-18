@@ -5,6 +5,7 @@ import {
   type PickCandidate,
   POSITIONS,
   type Position,
+  type TeamGameLength,
   type TierListEntry,
 } from '@pick-league/shared';
 import { BuildView } from '@pick-league/ui/components/build-view';
@@ -12,6 +13,8 @@ import { ConfidencePips } from '@pick-league/ui/components/confidence-pips';
 import { usePickLeagueData } from '@pick-league/ui/components/data-provider';
 import {
   DamageSplit,
+  GameLengthLine,
+  GameLengthTakeaway,
   type OutlookSide,
   WinProbability,
 } from '@pick-league/ui/components/draft-outlook';
@@ -287,6 +290,7 @@ function TeamColumn({
   buildOf,
   lookup,
   damage,
+  gameLength,
   onChooseRole,
   onShowBuild,
   onSwap,
@@ -300,6 +304,8 @@ function TeamColumn({
   lookup: StaticLookup | null;
   /** The team's damage split (from the draft evaluation). */
   damage: Parameters<typeof DamageSplit>[0]['damage'];
+  /** The team's early / late lean (from the draft evaluation). */
+  gameLength: TeamGameLength | undefined;
   onChooseRole: (role: Position) => void;
   onShowBuild: (slot: Slot) => void;
   onSwap: (from: Position, to: Position) => void;
@@ -408,7 +414,10 @@ function TeamColumn({
           );
         })}
       </ul>
-      <DamageSplit damage={damage} lookup={lookup} className="mt-auto px-3" />
+      <div className="mt-auto flex flex-col gap-2 px-3">
+        <DamageSplit damage={damage} lookup={lookup} />
+        <GameLengthLine profile={gameLength} />
+      </div>
     </aside>
   );
 }
@@ -875,6 +884,13 @@ export function DraftPlanner({
           enemies={OUTLOOK.red}
           onRetry={retryEvaluation}
         />
+        <GameLengthTakeaway
+          gameLength={evaluated?.gameLength}
+          allies={OUTLOOK.blue}
+          enemies={OUTLOOK.red}
+          own={false}
+          className="mt-1"
+        />
       </div>
 
       <div className="flex min-h-0 flex-1 max-md:grid max-md:grid-cols-2 max-md:content-start max-md:overflow-y-auto">
@@ -886,6 +902,7 @@ export function DraftPlanner({
           buildOf={shownBuild}
           lookup={lookup}
           damage={evaluated?.damage.allies}
+          gameLength={evaluated?.gameLength?.allies}
           onChooseRole={(r) => chooseRole('blue', r)}
           onShowBuild={showBuild}
           onSwap={(from, to) => swap('blue', from, to)}
@@ -1052,6 +1069,7 @@ export function DraftPlanner({
           buildOf={shownBuild}
           lookup={lookup}
           damage={evaluated?.damage.enemies}
+          gameLength={evaluated?.gameLength?.enemies}
           onChooseRole={(r) => chooseRole('red', r)}
           onShowBuild={showBuild}
           onSwap={(from, to) => swap('red', from, to)}

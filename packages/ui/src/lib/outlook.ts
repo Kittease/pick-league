@@ -1,4 +1,10 @@
-import type { TeamDamage } from '@pick-league/shared';
+import {
+  type DraftEvaluationResponse,
+  GAME_LENGTH_MINUTES,
+  type TeamDamage,
+  type TeamGameLength,
+} from '@pick-league/shared';
+import { deltaPoints } from './format';
 
 export interface DamageShares {
   physical: number;
@@ -42,4 +48,75 @@ export function roundedShares(s: DamageShares): { physical: number; magic: numbe
 export function damageLabel(s: DamageShares): string {
   const r = roundedShares(s);
   return `AD ${r.physical}% · AP ${r.magic}% · true ${r.true}%`;
+}
+
+/** A team's early or late sum worth naming (1.5 points). */
+export const GAME_LENGTH_NOTABLE = 0.015;
+/** Gap between the teams' late-minus-early leans that makes a takeaway (4 points). */
+export const GAME_LENGTH_CLEAR = 0.04;
+
+export type DraftGameLength = NonNullable<DraftEvaluationResponse['gameLength']>;
+
+const pointsPct = (x: number) => `${deltaPoints(x)}%`;
+
+/** "Stronger early (+2.4%) — falls off late (-1.8%)", "No clear early or late lean", or "—". */
+export function teamGameLengthText(t: TeamGameLength | null | undefined): string {
+  if (!t || t.champions === 0) return '—';
+  const early =
+    t.early >= GAME_LENGTH_NOTABLE
+      ? `Stronger early (${pointsPct(t.early)})`
+      : t.early <= -GAME_LENGTH_NOTABLE
+        ? `Weaker early (${pointsPct(t.early)})`
+        : null;
+  const late =
+    t.late >= GAME_LENGTH_NOTABLE
+      ? `scales late (${pointsPct(t.late)})`
+      : t.late <= -GAME_LENGTH_NOTABLE
+        ? `falls off late (${pointsPct(t.late)})`
+        : null;
+  if (!early && !late) return 'No clear early or late lean';
+  return `${early ?? 'Even early'} — ${late ?? 'even late'}`;
+}
+
+/** Tooltip of a team's game-length line. */
+export function gameLengthTitle(t: TeamGameLength | null | undefined): string {
+  const n = t?.champions ?? 0;
+  return (
+    "Sum of this team's champions: how much better or worse each does in games under " +
+    `${GAME_LENGTH_MINUTES.earlyUnder} min and of ${GAME_LENGTH_MINUTES.lateFrom} min or more ` +
+    `than usual, compared with its role (${n} ${n === 1 ? 'champion' : 'champions'} with enough ` +
+    'games). Not part of the win chance.'
+  );
+}
+
+/**
+ * Which team gains from a long game: the allies' late-minus-early lean against the enemies'.
+ * Even until both teams have a champion with a profile.
+ */
+export function gameLengthVerdict(g: DraftGameLength): 'allies_scale' | 'enemies_scale' | 'even' {
+  if (g.allies.champions < 1 || g.enemies.champions < 1) return 'even';
+  const swing = g.allies.late - g.enemies.late - (g.allies.early - g.enemies.early);
+  if (swing >= GAME_LENGTH_CLEAR) return 'allies_scale';
+  if (swing <= -GAME_LENGTH_CLEAR) return 'enemies_scale';
+  return 'even';
+}
+
+/**
+ * One-line takeaway, null when neither team clearly outscales. `own`: the allies are the user's
+ * team (champion select); otherwise both sides are named by their labels (draft planner).
+ */
+export function gameLengthTakeaway(
+  g: DraftGameLength | null | undefined,
+  allies: string,
+  enemies: string,
+  own: boolean,
+): string | null {
+  if (!g) return null;
+  const verdict = gameLengthVerdict(g);
+  if (verdict === 'even') return null;
+  if (own)
+    return verdict === 'allies_scale' ? 'You outscale: play for late' : 'They outscale: end early';
+  return verdict === 'allies_scale'
+    ? `${allies} outscales: ${enemies} wants a short game`
+    : `${enemies} outscales: ${allies} wants a short game`;
 }

@@ -1,6 +1,11 @@
 'use client';
 
-import type { DraftEvaluationResponse, Reason, TeamDamage } from '@pick-league/shared';
+import type {
+  DraftEvaluationResponse,
+  Reason,
+  TeamDamage,
+  TeamGameLength,
+} from '@pick-league/shared';
 import { ReasonList } from '@pick-league/ui/components/reasons';
 import {
   HoverCard,
@@ -8,7 +13,15 @@ import {
   HoverCardTrigger,
 } from '@pick-league/ui/components/ui/hover-card';
 import { compact, patchesText } from '@pick-league/ui/lib/format';
-import { damageLabel, damageShares, roundedShares } from '@pick-league/ui/lib/outlook';
+import {
+  damageLabel,
+  damageShares,
+  gameLengthTakeaway,
+  gameLengthTitle,
+  gameLengthVerdict,
+  roundedShares,
+  teamGameLengthText,
+} from '@pick-league/ui/lib/outlook';
 import type { StaticLookup } from '@pick-league/ui/lib/static-lookup';
 import type { Loadable } from '@pick-league/ui/lib/types';
 import { cn } from '@pick-league/ui/lib/utils';
@@ -193,5 +206,55 @@ export function DamageSplit({
         </span>
       )}
     </div>
+  );
+}
+
+/**
+ * A team's early / late lean: the sum of its champions' win-rate deltas in short and long games.
+ * Explains the draft and is not part of the win chance.
+ */
+export function GameLengthLine({
+  profile,
+  className,
+}: {
+  profile: TeamGameLength | null | undefined;
+  className?: string;
+}) {
+  const text = teamGameLengthText(profile);
+  const muted = !profile || profile.champions === 0 || text === 'No clear early or late lean';
+  return (
+    <div className={cn('flex flex-col gap-0.5', className)} title={gameLengthTitle(profile)}>
+      <span className="text-[10px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+        Game length
+      </span>
+      <span className={cn('text-[10px]', muted && 'text-muted-foreground')}>{text}</span>
+    </div>
+  );
+}
+
+/** Which side wants a long game, coloured like that side; nothing when neither clearly does. */
+export function GameLengthTakeaway({
+  gameLength,
+  allies,
+  enemies,
+  own,
+  className,
+}: {
+  gameLength: DraftEvaluationResponse['gameLength'] | null | undefined;
+  allies: OutlookSide;
+  enemies: OutlookSide;
+  own: boolean;
+  className?: string;
+}) {
+  const text = gameLengthTakeaway(gameLength, allies.label, enemies.label, own);
+  if (!text || !gameLength) return null;
+  const side = gameLengthVerdict(gameLength) === 'allies_scale' ? allies : enemies;
+  return (
+    <p
+      className={cn('text-[11px]', side.text, className)}
+      title="Compares how much each team gains from long games over short ones (its champions' win rates in games of each length). Not part of the win chance."
+    >
+      {text}
+    </p>
   );
 }

@@ -1,5 +1,7 @@
 import {
   DamageSplit,
+  GameLengthLine,
+  GameLengthTakeaway,
   type OutlookSide,
   WinProbability,
 } from '@pick-league/ui/components/draft-outlook';
@@ -134,6 +136,13 @@ export function ChampSelectBoard({
         onRetry={retry}
         className="px-1"
       />
+      <GameLengthTakeaway
+        gameLength={evaluated?.gameLength}
+        allies={ALLIES}
+        enemies={ENEMIES}
+        own
+        className="-mt-2 px-1"
+      />
 
       <section>
         <h3 className="mb-1 px-1 text-[10px] font-semibold tracking-[0.18em] text-up uppercase">
@@ -157,6 +166,7 @@ export function ChampSelectBoard({
           ))}
         </ul>
         <DamageSplit damage={evaluated?.damage.allies} lookup={lookup} className="mt-1.5 px-2.5" />
+        <GameLengthLine profile={evaluated?.gameLength?.allies} className="mt-1.5 px-2.5" />
       </section>
 
       <section>
@@ -169,6 +179,7 @@ export function ChampSelectBoard({
           ))}
         </ul>
         <DamageSplit damage={evaluated?.damage.enemies} lookup={lookup} className="mt-1.5 px-2.5" />
+        <GameLengthLine profile={evaluated?.gameLength?.enemies} className="mt-1.5 px-2.5" />
       </section>
 
       <section className="flex flex-col gap-2 px-1">

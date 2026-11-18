@@ -1,10 +1,12 @@
 'use client';
 
-import type {
-  Position,
-  TierListChampionResponse,
-  TierListFilters,
-  TierListRelation,
+import {
+  GAME_LENGTH_MINUTES,
+  type GameLengthProfile,
+  type Position,
+  type TierListChampionResponse,
+  type TierListFilters,
+  type TierListRelation,
 } from '@pick-league/shared';
 import { usePickLeagueData } from '@pick-league/ui/components/data-provider';
 import { ChampionIcon } from '@pick-league/ui/components/game-icon';
@@ -325,6 +327,53 @@ function SectionSkeleton() {
   );
 }
 
+const { earlyUnder, lateFrom } = GAME_LENGTH_MINUTES;
+
+/**
+ * Early / late game of the champion in its role: its win rate in short and long games vs its
+ * overall win rate, compared with the other champions of the role. Explains, never scores.
+ */
+function GameLengthStats({ profile }: { profile: GameLengthProfile }) {
+  const items = [
+    {
+      label: 'Early game',
+      delta: profile.early,
+      sub: `under ${earlyUnder} min · ${compact(profile.earlyGames)} games`,
+    },
+    {
+      label: 'Late game',
+      delta: profile.late,
+      sub: `${lateFrom} min or more · ${compact(profile.lateGames)} games`,
+    },
+  ];
+  return (
+    <div
+      className="flex flex-wrap gap-x-6 gap-y-2"
+      title={`Win rate in games under ${earlyUnder} min / of ${lateFrom} min or more vs its overall win rate, compared with what the other champions of the role do in those games, shrunk by sample size.`}
+    >
+      {items.map((it) => (
+        <div key={it.label} className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
+            {it.label}
+          </span>
+          <span className="num text-sm">
+            {it.delta === null ? (
+              <span className="text-muted-foreground">—</span>
+            ) : (
+              <>
+                <DeltaText delta={it.delta} />%
+              </>
+            )}
+          </span>
+          <span className="text-[10px] text-muted-foreground">
+            {it.delta === null ? 'too few games' : it.sub}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /**
  * Lane matchups, duo partners and other allies of a tier list champion, fetched when it is
  * selected. Every row: shrunk win-rate delta, raw win rate and sample size.
@@ -374,6 +423,7 @@ export function ChampionRelations({
     // Keyed by champion: switching champion resets "Show all". A container: the best / worst
     // columns follow the width the panel gives them.
     <div key={`${role}-${championId}`} className="@container flex flex-col gap-5">
+      {d.gameLength && <GameLengthStats profile={d.gameLength} />}
       <p className="text-[11px] leading-snug text-muted-foreground">
         Deltas are points vs its own <span className="num">{percent(d.winRate)}</span> win rate,
         shrunk by sample size. Columns: delta, win rate, matchups.
