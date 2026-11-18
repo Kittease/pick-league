@@ -169,6 +169,17 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
         'CHALLENGER', 'GRANDMASTER', 'GRANDMASTER', 'GRANDMASTER', 'MASTER', 'MASTER', 'MASTER',
         'MASTER', 'DIAMOND', NULL
       ])[1 + abs(hashtext(puuid)) % 10]::solo_tier`;
+    // Mastery of the champion each synthetic player played: seven levels spread by a hash; the
+    // planted effect is that Leona's losers are beginners. Braum's players have no mastery row.
+    await db`
+      INSERT INTO champion_masteries (puuid, champion_id, level, points, last_played_at)
+      SELECT p.puuid, p.champion_id, 5,
+             CASE WHEN p.champion_id = 89 AND NOT p.win THEN 1000
+                  ELSE (ARRAY[2000, 12000, 30000, 70000, 150000, 300000, 900000])
+                         [1 + abs(hashtext(p.puuid)) % 7] END,
+             now()
+      FROM participants p
+      WHERE p.champion_id <> 201`;
     await refreshStats(db, { force: true });
     cache = new TtlCache(60_000);
     app = createApp({ db, cache, limiter: null, log: silentLogger });
@@ -1009,6 +1020,82 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     const support = expectedGameLength('UTILITY').get(allies[0]?.championId as number);
     const bottom = expectedGameLength('BOTTOM').get(222);
     expect(g?.allies.early as number).toBeCloseTo((support?.early ?? 0) + (bottom?.early ?? 0), 4);
+  });
+
+  test("mastery view: games by the player's mastery of the champion", async () => {
+    const rows = await repo.loadMasteryRows(db, [CUR]);
+    const leona = rows.filter((r) => r.championId === 89 && r.position === 'UTILITY');
+    const [expected] = await db<{ games: number; wins: number }[]>`
+      SELECT count(*)::int AS games, count(*) FILTER (WHERE p.win)::int AS wins
+      FROM participants p
+      JOIN matches m ON m.id = p.match_id
+      JOIN champion_masteries cm ON cm.puuid = p.puuid AND cm.champion_id = p.champion_id
+      WHERE m.patch = ${CUR} AND NOT m.is_remake AND p.champion_id = 89
+        AND p.position = 'UTILITY' AND cm.points < 5000`;
+    const bucket0 = leona.find((r) => r.bucket === 0);
+    expect(expected?.games).toBeGreaterThan(0);
+    expect(bucket0).toMatchObject({ games: expected?.games, wins: expected?.wins });
+    // Every Leona player has a mastery row: her buckets add up to her games.
+    const roleStats = await repo.loadRoleStats(db, [CUR]);
+    const leonaGames = roleStats.find(
+      (r) => r.championId === 89 && r.position === 'UTILITY',
+    )?.games;
+    expect(leona.reduce((s, r) => s + r.games, 0)).toBe(leonaGames ?? -1);
+    // Braum's players have no mastery row: left out.
+    const all = await repo.loadMasteryRows(db, [CUR, PREV]);
+    expect(all.some((r) => r.championId === PLANTED.rareOnCurrent)).toBe(false);
+    for (const r of all) {
+      expect(r.bucket).toBeGreaterThanOrEqual(0);
+      expect(r.bucket).toBeLessThanOrEqual(6);
+      expect(r.wins).toBeLessThanOrEqual(r.games);
+    }
+  });
+
+  test("picks: the player's mastery moves the ranking, with a reason", async () => {
+    const body = { role: 'UTILITY', enemies: [], bans: [], limit: 100 };
+    const pick = async (extra: object) =>
+      (await (await post('/recommendations/picks', { ...body, ...extra })).json()) as PicksResponse;
+    const masteryOf = (r: PicksResponse, id: number) =>
+      r.candidates.find((c) => c.championId === id)?.reasons.filter((x) => x.kind === 'mastery');
+
+    const without = await pick({});
+    expect(without.candidates.some((c) => c.reasons.some((r) => r.kind === 'mastery'))).toBe(false);
+
+    const sizeBefore = cache.size;
+    const low = await pick({ masteries: [{ championId: 89, points: 1000 }] });
+    const high = await pick({ masteries: [{ championId: 89, points: 900_000 }] });
+    expect(cache.size).toBe(sizeBefore + 2);
+
+    const lowReasons = masteryOf(low, 89) ?? [];
+    const highReasons = masteryOf(high, 89) ?? [];
+    expect(lowReasons).toHaveLength(1);
+    expect(highReasons).toHaveLength(1);
+    const lowDelta = lowReasons[0]?.delta ?? Number.NaN;
+    const highDelta = highReasons[0]?.delta ?? Number.NaN;
+    expect(lowDelta).toBeLessThan(0);
+    expect(highDelta - lowDelta).toBeGreaterThan(0.02);
+    // Leona support has well over 100 games under 5k points on the seed: her own sample.
+    expect(lowReasons[0]?.games).toBeGreaterThanOrEqual(ENGINE_CONFIG.mastery.minChampionGames);
+    expect(lowReasons[0]?.label).toMatch(
+      /^−\d+\.\d% at your mastery \(1k points\): Leona players with under 5k points vs Leona's average \([\d,]+ games\)$/,
+    );
+
+    // Braum has no mastery rows of his own: the curve of every champion.
+    const braum = masteryOf(low, PLANTED.rareOnCurrent);
+    expect(braum).toHaveLength(1);
+    expect(braum?.[0]?.label).toMatch(
+      /^[+−]?\d+\.\d% at your mastery \(no points yet\): players with under 5k points on their champion vs its average \(all champions, [\d,]+ games\)$/,
+    );
+
+    // The mastery term is added to the score as is.
+    for (const answer of [low, high]) {
+      for (const c of answer.candidates) {
+        const before = without.candidates.find((x) => x.championId === c.championId);
+        if (!before) continue;
+        const delta = c.reasons.find((r) => r.kind === 'mastery')?.delta ?? Number.NaN;
+        expect(c.score - before.score).toBeCloseTo(delta, 3);
+      }
+    }
   });
 
   test('stats refresh is skipped when matches did not change', async () => {
