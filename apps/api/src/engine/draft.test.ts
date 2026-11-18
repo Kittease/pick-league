@@ -282,3 +282,118 @@ describe('evaluateDraft', () => {
     });
   });
 });
+
+describe('evaluateDraft with a previous patch', () => {
+  const PREV = '15.21';
+  const CAP = ENGINE_CONFIG.previousPatchPrior.strength;
+
+  test("a champion's strength blends its patches, the previous one capped", () => {
+    // Thresh: 100 games at 55 % on 15.22, 5,000 at 55 % on 15.21 (counting for 1,200).
+    const roleStats = [
+      role(CUR, 412, 'UTILITY', 100, 55),
+      role(PREV, 412, 'UTILITY', 5000, 2750),
+      role(CUR, 111, 'UTILITY', 2000, 1000),
+      role(PREV, 111, 'UTILITY', 5000, 2500),
+      role(CUR, 89, 'UTILITY', 2000, 900),
+    ];
+    const r = evaluateDraft(
+      req({ allies: [{ championId: 412, role: 'UTILITY' }] }),
+      data({ previousPatch: PREV, roleStats }),
+    );
+    const roleCur = (55 + 1000 + 900) / 4100;
+    const rolePrev = (2750 + 2500) / 10_000;
+    const games = 100 + CAP;
+    const delta = (100 * (0.55 - roleCur) + CAP * (0.55 - rolePrev)) / games;
+    const strength = (delta * games) / (games + K.base);
+    expect(r.winProbability).toBeCloseTo(0.5 + D.baseWeight * strength, 4);
+    expect(r.reasons[0]).toMatchObject({ kind: 'base', games: 1300, championIds: [412] });
+    expect(r.reasons[0]?.label).toMatch(/Thresh: 55\.0% win rate as support \(1,300 games\)$/);
+    expect(r.patchesUsed).toEqual([CUR, PREV]);
+  });
+
+  test('a champion buffed on the new patch does not shift its matchup', () => {
+    // Nautilus: 50 % on 15.21, 56 % on 15.22. Vs Lulu it does as usual on each patch (as Thresh
+    // does), and Lulu does vs Nautilus what supports usually do vs him on each patch.
+    const roleStats = [
+      role(CUR, 111, 'UTILITY', 3000, 1680),
+      role(PREV, 111, 'UTILITY', 3000, 1500),
+      role(CUR, 117, 'UTILITY', 3000, 1500),
+      role(PREV, 117, 'UTILITY', 3000, 1500),
+      role(CUR, 412, 'UTILITY', 3000, 1500),
+      role(PREV, 412, 'UTILITY', 3000, 1500),
+    ];
+    const rows = [
+      vs(CUR, 111, 117, 'UTILITY', 50, 28),
+      vs(PREV, 111, 117, 'UTILITY', 1000, 500),
+      vs(CUR, 117, 111, 'UTILITY', 50, 22),
+      vs(PREV, 117, 111, 'UTILITY', 1000, 500),
+      vs(CUR, 412, 117, 'UTILITY', 1000, 500),
+      vs(PREV, 412, 117, 'UTILITY', 1000, 500),
+      vs(CUR, 412, 111, 'UTILITY', 1000, 440),
+      vs(PREV, 412, 111, 'UTILITY', 1000, 500),
+    ];
+    const body = req({
+      allies: [{ championId: 111, role: 'UTILITY' }],
+      enemies: [{ championId: 117, role: 'UTILITY' }],
+    });
+    const r = evaluateDraft(body, data({ previousPatch: PREV, roleStats, vs: rows }));
+    const only = evaluateDraft(body, data({ previousPatch: PREV, roleStats, vs: [] }));
+    // The pair adds nothing beyond Nautilus' own strength (the reason may be under the display
+    // floor, so compare the probabilities).
+    expect(Math.abs(r.winProbability - only.winProbability)).toBeLessThan(0.002);
+    expect(r.winProbability).toBeCloseTo(only.winProbability, 6);
+    // The pair is read from both patches: a real edge on 15.21 shows, on 1,050 games.
+    const edge = evaluateDraft(
+      body,
+      data({
+        previousPatch: PREV,
+        roleStats,
+        vs: rows.map((x) =>
+          x.patch === PREV && x.championId === 111 && x.enemyId === 117 ? { ...x, wins: 550 } : x,
+        ),
+      }),
+    );
+    expect(edge.reasons.find((x) => x.kind === 'matchup')).toMatchObject({ games: 1050 });
+    expect(edge.winProbability).toBeGreaterThan(only.winProbability + 0.005);
+    // Summed first, Nautilus vs Lulu would read 528 / 1,050 vs 3,180 / 6,000: ≈ −2.7 points.
+    expect(528 / 1050 - 3180 / 6000).toBeLessThan(-0.025);
+  });
+
+  test('patchesUsed lists the previous patch only when a drafted champion leans on it', () => {
+    const roleStats = [
+      role(CUR, 111, 'UTILITY', 20_000, 10_000),
+      role(PREV, 111, 'UTILITY', 1300, 650),
+      role(CUR, 117, 'UTILITY', 100, 50),
+      role(PREV, 117, 'UTILITY', 900, 450),
+    ];
+    const ally = { championId: 111, role: 'UTILITY' };
+    expect(
+      evaluateDraft(req({ allies: [ally] }), data({ previousPatch: PREV, roleStats })).patchesUsed,
+    ).toEqual([CUR]);
+    expect(
+      evaluateDraft(
+        req({ allies: [ally], enemies: [{ championId: 117, role: 'UTILITY' }] }),
+        data({ previousPatch: PREV, roleStats }),
+      ).patchesUsed,
+    ).toEqual([CUR, PREV]);
+  });
+
+  test('the side edge sums both patches and names them', () => {
+    const r = evaluateDraft(
+      req({ side: 'blue' }),
+      data({
+        previousPatch: PREV,
+        sides: [
+          { patch: CUR, side: 'blue', games: 1000, wins: 480 },
+          { patch: PREV, side: 'blue', games: 3000, wins: 1500 },
+          { patch: CUR, side: 'red', games: 1000, wins: 520 },
+        ],
+      }),
+    );
+    expect(r.winProbability).toBeCloseTo(1980 / 4000, 6);
+    expect(r.reasons[0]).toMatchObject({ kind: 'side', games: 4000 });
+    expect(r.reasons[0]?.label).toBe(
+      '−0.5% Blue side: wins 49.5% of matches on 15.22 + 15.21 (4,000 games)',
+    );
+  });
+});

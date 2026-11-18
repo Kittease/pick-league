@@ -24,16 +24,21 @@ import type {
 import { DUO_ROLES, ENGINE_CONFIG, LANE_ROLES, ROLE_LABELS } from './config.ts';
 import { indexGameLength, teamGameLength } from './game-length.ts';
 import {
-  choosePatches,
+  blendPatches,
   formatDelta,
   formatGames,
   formatRate,
+  type PatchPair,
+  type PatchSample,
+  patchesLabel,
   round,
+  shownGames,
   shrink,
   sumStats,
   winRate,
 } from './math.ts';
 import { assignRoles, type RoleGuess, rolePlayRates } from './roles.ts';
+import { championBaseline, rowsByPatchAndChampion } from './tierlist.ts';
 import type {
   ChampionTraitRow,
   GameLengthRow,
@@ -72,6 +77,7 @@ export interface DraftData {
 
 const D = ENGINE_CONFIG.draft;
 const K = ENGINE_CONFIG.picks.shrinkK;
+const PRIOR = ENGINE_CONFIG.previousPatchPrior;
 
 export interface DraftRoles {
   allies: RoleGuess[];
@@ -110,8 +116,14 @@ export function draftPairs(roles: DraftRoles): { vs: PairKey[]; with: PairKey[] 
 }
 
 interface Drafted extends RoleGuess {
+  /** `patchesUsed` of the champion+role. */
   patches: PatchId[];
-  base: GamesWins;
+  /** Effective games of the champion+role (previous patch as a capped prior), not rounded. */
+  games: number;
+  /** Blended win rate (for the label). */
+  winRate: number;
+  /** Win rate minus the role average, per patch then blended (not shrunk). */
+  delta: number;
   /** Role probability factor, as in the picks engine. */
   factor: number;
 }
@@ -124,26 +136,35 @@ export function evaluateDraft(
   const names = data.names;
   const roleRow = new Map<string, RoleStatRow>();
   for (const r of data.roleStats) roleRow.set(`${r.patch}|${r.championId}|${r.position}`, r);
-  const baselineOn = (championId: number, role: Position, patches: readonly PatchId[]) =>
-    sumStats(patches.flatMap((p) => roleRow.get(`${p}|${championId}|${role}`) ?? []));
+  const baselineOn = (championId: number, role: Position, patch: PatchId) =>
+    roleRow.get(`${patch}|${championId}|${role}`);
   const roleAverage = memo((key) => {
-    const [role, scope = ''] = key.split('|');
-    const patches = scope.split('+');
+    const [role, patch] = key.split('|');
     return winRate(
-      sumStats(data.roleStats.filter((r) => r.position === role && patches.includes(r.patch))),
+      sumStats(data.roleStats.filter((r) => r.position === role && r.patch === patch)),
     );
   });
+  const patchPair: PatchPair = { current: data.currentPatch, previous: data.previousPatch };
+  const inRole = new Map<Position, ReturnType<typeof rowsByPatchAndChampion>>();
+  const rowsOfRole = (role: Position) => {
+    const rows = inRole.get(role) ?? rowsByPatchAndChampion(data.roleStats, role);
+    inRole.set(role, rows);
+    return rows;
+  };
 
   const drafted = (g: RoleGuess): Drafted => {
-    const cur = roleRow.get(`${data.currentPatch}|${g.championId}|${g.role}`)?.games ?? 0;
-    const prev = data.previousPatch
-      ? (roleRow.get(`${data.previousPatch}|${g.championId}|${g.role}`)?.games ?? 0)
-      : 0;
-    const { patches } = choosePatches(data.currentPatch, data.previousPatch, cur, prev);
+    const b = championBaseline(
+      patchPair,
+      rowsOfRole(g.role),
+      (patch) => roleAverage(`${g.role}|${patch}`),
+      g.championId,
+    );
     return {
       ...g,
-      patches,
-      base: baselineOn(g.championId, g.role, patches),
+      patches: b.patches,
+      games: b.games,
+      winRate: b.winRate,
+      delta: b.delta,
       factor: 0.5 + 0.5 * g.probability,
     };
   };
@@ -153,11 +174,10 @@ export function evaluateDraft(
     ...new Set([data.currentPatch, ...[...allies, ...enemies].flatMap((d) => d.patches)]),
   ].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
 
-  // What the role usually gets vs/with a champion (games-weighted over every champion of the
-  // role, each against its own baseline), on the patches used.
+  // What the role usually gets vs/with a champion on one patch (games-weighted over every
+  // champion of the role, each against its own baseline on that patch).
   const usual = memo((key) => {
-    const [side, position, otherId, otherPosition, scope = ''] = key.split('|');
-    const patches = scope.split('+');
+    const [side, position, otherId, otherPosition, patch] = key.split('|');
     const perChampion = new Map<number, GamesWins>();
     const rows: readonly (GamesWins & {
       patch: PatchId;
@@ -168,15 +188,15 @@ export function evaluateDraft(
         ? data.vs.filter((r) => r.enemyId === Number(otherId) && r.enemyPosition === otherPosition)
         : data.with.filter((r) => r.allyId === Number(otherId) && r.allyPosition === otherPosition);
     for (const r of rows) {
-      if (r.position !== position || !patches.includes(r.patch)) continue;
+      if (r.position !== position || r.patch !== patch) continue;
       const s = perChampion.get(r.championId) ?? { games: 0, wins: 0 };
       perChampion.set(r.championId, { games: s.games + r.games, wins: s.wins + r.wins });
     }
     let games = 0;
     let sum = 0;
     for (const [championId, s] of perChampion) {
-      const base = baselineOn(championId, position as Position, patches);
-      if (base.games === 0) continue;
+      const base = baselineOn(championId, position as Position, patch as PatchId);
+      if (!base || base.games === 0) continue;
       sum += (winRate(s) - winRate(base)) * s.games;
       games += s.games;
     }
@@ -185,7 +205,7 @@ export function evaluateDraft(
 
   /** Shrunk delta of `x` vs (enemy) or with (ally) `o`, and its sample. */
   const pair = (x: Drafted, o: Drafted, enemy: boolean): { delta: number; games: number } => {
-    if (x.base.games === 0) return { delta: 0, games: 0 };
+    if (x.games === 0) return { delta: 0, games: 0 };
     const rows: readonly (GamesWins & { patch: PatchId })[] = enemy
       ? data.vs.filter(
           (r) =>
@@ -201,11 +221,19 @@ export function evaluateDraft(
             r.allyId === o.championId &&
             r.allyPosition === o.role,
         );
-    const stats = sumStats(rows.filter((r) => x.patches.includes(r.patch)));
-    if (stats.games === 0) return { delta: 0, games: 0 };
-    const typical = usual(
-      `${enemy ? 'vs' : 'with'}|${x.role}|${o.championId}|${o.role}|${x.patches.join('+')}`,
-    );
+    // Per patch: vs x's own baseline and what the role usually gets on that patch, then blended.
+    const sample = (patch: PatchId | null): PatchSample | undefined => {
+      if (patch === null) return undefined;
+      const stats = sumStats(rows.filter((r) => r.patch === patch));
+      const own = baselineOn(x.championId, x.role, patch);
+      if (stats.games === 0 || !own || own.games === 0) return undefined;
+      const typical = usual(
+        `${enemy ? 'vs' : 'with'}|${x.role}|${o.championId}|${o.role}|${patch}`,
+      );
+      return { value: winRate(stats) - winRate(own) - typical, games: stats.games };
+    };
+    const blend = blendPatches(sample(data.currentPatch), sample(data.previousPatch), PRIOR.pair);
+    if (blend.games === 0) return { delta: 0, games: 0 };
     const k = enemy
       ? o.role === x.role
         ? K.matchup
@@ -215,10 +243,7 @@ export function evaluateDraft(
       : DUO_ROLES[x.role].includes(o.role)
         ? K.duo
         : K.otherAlly;
-    return {
-      delta: shrink(winRate(stats) - winRate(x.base) - typical, stats.games, k),
-      games: stats.games,
-    };
+    return { delta: shrink(blend.value, blend.games, k), games: shownGames(blend.games) };
   };
 
   const reasons: Reason[] = [];
@@ -229,15 +254,24 @@ export function evaluateDraft(
   };
 
   // Side.
+  // Side: both kept patches summed, unweighted (the side edge does not depend on champion balance,
+  // and a new patch's first matches alone would give a wild, unshrunk edge).
   if (req.side) {
-    const onSide = sumStats(
-      data.sides.filter((s) => s.side === req.side && s.patch === data.currentPatch),
+    const rows = data.sides.filter(
+      (s) =>
+        s.side === req.side &&
+        s.games > 0 &&
+        (s.patch === data.currentPatch || s.patch === data.previousPatch),
+    );
+    const onSide = sumStats(rows);
+    const patches = [data.currentPatch, data.previousPatch].filter(
+      (p): p is PatchId => p !== null && rows.some((r) => r.patch === p),
     );
     if (onSide.games > 0) {
       const shift = winRate(onSide) - 0.5;
       add(shift, {
         kind: 'side',
-        label: `${formatDelta(shift)} ${req.side === 'blue' ? 'Blue' : 'Red'} side: wins ${formatRate(winRate(onSide))} of matches on ${data.currentPatch} (${formatGames(onSide.games)})`,
+        label: `${formatDelta(shift)} ${req.side === 'blue' ? 'Blue' : 'Red'} side: wins ${formatRate(winRate(onSide))} of matches on ${patchesLabel(patches)} (${formatGames(onSide.games)})`,
         games: onSide.games,
       });
     }
@@ -251,16 +285,12 @@ export function evaluateDraft(
     [enemies, -1],
   ] as const) {
     for (const d of team) {
-      if (d.base.games === 0) continue;
-      const strength = shrink(
-        winRate(d.base) - roleAverage(`${d.role}|${d.patches.join('+')}`),
-        d.base.games,
-        K.base,
-      );
+      if (d.games === 0) continue;
+      const strength = shrink(d.delta, d.games, K.base);
       add(sign * D.baseWeight * d.factor * strength, {
         kind: 'base',
-        label: `${formatDelta(sign * D.baseWeight * d.factor * strength)} ${sign < 0 ? 'enemy ' : ''}${name(d)}: ${formatRate(winRate(d.base))} win rate as ${where(d)} (${formatGames(d.base.games)})`,
-        games: d.base.games,
+        label: `${formatDelta(sign * D.baseWeight * d.factor * strength)} ${sign < 0 ? 'enemy ' : ''}${name(d)}: ${formatRate(d.winRate)} win rate as ${where(d)} (${formatGames(shownGames(d.games))})`,
+        games: shownGames(d.games),
         championIds: [d.championId],
       });
     }
