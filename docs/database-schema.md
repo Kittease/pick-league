@@ -495,7 +495,10 @@ banned matches / matches when every participant of a server is counted.
 
 ## Size estimate
 
-Per match, roughly: participants ~5 KB, item events (~45 per player → ~450 rows) ~30 KB, skill events (~180 rows) ~12 KB, kills + objectives ~5 KB, indexes included → **~50 KB/match**.
-~150k matches/patch × 2 patches → **~15 GB** steady state, plus a few hundred MB for players and masteries.
+Measured on 16.22 (Nov 2026: 305k matches, 39 GB in all), per match with indexes: item events (~460 rows) ~49 KB, skill events (~145 rows) ~16 KB, participants ~12 KB, objective events ~9 KB, kill events ~8 KB, bans ~1 KB, plus ~9 KB of stats views → **~100 KB/match**.
+
+A full patch is ~300k matches (every Master+ player of the four servers over two weeks) → ~31 GB. `champion_masteries` adds ~8 GB whatever the number of patches (28M rows: one set per player, ladder or not).
+
+Two full patches, at the end of a patch and before the older one is deleted → **~70 GB**, plus the nightly dumps (3 kept, ~2.4 GB each for one patch of data, about twice that for two). The disk must hold both.
 
 Low-priority enrichment volume: roughly 6–8 non-ladder players per match → tens of thousands of new players per region per patch, 2 requests each (mastery + rank). At leftover budget this takes a few days to catch up after the first run, then keeps pace.

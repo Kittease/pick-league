@@ -793,7 +793,7 @@ export function TierListPage({
             onChange={(platform) => setFilters({ platform })}
           />
           <FilterSelect
-            label="Players' current solo rank"
+            label="Players' current solo rank. Master+ keeps every player of these matches: about 1 in 6 is currently below Master"
             value={filters.rank}
             labels={RANK_LABEL}
             onChange={(rank) => setFilters({ rank })}
