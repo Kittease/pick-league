@@ -88,6 +88,25 @@ function expectedLane(
 }
 
 /** `x * n / (n + k)` with the lane-phase prior, as the API rounds it. */
+/** Games of a champion+role on the current and previous patches (stats_champion_roles). */
+async function roleGamesOf(
+  q: Db,
+  championId: number,
+  position = 'UTILITY',
+): Promise<{ cur: number; prev: number }> {
+  const rows = await q<{ patch: string; games: number }[]>`
+    SELECT patch, games FROM stats_champion_roles
+    WHERE champion_id = ${championId} AND position = ${position} AND patch IN ${q([CUR, PREV])}`;
+  const of = (patch: string) => rows.find((r) => r.patch === patch)?.games ?? 0;
+  return { cur: of(CUR), prev: of(PREV) };
+}
+
+/** Share of the effective games that comes from the previous patch, with a prior capped at `cap`. */
+const previousShare = ({ cur, prev }: { cur: number; prev: number }, cap: number) => {
+  const fromPrev = prev > 0 ? Math.min(1, cap / prev) * prev : 0;
+  return cur + fromPrev > 0 ? fromPrev / (cur + fromPrev) : 0;
+};
+
 const shrunkLane = (x: number, n: number, digits = 0) => {
   const f = 10 ** digits;
   return Math.round(((x * n) / (n + ENGINE_CONFIG.lanePhase.shrinkK)) * f) / f;
@@ -294,7 +313,36 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
 
     const braum = body.candidates.find((c) => c.championId === PLANTED.rareOnCurrent);
     expect(braum?.patchesUsed).toEqual([CUR, PREV]);
-    expect(braum?.reasons[0]?.kind).toBe('patch_fallback');
+    // The patch reason follows the previous patch's share of his effective games.
+    const games = await roleGamesOf(db, PLANTED.rareOnCurrent);
+    const share = previousShare(games, ENGINE_CONFIG.previousPatchPrior.strength);
+    expect(games.prev).toBeGreaterThan(0);
+    expect(braum?.reasons[0]?.kind === 'patch_fallback').toBe(
+      share >= ENGINE_CONFIG.previousPatchPrior.reasonShare,
+    );
+  });
+
+  test('build: both patches summed through the weighted loaders', async () => {
+    const championId = PLANTED.runeMatchup.championId;
+    const games = await roleGamesOf(db, championId);
+    expect(games.cur).toBeGreaterThan(0);
+    expect(games.prev).toBeGreaterThan(0);
+    expect(games.prev).toBeLessThan(ENGINE_CONFIG.previousPatchPrior.build);
+    const res = await post('/recommendations/build', {
+      championId,
+      role: 'UTILITY',
+      allies: [],
+      enemies: [],
+    });
+    expect(res.status).toBe(200);
+    const b = (await res.json()) as BuildResponse;
+    // Weight 1 under the cap: the two patches' games summed.
+    expect(b.games).toBe(games.cur + games.prev);
+    const starter = b.items.starting[0];
+    expect(starter).toBeDefined();
+    const starterGames = Math.max(...(starter?.reasons ?? []).map((r) => r.games));
+    expect(starterGames).toBeGreaterThan(0);
+    expect(starterGames).toBeLessThanOrEqual(b.games);
   });
 
   test('draft: win probability, reasons and damage of a partial draft', async () => {
@@ -359,7 +407,10 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     });
     expect(res.status).toBe(200);
     const b = (await res.json()) as BuildResponse;
-    expect(b.patchesUsed).toEqual([CUR]);
+    const games = await roleGamesOf(db, PLANTED.runeMatchup.championId);
+    expect(b.patchesUsed).toEqual(
+      previousShare(games, ENGINE_CONFIG.previousPatchPrior.build) >= 0.1 ? [CUR, PREV] : [CUR],
+    );
     expect(b.games).toBeGreaterThan(200);
     expect(b.runes.runeIds[0]).toBe(PLANTED.runeMatchup.keystone);
     expect(b.runes.selectedPerkIds).toHaveLength(9);
@@ -580,17 +631,25 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
 
     const braum = body.entries.find((e) => e.championId === PLANTED.rareOnCurrent);
     expect(braum?.patchesUsed).toEqual([CUR, PREV]);
-    const current = body.entries.filter((e) => e.patchesUsed.length === 1);
     for (const e of body.entries) {
       expect(e.banRate).toBeGreaterThan(0);
       expect(e.banRate).toBeLessThan(1);
       expect(e.confidence).toBeGreaterThan(0);
     }
-    // Two players per role per match: pick rates are games over half the role's games.
-    expect(current.reduce((s, e) => s + e.pickRate, 0)).toBeCloseTo(
-      (2 * current.reduce((s, e) => s + e.games, 0)) / body.roleGames,
-      2,
-    );
+    // Every previous-patch record is under the cap here (weight 1): games are the plain sum over
+    // the patches the champion has games on, and the pick rate is two players per role per match:
+    // games over half the role's games of those patches.
+    const [roleTotals] = await db<{ cur: number; prev: number }[]>`
+      SELECT coalesce(sum(games) FILTER (WHERE patch = ${CUR}), 0)::int AS cur,
+             coalesce(sum(games) FILTER (WHERE patch = ${PREV}), 0)::int AS prev
+      FROM stats_champion_roles WHERE position = 'UTILITY'`;
+    for (const e of body.entries) {
+      const g = await roleGamesOf(db, e.championId);
+      expect(g.prev).toBeLessThan(ENGINE_CONFIG.previousPatchPrior.strength);
+      expect(e.games).toBe(g.cur + g.prev);
+      const roleGames = (roleTotals?.cur ?? 0) + (g.prev > 0 ? (roleTotals?.prev ?? 0) : 0);
+      expect(e.pickRate).toBeCloseTo((2 * e.games) / roleGames, 3);
+    }
 
     const again = await app.request('/tierlist?role=UTILITY&patch=latest');
     expect(await again.json()).toEqual(body);
@@ -684,13 +743,15 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(byServer.reduce((s, t) => s + t.roleGames, 0)).toBe(all.roleGames);
     expect(kr.entries.length).toBeGreaterThan(0);
 
-    // Ban rate = KR matches of the patches used where it was banned / KR matches.
-    const e = kr.entries.find((x) => x.patchesUsed.length === 1) as TierListEntry;
+    // Ban rate = KR matches of the patches used where it was banned / KR matches (both patches
+    // fully weighted: every previous record is under the cap here).
+    const e = kr.entries.find((x) => x.patchesUsed.length === 2) as TierListEntry;
+    expect(e).toBeDefined();
     const [row] = await db<{ banned: number; total: number }[]>`
       SELECT count(DISTINCT b.match_id) FILTER (WHERE b.champion_id = ${e.championId})::int AS banned,
              count(DISTINCT m.id)::int AS total
       FROM matches m LEFT JOIN match_bans b ON b.match_id = m.id
-      WHERE m.platform = 'KR' AND m.patch = ${CUR} AND NOT m.is_remake`;
+      WHERE m.platform = 'KR' AND m.patch IN ${db(e.patchesUsed)} AND NOT m.is_remake`;
     expect(e.banRate).toBeCloseTo((row?.banned ?? 0) / (row?.total ?? 1), 4);
   });
 
@@ -715,7 +776,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(gm.filters).toEqual({ platform: 'EUW1', rank: 'GRANDMASTER' });
     expect(gm.roleGames).toBe(await roleGames(['CHALLENGER', 'GRANDMASTER'], 'EUW1'));
 
-    // Fewer games per champion than unfiltered, so more of them fall back to both patches.
+    // Fewer games per champion than unfiltered; the previous patch is still listed for some.
     const all = (await (await get('/tierlist?role=UTILITY')).json()) as TierListResponse;
     for (const e of chall.entries) {
       const full = all.entries.find((x) => x.championId === e.championId);
@@ -723,9 +784,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       expect(e.banRate).toBeGreaterThanOrEqual(0);
       expect(e.banRate).toBeLessThan(1);
     }
-    expect(chall.entries.filter((e) => e.patchesUsed.length > 1).length).toBeGreaterThan(
-      all.entries.filter((e) => e.patchesUsed.length > 1).length,
-    );
+    expect(chall.entries.some((e) => e.patchesUsed.length > 1)).toBe(true);
 
     // Ban rate = Challenger players whose match banned it / Challenger players (patches used).
     const e = chall.entries[0] as TierListEntry;
