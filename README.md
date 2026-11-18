@@ -226,8 +226,8 @@ Errors are `{ error: { code, message, details? } }`: `400 BAD_REQUEST` (invalid 
 `availableChampionIds` holds at most 1000 ids.
 
 Request/response types are in `packages/shared/src/api-contract.ts`. Every reason carries the
-win-rate delta (after shrinkage) and its sample size; `patchesUsed` lists the patches combined (the previous one is added when the
-current patch has fewer than 150 games of the champion in the role). `lane_phase` reasons only
+win-rate delta (after shrinkage) and its sample size; `patchesUsed` lists the patches used (the previous one counts as a prior worth
+at most 1,200 games and is listed while it weighs at least 10 %). `lane_phase` reasons only
 explain (delta 0, never in the score): `lane: { minute, gold, xp, cs, duo, games }` is the average
 difference vs the lane opponent from the timeline frames (`stats_champion_lane_phase`), shrunk
 toward 0 by sample size, 1v1 for top / jungle / mid and 2v2 for the bot lane (own + duo partner vs
