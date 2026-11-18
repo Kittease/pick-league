@@ -179,6 +179,30 @@ export const ENGINE_CONFIG = {
   },
 
   /**
+   * Mastery term of the picks (only when the request carries the player's masteries): how
+   * players with that many mastery points on the champion do compared with the champion's
+   * average, from stats_champion_mastery. On 16.22 (3.0M participants): −9.2 points under 5k,
+   * −2.3 for 5k–20k, about 0 for 50k–100k, +1.5 from 500k. Added to the score as is: a held-out
+   * fit put its weight at 1.04 ± 0.03.
+   */
+  mastery: {
+    /**
+     * Upper bounds (exclusive) of buckets 0–5 in mastery points; bucket 6 is the rest. Mirrors
+     * the `width_bucket` of 0018_mastery_curve.sql: keep them in sync.
+     */
+    bucketEdges: [5_000, 20_000, 50_000, 100_000, 200_000, 500_000],
+    weight: 1,
+    /**
+     * Prior strength (games of the champion in the bucket) of a champion's own curve around the
+     * curve of all champions: the low-vs-high mastery gap really differs between champions by
+     * ~1.6 points (steep for Rengar or Master Yi, flat for Milio or Bard).
+     */
+    shrinkK: 1000,
+    /** From this many games of the champion in the bucket, the reason quotes the champion's own sample. */
+    minChampionGames: 100,
+  },
+
+  /**
    * Lane phase (`lane_phase` reasons, tier list matchups): average gold / XP / CS differences vs
    * the lane opponent at 10 and 15 min (bot lane 2v2), from stats_champion_lane_phase. They
    * explain and never score. Each average is shrunk toward 0 like the deltas, `x * n / (n + k)`.

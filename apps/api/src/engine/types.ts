@@ -156,6 +156,17 @@ export interface GameLengthRow extends GamesWins {
   bucket: 0 | 1 | 2;
 }
 
+/**
+ * stats_champion_mastery (0018_mastery_curve.sql): games of champion + role by the player's
+ * mastery points on the champion (`bucket` 0–6, see `ENGINE_CONFIG.mastery.bucketEdges`).
+ */
+export interface MasteryRow extends GamesWins {
+  patch: PatchId;
+  position: Position;
+  championId: number;
+  bucket: number;
+}
+
 /** Static item info the build engine needs. */
 export interface ItemInfo {
   id: number;

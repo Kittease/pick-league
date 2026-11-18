@@ -25,6 +25,7 @@ import type {
   GameLengthRow,
   ItemInfo,
   LanePhaseRow,
+  MasteryRow,
   NameLookup,
   RoleStatRow,
   VsRow,
@@ -908,4 +909,28 @@ export async function loadGameLength(
         ]
       : [],
   );
+}
+
+/** Mastery rows (stats_champion_mastery, 0018) of every champion and role on `patches`. */
+export async function loadMasteryRows(q: Queryable, patches: PatchId[]): Promise<MasteryRow[]> {
+  const rows = await q<
+    {
+      patch: string;
+      position: Position;
+      champion_id: number;
+      bucket: number;
+      games: number;
+      wins: number;
+    }[]
+  >`
+    SELECT patch, position, champion_id, bucket, games, wins
+    FROM stats_champion_mastery WHERE patch IN ${q(patches)}`;
+  return rows.map((r) => ({
+    patch: r.patch,
+    position: r.position,
+    championId: r.champion_id,
+    bucket: r.bucket,
+    games: r.games,
+    wins: r.wins,
+  }));
 }
