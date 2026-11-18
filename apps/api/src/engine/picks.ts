@@ -27,6 +27,7 @@ import {
   TRAIT_LABELS,
 } from './config.ts';
 import { lanePhaseDiff, lanePhaseReason, lanePhaseRowsOf } from './lane-phase.ts';
+import { buildMasteryModel, masteryBucket, masteryPoints, masteryReason } from './mastery.ts';
 import {
   choosePatches,
   formatDelta,
@@ -48,6 +49,7 @@ import type {
   CompTraitRow,
   GamesWins,
   LanePhaseRow,
+  MasteryRow,
   NameLookup,
   RoleStatRow,
   VsRow,
@@ -73,6 +75,11 @@ export interface PicksData {
    * (optional: no lane_phase reasons without it).
    */
   lanePhase?: readonly LanePhaseRow[];
+  /**
+   * stats_champion_mastery of every champion and role (optional: loaded only when the request
+   * carries the player's masteries; no mastery reasons without it).
+   */
+  mastery?: readonly MasteryRow[];
   names: NameLookup;
 }
 
@@ -140,6 +147,9 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
     ...knownAllies.map((a) => a.championId),
   ]);
   const available = req.availableChampionIds ? new Set(req.availableChampionIds) : null;
+  // The player's own masteries (champion select on the desktop only).
+  const masteryModel = req.masteries && data.mastery ? buildMasteryModel(data.mastery) : null;
+  const myPoints = masteryPoints(req.masteries ?? []);
 
   const playRates = rolePlayRates(data.roleStats);
   const enemyRoles = assignRoles(
@@ -396,6 +406,21 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
     addTraits('enemy', enemyTraits);
     addTraits('ally', allyTraits);
 
+    // The player's mastery of the candidate: how players at that level do compared with the
+    // champion's average. It takes no part in the confidence (weight 0): that says how well the
+    // champion's stats are known, not how well the player knows the champion.
+    if (masteryModel) {
+      const points = myPoints.get(championId) ?? 0;
+      const effect = masteryModel.effect(championId, role, masteryBucket(points));
+      components.push({
+        reason: masteryReason(effect, points, champName),
+        contribution: ENGINE_CONFIG.mastery.weight * effect.delta,
+        weight: 0,
+        confidence: 0,
+        order: 0,
+      });
+    }
+
     const score = components.reduce((s, c) => s + c.contribution, 0);
     const totalWeight = components.reduce((s, c) => s + c.weight, 0);
     const confidence =
@@ -410,6 +435,7 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
           c.reason.kind === 'lane_phase' ||
           c.reason.kind === 'duo' ||
           c.reason.kind === 'base' ||
+          c.reason.kind === 'mastery' ||
           Math.abs(c.reason.delta) >= ENGINE_CONFIG.picks.minReasonDelta,
       )
       .sort(

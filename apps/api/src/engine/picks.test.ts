@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { picksRequestSchema } from '@pick-league/shared';
+import { type PicksResponse, type Position, picksRequestSchema } from '@pick-league/shared';
 import { lane, names, role, thresholds, traitsOf, vs, withAlly } from './fixtures.ts';
 import { type PicksData, recommendPicks } from './picks.ts';
-import type { CompTraitRow } from './types.ts';
+import type { CompTraitRow, MasteryRow } from './types.ts';
 
 const CUR = '15.22';
 const PREV = '15.21';
@@ -250,5 +250,115 @@ describe('recommendPicks', () => {
     });
     const lulu = result.candidates.find((c) => c.championId === 117);
     expect(lulu?.reasons.some((r) => r.kind === 'lane_phase')).toBe(false);
+  });
+});
+
+describe('mastery', () => {
+  const masteryRow = (
+    patch: string,
+    championId: number,
+    position: Position,
+    bucket: number,
+    games: number,
+    wins: number,
+  ): MasteryRow => ({ patch, championId, position, bucket, games, wins });
+
+  // Every support: 40 % under 5k points, 60 % from 500k (own average 50 %).
+  const masteryRows = [111, 117, 412, 89].flatMap((id) => [
+    masteryRow(CUR, id, 'UTILITY', 0, 100, 40),
+    masteryRow(CUR, id, 'UTILITY', 6, 100, 60),
+  ]);
+  const draft = {
+    role: 'UTILITY',
+    allies: [{ championId: 222, role: 'BOTTOM' }],
+    enemies: [40],
+  };
+  const draftData = () =>
+    data({
+      vs: [vs(CUR, 111, 40, 'UTILITY', 1000, 560)],
+      with: [withAlly(CUR, 117, 222, 'BOTTOM', 1000, 560)],
+    });
+  const masteryReasons = (r: PicksResponse) =>
+    r.candidates.flatMap((c) => c.reasons.filter((x) => x.kind === 'mastery'));
+
+  test('no masteries in the request: the same answer, with or without the rows', () => {
+    const without = recommendPicks(req(draft), draftData());
+    const result = recommendPicks(req(draft), { ...draftData(), mastery: masteryRows });
+    expect(result).toEqual(without);
+    expect(masteryReasons(result)).toEqual([]);
+  });
+
+  test('masteries without the rows: no mastery reason, same scores', () => {
+    const without = recommendPicks(req(draft), draftData());
+    const result = recommendPicks(
+      req({ ...draft, masteries: [{ championId: 117, points: 600_000 }] }),
+      draftData(),
+    );
+    expect(result).toEqual(without);
+    expect(masteryReasons(result)).toEqual([]);
+  });
+
+  test('one mastery reason per candidate, added to the score, after the lane and duo', () => {
+    const without = recommendPicks(req(draft), draftData());
+    const result = recommendPicks(
+      req({ ...draft, masteries: [{ championId: 117, points: 600_000 }] }),
+      { ...draftData(), mastery: masteryRows },
+    );
+    expect(result.candidates).toHaveLength(without.candidates.length);
+    for (const c of result.candidates) {
+      const kinds = c.reasons.map((r) => r.kind);
+      expect(kinds.filter((k) => k === 'mastery')).toHaveLength(1);
+      const at = kinds.indexOf('mastery');
+      expect(at).toBeGreaterThan(kinds.indexOf('matchup'));
+      expect(at).toBeGreaterThan(kinds.indexOf('duo'));
+      expect(at).toBeLessThan(kinds.indexOf('base'));
+      const before = without.candidates.find((x) => x.championId === c.championId);
+      const reason = c.reasons[at];
+      expect(c.score - (before?.score ?? Number.NaN)).toBeCloseTo(reason?.delta ?? Number.NaN, 3);
+      expect(c.confidence).toBe(before?.confidence ?? Number.NaN);
+    }
+    const lulu = result.candidates.find((c) => c.championId === 117);
+    expect(lulu?.reasons.find((r) => r.kind === 'mastery')?.delta).toBeCloseTo(0.1, 4);
+  });
+
+  test('a high mastery moves its champion first; champions not listed get the 0-point effect', () => {
+    const body = { role: 'UTILITY', bans: [40] };
+    const before = recommendPicks(req(body), data());
+    expect(new Set(before.candidates.map((c) => c.score)).size).toBe(1);
+    const result = recommendPicks(
+      req({ ...body, masteries: [{ championId: 117, points: 600_000 }] }),
+      data({ mastery: masteryRows }),
+    );
+    expect(result.candidates[0]?.championId).toBe(117);
+    const others = result.candidates.slice(1);
+    expect(others.map((c) => c.championId).sort()).toEqual([111, 412, 89].sort());
+    const deltas = others.map((c) => c.reasons.find((r) => r.kind === 'mastery')?.delta);
+    expect(new Set(deltas).size).toBe(1);
+    expect(deltas[0]).toBeCloseTo(-0.1, 4);
+    const naut = others.find((c) => c.championId === 111);
+    expect(naut?.reasons.find((r) => r.kind === 'mastery')?.label).toBe(
+      "−10.0% at your mastery (no points yet): Nautilus players with under 5k points vs Nautilus's average (100 games)",
+    );
+  });
+
+  test('a champion listed twice uses its highest points; non-candidates are ignored', () => {
+    const body = { role: 'UTILITY', bans: [40] };
+    const twice = recommendPicks(
+      req({
+        ...body,
+        masteries: [
+          { championId: 117, points: 1_000 },
+          { championId: 117, points: 600_000 },
+          { championId: 222, points: 900_000 }, // an ADC: not a support candidate
+          { championId: 9999, points: 900_000 }, // unknown champion
+        ],
+      }),
+      data({ mastery: masteryRows }),
+    );
+    const once = recommendPicks(
+      req({ ...body, masteries: [{ championId: 117, points: 600_000 }] }),
+      data({ mastery: masteryRows }),
+    );
+    expect(twice).toEqual(once);
   });
 });
