@@ -2,11 +2,13 @@ import { describe, expect, test } from 'bun:test';
 import { type PicksResponse, type Position, picksRequestSchema } from '@pick-league/shared';
 import { ENGINE_CONFIG } from './config.ts';
 import { lane, names, role, thresholds, traitsOf, vs, withAlly } from './fixtures.ts';
+import { shrink } from './math.ts';
 import { type PicksData, recommendPicks } from './picks.ts';
 import type { CompTraitRow, MasteryRow } from './types.ts';
 
 const CUR = '15.22';
 const PREV = '15.21';
+const K = ENGINE_CONFIG.picks.shrinkK;
 
 /** Four supports with a 50 % baseline, plus enemy/ally role rows. */
 function data(overrides: Partial<PicksData> = {}): PicksData {
@@ -64,14 +66,13 @@ describe('recommendPicks', () => {
     const matchup = naut?.reasons.find((r) => r.kind === 'matchup');
     expect(matchup?.games).toBe(1000);
     // 6 % − the usual 1.5 %, shrunk with k = 600.
-    const k = ENGINE_CONFIG.picks.shrinkK;
-    expect(matchup?.delta).toBeCloseTo((0.045 * 1000) / (1000 + k.matchup), 3);
+    expect(matchup?.delta).toBeCloseTo((0.045 * 1000) / (1000 + K.matchup), 3);
     expect(matchup?.label).toBe(
       '+2.8% vs Janna compared with other supports (likely lane, support, 1,000 games)',
     );
     expect(matchup?.championIds).toEqual([40]);
     const duo = result.candidates[1]?.reasons.find((r) => r.kind === 'duo');
-    expect(duo?.delta).toBeCloseTo((0.045 * 1000) / (1000 + k.duo), 3);
+    expect(duo?.delta).toBeCloseTo((0.045 * 1000) / (1000 + K.duo), 3);
     expect(duo?.label).toBe('+0.9% with Jinx compared with other supports (bot duo, 1,000 games)');
   });
 
@@ -147,7 +148,7 @@ describe('recommendPicks', () => {
     expect(result.candidates.map((c) => c.championId).sort()).toEqual([111, 117]);
   });
 
-  test('adds the previous patch when the current one has too few games, and says so', () => {
+  test('mostly the previous patch while the current one has few games, and says so', () => {
     const result = recommendPicks(
       req({ role: 'UTILITY', enemies: [40] }),
       data({
@@ -160,24 +161,182 @@ describe('recommendPicks', () => {
       }),
     );
     const naut = result.candidates[0];
+    // 900 previous games are under the cap: they count fully.
     expect(naut).toMatchObject({ championId: 111, patchesUsed: [CUR, PREV], games: 940 });
     expect(naut?.winRate).toBeCloseTo(520 / 940, 4);
     expect(naut?.reasons[0]).toMatchObject({ kind: 'patch_fallback', games: 940 });
     expect(naut?.reasons[0]?.label).toBe(
-      '15.22 + 15.21 data: only 40 games of Nautilus support on 15.22',
+      'Mostly 15.21 data: 40 games of Nautilus support on 15.22 so far',
     );
     expect(naut?.reasons.find((r) => r.kind === 'matchup')?.games).toBe(100);
   });
 
-  test('keeps the current patch alone from the threshold on', () => {
+  test('no threshold: the previous patch fades as current games arrive', () => {
+    const naut = (current: number, previous: number) =>
+      recommendPicks(
+        req({ role: 'UTILITY' }),
+        data({
+          roleStats: [
+            role(CUR, 111, 'UTILITY', current, current / 2),
+            role(PREV, 111, 'UTILITY', previous, previous / 2),
+          ],
+        }),
+      ).candidates[0];
+    const fallback = (c: ReturnType<typeof naut>) =>
+      c?.reasons.some((r) => r.kind === 'patch_fallback');
+    // 150 current games: the previous patch is still 900 / 1,050 = 86 % of the effective games.
+    expect(naut(150, 900)).toMatchObject({ patchesUsed: [CUR, PREV], games: 1050 });
+    expect(fallback(naut(150, 900))).toBe(true);
+    // 2,000 current games: 900 / 2,900 = 31 %, listed but no reason.
+    expect(naut(2000, 900)).toMatchObject({ patchesUsed: [CUR, PREV], games: 2900 });
+    expect(fallback(naut(2000, 900))).toBe(false);
+    // 20,000 current games: 1,300 previous count for 1,200, 5.7 %: not listed.
+    expect(naut(20_000, 1300)).toMatchObject({ patchesUsed: [CUR], games: 21_200 });
+  });
+
+  test('continuity: the score does not jump when current games cross 150', () => {
+    // Nautilus: 900 games at 55 % on 15.21 (Lulu 2,000 at 50 %), n games at 50 % on 15.22.
+    const roleAvgPrev = (495 + 1000) / 2900;
+    const prevDelta = 0.55 - roleAvgPrev;
+    const scoreAt = (n: number) =>
+      recommendPicks(
+        req({ role: 'UTILITY' }),
+        data({
+          roleStats: [
+            role(CUR, 111, 'UTILITY', n, n / 2),
+            role(PREV, 111, 'UTILITY', 900, 495),
+            role(CUR, 117, 'UTILITY', 2000, 1000),
+            role(PREV, 117, 'UTILITY', 2000, 1000),
+          ],
+        }),
+      ).candidates.find((c) => c.championId === 111)?.score ?? Number.NaN;
+    let previous = scoreAt(100);
+    for (let n = 102; n <= 200; n += 2) {
+      const score = scoreAt(n);
+      expect(Math.abs(score - previous)).toBeLessThan(0.001);
+      previous = score;
+      // 0 points on the n current games, +3.4 on the 900 previous ones, on n + 900 games.
+      const blended = (prevDelta * 900) / (n + 900);
+      expect(score).toBeCloseTo(shrink(blended, n + 900, K.base), 4);
+    }
+    expect(scoreAt(148)).toBeCloseTo(0.02391, 4);
+    expect(scoreAt(152)).toBeCloseTo(0.02384, 4);
+  });
+
+  test('previous patch only: its strength on up to 1,200 games, and says so', () => {
     const result = recommendPicks(
       req({ role: 'UTILITY' }),
       data({
-        roleStats: [role(CUR, 111, 'UTILITY', 150, 75), role(PREV, 111, 'UTILITY', 900, 500)],
+        roleStats: [
+          role(PREV, 111, 'UTILITY', 5000, 2750), // 55 %, nothing on 15.22 yet
+          role(CUR, 117, 'UTILITY', 2000, 1000),
+          role(PREV, 117, 'UTILITY', 5000, 2250),
+        ],
       }),
     );
-    expect(result.candidates[0]).toMatchObject({ patchesUsed: [CUR], games: 150 });
-    expect(result.candidates[0]?.reasons.some((r) => r.kind === 'patch_fallback')).toBe(false);
+    const naut = result.candidates.find((c) => c.championId === 111);
+    // Against the previous patch's role average (50 %): +5 points, the old summed record's
+    // delta, now on min(5,000, 1,200) games.
+    const prevDelta = 0.55 - (2750 + 2250) / 10_000;
+    expect(naut?.score).toBeCloseTo(shrink(prevDelta, Math.min(5000, 1200), K.base), 5);
+    expect(naut?.score).toBeCloseTo((0.05 * 1200) / 1450, 5);
+    expect(naut).toMatchObject({ games: 1200, patchesUsed: [CUR, PREV] });
+    expect(naut?.winRate).toBeCloseTo(0.55, 4);
+    expect(naut?.reasons[0]).toMatchObject({
+      kind: 'patch_fallback',
+      label: '15.21 data: no games of Nautilus support on 15.22 yet',
+      games: 1200,
+      delta: 0,
+    });
+  });
+
+  test('whole role without current games: no patch reason, both patches listed', () => {
+    const result = recommendPicks(
+      req({ role: 'UTILITY' }),
+      data({
+        roleStats: [
+          role(PREV, 111, 'UTILITY', 900, 500),
+          role(PREV, 117, 'UTILITY', 900, 400),
+          role(PREV, 412, 'UTILITY', 3000, 1500),
+        ],
+      }),
+    );
+    expect(result.candidates).toHaveLength(3);
+    for (const c of result.candidates) {
+      expect(c.patchesUsed).toEqual([CUR, PREV]);
+      expect(c.reasons.some((r) => r.kind === 'patch_fallback')).toBe(false);
+    }
+    expect(result.candidates.find((c) => c.championId === 412)?.games).toBe(1200);
+  });
+
+  test('a champion buffed on the new patch does not shift its matchup deltas', () => {
+    // Nautilus: 50 % on 15.21, 56 % on 15.22 (3,000 games each). Vs Janna it does exactly as
+    // usual on each patch: 50 % on 15.21 (1,000 games), 56 % on 15.22 (50 games); Lulu, the
+    // other support, is at 50 % overall and vs Janna on both patches.
+    const result = recommendPicks(
+      req({ role: 'UTILITY', enemies: [40] }),
+      data({
+        roleStats: [
+          role(CUR, 111, 'UTILITY', 3000, 1680),
+          role(PREV, 111, 'UTILITY', 3000, 1500),
+          role(CUR, 117, 'UTILITY', 3000, 1500),
+          role(PREV, 117, 'UTILITY', 3000, 1500),
+          role(CUR, 40, 'UTILITY', 2000, 1000),
+          role(PREV, 40, 'UTILITY', 2000, 1000),
+        ],
+        vs: [
+          vs(CUR, 111, 40, 'UTILITY', 50, 28),
+          vs(PREV, 111, 40, 'UTILITY', 1000, 500),
+          vs(CUR, 117, 40, 'UTILITY', 1000, 500),
+          vs(PREV, 117, 40, 'UTILITY', 1000, 500),
+        ],
+      }),
+    );
+    const matchup = result.candidates
+      .find((c) => c.championId === 111)
+      ?.reasons.find((r) => r.kind === 'matchup');
+    expect(matchup?.games).toBe(1050);
+    expect(Math.abs(matchup?.delta ?? 1)).toBeLessThan(0.002);
+    expect(matchup?.delta).toBeCloseTo(0, 6);
+    // Summed first, the matchup would have been 528 / 1,050 vs 3,180 / 6,000: ≈ −2.7 points.
+    expect(528 / 1050 - 3180 / 6000).toBeLessThan(-0.025);
+  });
+
+  test('without a previous patch, previous-patch rows are ignored', () => {
+    const body = req({
+      role: 'UTILITY',
+      enemies: [40],
+      allies: [{ championId: 222, role: 'BOTTOM' }],
+    });
+    const cur = {
+      roleStats: [
+        role(CUR, 111, 'UTILITY', 40, 20),
+        role(CUR, 117, 'UTILITY', 2000, 1100),
+        role(CUR, 40, 'UTILITY', 2000, 1000),
+        role(CUR, 222, 'BOTTOM', 2000, 1000),
+      ],
+      vs: [vs(CUR, 111, 40, 'UTILITY', 10, 6), vs(CUR, 117, 40, 'UTILITY', 500, 260)],
+      with: [withAlly(CUR, 117, 222, 'BOTTOM', 500, 270)],
+    };
+    const prev = {
+      roleStats: [role(PREV, 111, 'UTILITY', 900, 500), role(PREV, 117, 'UTILITY', 900, 400)],
+      vs: [vs(PREV, 111, 40, 'UTILITY', 90, 54)],
+      with: [withAlly(PREV, 117, 222, 'BOTTOM', 300, 100)],
+    };
+    const withPrevRows = recommendPicks(
+      body,
+      data({
+        previousPatch: null,
+        roleStats: [...cur.roleStats, ...prev.roleStats],
+        vs: [...cur.vs, ...prev.vs],
+        with: [...cur.with, ...prev.with],
+      }),
+    );
+    expect(withPrevRows).toEqual(recommendPicks(body, data({ previousPatch: null, ...cur })));
+    expect(withPrevRows.candidates.find((c) => c.championId === 111)).toMatchObject({
+      games: 40,
+      patchesUsed: [CUR],
+    });
   });
 
   test('vs enemy composition traits, net of the role-wide effect', () => {
@@ -230,7 +389,7 @@ describe('recommendPicks', () => {
         vs: [vs(CUR, 111, 40, 'UTILITY', 1000, 560)],
         lanePhase: [
           lane(CUR, 111, 40, 'UTILITY', 200, { gold: 440, xp: 330, cs: 2.2 }),
-          lane(PREV, 111, 40, 'UTILITY', 900, { gold: -900, xp: 0, cs: 0 }), // patch not used
+          lane(PREV, 111, 40, 'UTILITY', 900, { gold: -900, xp: 0, cs: 0 }), // under the cap: counts
           lane(CUR, 117, 40, 'UTILITY', 10, { gold: 900, xp: 0, cs: 0 }), // too few matchups
           lane(CUR, 111, 40, 'BOTTOM', 500, { gold: 900, xp: 0, cs: 0 }), // Janna as ADC
         ],
@@ -242,14 +401,19 @@ describe('recommendPicks', () => {
     const naut = result.candidates.find((c) => c.championId === 111);
     const kinds = naut?.reasons.map((r) => r.kind);
     expect(kinds?.indexOf('lane_phase')).toBe((kinds?.indexOf('matchup') ?? -2) + 1);
-    const keep = 200 / 220;
+    // 200 current + 900 previous matchups: gold (440 × 200 − 900 × 900) / 1,100, then shrunk.
+    const keep = 1100 / 1120;
+    const gold = Math.round(((440 * 200 - 900 * 900) / 1100) * keep);
+    const xp = Math.round(((330 * 200) / 1100) * keep);
+    expect([gold, xp]).toEqual([-645, 59]);
     expect(naut?.reasons.find((r) => r.kind === 'lane_phase')).toEqual({
       kind: 'lane_phase',
-      label: `Lane at 10 min vs Janna: +${Math.round(440 * keep)} gold, +2 CS, +${Math.round(330 * keep)} XP (bot lane 2v2, likely support, 200 matchups)`,
+      label:
+        'Lane at 10 min vs Janna: −645 gold, +0.4 CS, +59 XP (bot lane 2v2, likely support, 1,100 matchups)',
       delta: 0,
-      games: 200,
+      games: 1100,
       championIds: [40],
-      lane: { minute: 10, gold: 400, xp: 300, cs: 2, duo: true, games: 200 },
+      lane: { minute: 10, gold, xp, cs: 0.4, duo: true, games: 1100 },
     });
     const lulu = result.candidates.find((c) => c.championId === 117);
     expect(lulu?.reasons.some((r) => r.kind === 'lane_phase')).toBe(false);

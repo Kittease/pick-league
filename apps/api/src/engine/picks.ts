@@ -8,6 +8,11 @@
  * lowers everyone's win rate, which says nothing about which candidate to pick. Without that,
  * popular candidates (whose big samples keep the enemy's strength after shrinkage) were
  * penalised vs strong enemies and favoured vs weak ones.
+ *
+ * Every delta is measured inside one patch (against that patch's baseline, role average and usual
+ * term), then the current and previous patches are blended, the previous one as a prior worth a
+ * capped number of games (`previousPatchPrior`): a champion buffed on the new patch must not see
+ * its mostly-previous-patch matchups compared with its new, higher win rate.
  */
 import type {
   CompTrait,
@@ -29,18 +34,22 @@ import {
 import { lanePhaseDiff, lanePhaseReason, lanePhaseRowsOf } from './lane-phase.ts';
 import { buildMasteryModel, masteryBucket, masteryPoints, masteryReason } from './mastery.ts';
 import {
-  choosePatches,
+  type Blend,
+  blendPatches,
   formatDelta,
   formatGames,
   formatRate,
-  patchesLabel,
+  type PatchPair,
+  type PatchSample,
   round,
   sampleConfidence,
+  shownGames,
   shrink,
   sumStats,
   winRate,
 } from './math.ts';
 import { assignRoles, type RoleGuess, rolePlayRates } from './roles.ts';
+import { championBaseline, rowsByPatchAndChampion } from './tierlist.ts';
 import { compProfile, compTraits } from './traits.ts';
 import type {
   ChampionTraitRow,
@@ -86,6 +95,7 @@ export interface PicksData {
 const W = ENGINE_CONFIG.picks.weights;
 const K = ENGINE_CONFIG.picks.shrinkK;
 const CK = ENGINE_CONFIG.confidenceK;
+const PRIOR = ENGINE_CONFIG.previousPatchPrior;
 
 interface Component {
   reason: Reason;
@@ -178,38 +188,33 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
     (r) => `${r.patch}|${r.championId}|${r.side}|${r.trait}`,
   );
 
-  // Role-wide effect of a trait (so a trait that helps every champion doesn't count), on the
-  // patches used ("15.22" or "15.22+15.21").
+  // Role-wide effect of a trait on one patch (so a trait that helps every champion doesn't count).
   const roleTraitShift = memo((key: string) => {
-    const [scope = '', side, trait] = key.split('|');
-    const patches = scope.split('+');
+    const [patch, side, trait] = key.split('|');
     const withTrait = sumStats(
-      data.compTraits.filter(
-        (r) => patches.includes(r.patch) && r.side === side && r.trait === trait,
-      ),
+      data.compTraits.filter((r) => r.patch === patch && r.side === side && r.trait === trait),
     );
-    const all = sumStats(
-      data.roleStats.filter((r) => patches.includes(r.patch) && r.position === role),
-    );
+    const all = sumStats(data.roleStats.filter((r) => r.patch === patch && r.position === role));
     return withTrait.games > 0 && all.games > 0 ? winRate(withTrait) - winRate(all) : 0;
   });
 
-  // Role baseline on the patches used.
-  const roleWinRate = memo((scope: string) => {
-    const patches = scope.split('+');
-    return winRate(
-      sumStats(data.roleStats.filter((r) => patches.includes(r.patch) && r.position === role)),
-    );
-  });
-  const baselineOn = (championId: number, patches: readonly string[]): GamesWins =>
-    sumStats(patches.flatMap((p) => roleRow.get(`${p}|${championId}|${role}`) ?? []));
+  // Role baseline on one patch.
+  const roleWinRate = memo((patch: string) =>
+    winRate(sumStats(data.roleStats.filter((r) => r.patch === patch && r.position === role))),
+  );
+  const baselineOn = (championId: number, patch: PatchId): GamesWins | undefined =>
+    roleRow.get(`${patch}|${championId}|${role}`);
+  const inRole = rowsByPatchAndChampion(data.roleStats, role);
+  const patchPair: PatchPair = { current: data.currentPatch, previous: data.previousPatch };
+  const roleHasCurrentGames = data.roleStats.some(
+    (r) => r.patch === data.currentPatch && r.position === role && r.games > 0,
+  );
 
-  // What the role usually gets vs/with a champion: games-weighted mean of (win rate with that
-  // pair − own baseline) over every candidate, on the patches used. `exact` = only rows with
-  // the other champion in the guessed role (same choice as the candidate's own rows).
+  // What the role usually gets vs/with a champion on one patch: games-weighted mean of (win rate
+  // with that pair − own baseline) over every candidate. `exact` = only rows with the other
+  // champion in the guessed role (same choice as the candidate's own rows).
   const usualDelta = memo((key: string) => {
-    const [side, scope = '', otherId, otherRole, exact] = key.split('|');
-    const patches = scope.split('+');
+    const [side, patch, otherId, otherRole, exact] = key.split('|');
     const rows: (GamesWins & {
       championId: number;
       position: Position;
@@ -217,10 +222,10 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
     })[] =
       side === 'vs'
         ? data.vs
-            .filter((r) => r.enemyId === Number(otherId) && patches.includes(r.patch))
+            .filter((r) => r.enemyId === Number(otherId) && r.patch === patch)
             .map((r) => ({ ...r, otherPosition: r.enemyPosition }))
         : data.with
-            .filter((r) => r.allyId === Number(otherId) && patches.includes(r.patch))
+            .filter((r) => r.allyId === Number(otherId) && r.patch === patch)
             .map((r) => ({ ...r, otherPosition: r.allyPosition }));
     const perCandidate = new Map<number, GamesWins>();
     for (const r of rows) {
@@ -231,13 +236,21 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
     let games = 0;
     let sum = 0;
     for (const [championId, s] of perCandidate) {
-      const base = baselineOn(championId, patches);
-      if (base.games === 0 || s.games === 0) continue;
+      const base = baselineOn(championId, patch as PatchId);
+      if (!base || base.games === 0 || s.games === 0) continue;
       sum += (winRate(s) - winRate(base)) * s.games;
       games += s.games;
     }
     return games > 0 ? sum / games : 0;
   });
+
+  /** One sample per patch, blended (the previous one only when there is a previous patch). */
+  const perPatch = (sample: (patch: PatchId) => PatchSample | undefined): Blend =>
+    blendPatches(
+      sample(data.currentPatch),
+      data.previousPatch ? sample(data.previousPatch) : undefined,
+      PRIOR.pair,
+    );
 
   const championIds = new Set(
     data.roleStats.filter((r) => r.position === role).map((r) => r.championId),
@@ -246,38 +259,33 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
 
   for (const championId of championIds) {
     if (excluded.has(championId) || (available && !available.has(championId))) continue;
-    const cur = roleRow.get(`${data.currentPatch}|${championId}|${role}`);
-    const prev = data.previousPatch
-      ? roleRow.get(`${data.previousPatch}|${championId}|${role}`)
-      : undefined;
-    const pc = choosePatches(
-      data.currentPatch,
-      data.previousPatch,
-      cur?.games ?? 0,
-      prev?.games ?? 0,
-    );
-    // Rows of a key on every patch used (one row, or one per patch when they are combined).
-    const onPatches = <T>(index: ReadonlyMap<string, T[]>, key: string): T[] =>
-      pc.patches.flatMap((p) => index.get(`${p}|${key}`) ?? []);
-    const base = baselineOn(championId, pc.patches);
-    if (base.games < ENGINE_CONFIG.minCandidateGames) continue;
-    const scope = pc.patches.join('+');
-    const baseWr = winRate(base);
+    const b = championBaseline(patchPair, inRole, roleWinRate, championId);
+    if (b.games < ENGINE_CONFIG.minCandidateGames) continue;
     const champName = names.champion(championId);
     const components: Component[] = [];
+    /** The candidate's delta with a pair on one patch: vs its own baseline and the usual term. */
+    const pairSample = (
+      stats: GamesWins,
+      patch: PatchId,
+      usual: () => number,
+    ): PatchSample | undefined => {
+      const own = baselineOn(championId, patch);
+      if (stats.games === 0 || !own || own.games === 0) return undefined;
+      return { value: winRate(stats) - winRate(own) - usual(), games: stats.games };
+    };
 
     // Base: own strength vs the role average.
-    const baseDelta = shrink(baseWr - roleWinRate(scope), base.games, K.base);
+    const baseDelta = shrink(b.delta, b.games, K.base);
     components.push({
       reason: {
         kind: 'base',
-        label: `${formatRate(baseWr)} win rate as ${ROLE_LABELS[role]} (${formatGames(base.games)})`,
+        label: `${formatRate(b.winRate)} win rate as ${ROLE_LABELS[role]} (${formatGames(shownGames(b.games))})`,
         delta: round(baseDelta),
-        games: base.games,
+        games: shownGames(b.games),
       },
       contribution: W.base * baseDelta,
       weight: W.base,
-      confidence: sampleConfidence(base.games, CK.base),
+      confidence: sampleConfidence(b.games, CK.base),
       order: 0,
     });
 
@@ -288,30 +296,36 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
       const isLaneSecondary = !isLane && lane.includes(enemy.role);
       const baseWeight = isLane ? W.matchup : isLaneSecondary ? W.laneSecondary : W.otherEnemy;
       const weight = baseWeight * (0.5 + 0.5 * enemy.probability);
-      const rows = onPatches(vsIndex, `${championId}|${enemy.championId}`);
-      const exact = sumStats(rows.filter((r) => r.enemyPosition === enemy.role));
-      const stats: GamesWins = exact.games > 0 ? exact : sumStats(rows);
-      const usual = usualDelta(
-        `vs|${scope}|${enemy.championId}|${enemy.role}|${exact.games > 0 ? 1 : 0}`,
+      const rowsOn = (p: PatchId) => vsIndex.get(`${p}|${championId}|${enemy.championId}`) ?? [];
+      // Rows with the enemy in its guessed role when there are any (on either patch), else all.
+      const exact = [data.currentPatch, data.previousPatch].some(
+        (p) => p !== null && rowsOn(p).some((r) => r.enemyPosition === enemy.role && r.games > 0),
       );
-      const delta = stats.games > 0 ? winRate(stats) - baseWr - usual : 0;
+      const blend = perPatch((p) =>
+        pairSample(
+          sumStats(rowsOn(p).filter((r) => !exact || r.enemyPosition === enemy.role)),
+          p,
+          () => usualDelta(`vs|${p}|${enemy.championId}|${enemy.role}|${exact ? 1 : 0}`),
+        ),
+      );
       const k = isLane ? K.matchup : isLaneSecondary ? K.laneSecondary : K.otherEnemy;
-      const shrunk = shrink(delta, stats.games, k);
+      const shrunk = shrink(blend.value, blend.games, k);
+      const games = shownGames(blend.games);
       const where = describeEnemyRole(enemy, isLane || isLaneSecondary);
       components.push({
         reason: {
           kind: 'matchup',
           label:
-            stats.games > 0
-              ? `${formatDelta(shrunk)} vs ${names.champion(enemy.championId)} compared with other ${ROLE_PLURALS[role]} (${where}, ${formatGames(stats.games)})`
+            blend.games > 0
+              ? `${formatDelta(shrunk)} vs ${names.champion(enemy.championId)} compared with other ${ROLE_PLURALS[role]} (${where}, ${formatGames(games)})`
               : `No games vs ${names.champion(enemy.championId)} yet (${where})`,
           delta: round(shrunk),
-          games: stats.games,
+          games,
           championIds: [enemy.championId],
         },
         contribution: weight * shrunk,
         weight,
-        confidence: sampleConfidence(stats.games, isLane || isLaneSecondary ? CK.matchup : CK.pair),
+        confidence: sampleConfidence(blend.games, isLane || isLaneSecondary ? CK.matchup : CK.pair),
         order: isLane ? 0 : isLaneSecondary ? 1 : 2,
       });
     }
@@ -324,14 +338,7 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
         laneOpponent.championId,
         laneOpponent.role,
       );
-      const diff = lanePhaseDiff(
-        rows,
-        {
-          current: data.currentPatch,
-          previous: pc.previousWeight > 0 ? data.previousPatch : null,
-        },
-        10,
-      );
+      const diff = lanePhaseDiff(rows, patchPair, 10);
       if (diff) {
         components.push({
           reason: lanePhaseReason(
@@ -354,29 +361,34 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
     for (const ally of allyRoles) {
       const isDuo = DUO_ROLES[role].includes(ally.role);
       const weight = (isDuo ? W.duo : W.otherAlly) * (0.5 + 0.5 * ally.probability);
-      const rows = onPatches(withIndex, `${championId}|${ally.championId}`);
-      const exact = sumStats(rows.filter((r) => r.allyPosition === ally.role));
-      const stats: GamesWins = exact.games > 0 ? exact : sumStats(rows);
-      const usual = usualDelta(
-        `with|${scope}|${ally.championId}|${ally.role}|${exact.games > 0 ? 1 : 0}`,
+      const rowsOn = (p: PatchId) => withIndex.get(`${p}|${championId}|${ally.championId}`) ?? [];
+      const exact = [data.currentPatch, data.previousPatch].some(
+        (p) => p !== null && rowsOn(p).some((r) => r.allyPosition === ally.role && r.games > 0),
       );
-      const delta = stats.games > 0 ? winRate(stats) - baseWr - usual : 0;
-      const shrunk = shrink(delta, stats.games, isDuo ? K.duo : K.otherAlly);
+      const blend = perPatch((p) =>
+        pairSample(
+          sumStats(rowsOn(p).filter((r) => !exact || r.allyPosition === ally.role)),
+          p,
+          () => usualDelta(`with|${p}|${ally.championId}|${ally.role}|${exact ? 1 : 0}`),
+        ),
+      );
+      const shrunk = shrink(blend.value, blend.games, isDuo ? K.duo : K.otherAlly);
+      const games = shownGames(blend.games);
       const where = isDuo ? `${duoLabel(role, ally.role)} duo` : ROLE_LABELS[ally.role];
       components.push({
         reason: {
           kind: isDuo ? 'duo' : 'with_comp',
           label:
-            stats.games > 0
-              ? `${formatDelta(shrunk)} with ${names.champion(ally.championId)} compared with other ${ROLE_PLURALS[role]} (${where}, ${formatGames(stats.games)})`
+            blend.games > 0
+              ? `${formatDelta(shrunk)} with ${names.champion(ally.championId)} compared with other ${ROLE_PLURALS[role]} (${where}, ${formatGames(games)})`
               : `No games with ${names.champion(ally.championId)} yet (${where})`,
           delta: round(shrunk),
-          games: stats.games,
+          games,
           championIds: [ally.championId],
         },
         contribution: weight * shrunk,
         weight,
-        confidence: sampleConfidence(stats.games, isDuo ? CK.duo : CK.pair),
+        confidence: sampleConfidence(blend.games, isDuo ? CK.duo : CK.pair),
         order: isDuo ? 0 : 5,
       });
     }
@@ -386,17 +398,19 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
       if (traits.length === 0) return;
       const weight = (side === 'enemy' ? W.vsComp : W.withComp) / traits.length;
       for (const trait of traits) {
-        const row = sumStats(onPatches(compIndex, `${championId}|${side}|${trait}`));
-        const games = row.games;
-        const delta =
-          games > 0 ? winRate(row) - baseWr - roleTraitShift(`${scope}|${side}|${trait}`) : 0;
-        const shrunk = shrink(delta, games, K.comp);
+        const blend = perPatch((p) =>
+          pairSample(sumStats(compIndex.get(`${p}|${championId}|${side}|${trait}`) ?? []), p, () =>
+            roleTraitShift(`${p}|${side}|${trait}`),
+          ),
+        );
+        const games = shownGames(blend.games);
+        const shrunk = shrink(blend.value, blend.games, K.comp);
         const what = `${side === 'enemy' ? 'vs' : 'with'} ${TRAIT_LABELS[trait]} ${side === 'enemy' ? 'teams' : 'allies'}`;
         components.push({
           reason: {
             kind: side === 'enemy' ? 'vs_comp' : 'with_comp',
             label:
-              games > 0
+              blend.games > 0
                 ? `${formatDelta(shrunk)} ${what} (${formatGames(games)})`
                 : `No games ${what} yet`,
             delta: round(shrunk),
@@ -405,7 +419,7 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
           },
           contribution: weight * shrunk,
           weight,
-          confidence: sampleConfidence(games, CK.comp),
+          confidence: sampleConfidence(blend.games, CK.comp),
           order: 1,
         });
       }
@@ -452,21 +466,27 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
           Math.abs(b.contribution) - Math.abs(a.contribution),
       )
       .map((c) => c.reason);
-    if (pc.previousWeight > 0) {
+    // Said while the previous patch weighs most, unless the whole role has no current games yet
+    // (every candidate would carry the same line).
+    if (data.previousPatch && roleHasCurrentGames && b.blend.previousShare >= PRIOR.reasonShare) {
+      const who = `${champName} ${ROLE_LABELS[role]} on ${data.currentPatch}`;
       reasons.unshift({
         kind: 'patch_fallback',
-        label: `${patchesLabel(pc.patches)} data: only ${formatGames(pc.currentGames)} of ${champName} ${ROLE_LABELS[role]} on ${data.currentPatch}`,
+        label:
+          b.blend.currentGames > 0
+            ? `Mostly ${data.previousPatch} data: ${formatGames(b.blend.currentGames)} of ${who} so far`
+            : `${data.previousPatch} data: no games of ${who} yet`,
         delta: 0,
-        games: base.games,
+        games: shownGames(b.games),
       });
     }
     candidates.push({
       championId,
       score: round(score, 5),
       confidence: round(confidence, 3),
-      patchesUsed: pc.patches,
-      games: base.games,
-      winRate: round(baseWr),
+      patchesUsed: b.patches,
+      games: shownGames(b.games),
+      winRate: round(b.winRate),
       reasons,
     });
   }
