@@ -1,5 +1,5 @@
 /** /health, /patches and /static/:patch. */
-import { getLatestPatch, listPatches, type Queryable } from '@pick-league/db';
+import { listPatches, type Queryable } from '@pick-league/db';
 import {
   ddragonChampionIconUrl,
   ddragonItemIconUrl,
@@ -16,18 +16,22 @@ import {
   type StatShardRow,
 } from '@pick-league/shared';
 import { ApiError } from '../errors.ts';
+import { pickStatsPatches, statsPatches } from './stats-patches.ts';
 
 export async function health(q: Queryable): Promise<HealthResponse> {
   try {
-    const latest = await getLatestPatch(q);
+    const kept = (await listPatches(q)).map((p) => p.id);
+    // The stats views being unreadable must not make the API unhealthy: the newest patch then.
+    const stats = await statsPatches(q, kept).catch(() => pickStatsPatches(kept, []));
+    const current = stats?.current ?? null;
     const [row] = await q<{ n: number; onPatch: number }[]>`
       SELECT count(*)::int AS n,
-             count(*) FILTER (WHERE patch = ${latest?.id ?? ''})::int AS "onPatch"
+             count(*) FILTER (WHERE patch = ${current ?? ''})::int AS "onPatch"
       FROM matches`;
     return {
       ok: true,
       db: true,
-      latestPatch: latest?.id ?? null,
+      latestPatch: current,
       matchCount: row?.n ?? 0,
       patchMatchCount: row?.onPatch ?? 0,
     };

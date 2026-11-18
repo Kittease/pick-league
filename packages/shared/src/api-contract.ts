@@ -194,11 +194,15 @@ export interface HealthResponse {
   ok: boolean;
   /** Database reachable. */
   db: boolean;
-  /** Newest kept patch, null before the first Data Dragon ingest. */
+  /**
+   * Patch the stats are served from: the newest kept patch with matches in the refreshed stats
+   * (the newest kept patch while none has any). Null before the first Data Dragon ingest.
+   * `/static/latest` can be one patch ahead of it.
+   */
   latestPatch: PatchId | null;
   /** Matches stored across kept patches. */
   matchCount: number;
-  /** Matches stored on `latestPatch` (what the current patch's stats are built on); 0 without one. */
+  /** Matches stored on `latestPatch`; 0 without one. */
   patchMatchCount: number;
 }
 

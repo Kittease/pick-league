@@ -45,6 +45,7 @@ export interface LcuStatus {
 export interface ApiStatus {
   state: 'checking' | 'ok' | 'no_data' | 'down';
   url: string;
+  /** Patch the stats are served from (the API's `/health`). */
   latestPatch: string | null;
   matchCount: number | null;
   /** Matches on `latestPatch` (what the stats of the current patch are built on). */

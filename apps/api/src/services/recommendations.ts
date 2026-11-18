@@ -25,6 +25,7 @@ import {
 } from '../engine/index.ts';
 import { ApiError } from '../errors.ts';
 import * as repo from '../stats/repository.ts';
+import { statsPatches } from './stats-patches.ts';
 
 export interface PatchContext {
   current: PatchId;
@@ -33,20 +34,20 @@ export interface PatchContext {
   patches: PatchId[];
 }
 
-/** Current/previous patch, or the forced one (`patch` in the body: no previous patch added). */
+/**
+ * Current/previous patch of the stats (see `pickStatsPatches`), or the forced one (`patch` in the
+ * body: no previous patch added).
+ */
 export async function patchContext(q: Queryable, forced?: PatchId): Promise<PatchContext> {
   const kept = (await listPatches(q)).map((p) => p.id);
   if (forced !== undefined) {
     if (!kept.includes(forced)) throw new ApiError('NOT_FOUND', `Unknown patch ${forced}`);
     return { current: forced, previous: null, patches: [forced] };
   }
-  const [current, previous] = kept;
-  if (!current) throw new ApiError('NO_DATA', 'No patch ingested yet');
-  return {
-    current,
-    previous: previous ?? null,
-    patches: previous ? [current, previous] : [current],
-  };
+  const stats = await statsPatches(q, kept);
+  if (!stats) throw new ApiError('NO_DATA', 'No patch ingested yet');
+  const { current, previous } = stats;
+  return { current, previous, patches: previous ? [current, previous] : [current] };
 }
 
 export async function picks(q: Queryable, req: PicksRequest): Promise<PicksResponse> {
