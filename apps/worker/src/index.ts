@@ -29,6 +29,9 @@ const db = createDb(config.databaseUrl, { max: 10 });
 
 const { applied } = await migrate(db, { log: (m) => log.info(m) });
 log.info('migrations ok', { applied: applied.length, platforms: config.platforms });
+if (config.collectPreviousPatch) {
+  log.warn('COLLECT_PREVIOUS_PATCH is on: the previous patch stays collected');
+}
 
 const riot = new RiotClient({ apiKey: config.riotApiKey, log });
 const patches = new PatchTracker(db, createDdragonClient(), { log });
@@ -41,6 +44,7 @@ const workers = config.platforms.map(
       patches,
       log,
       requestCount: () => riot.requestsFor(platform),
+      options: { collectPreviousPatch: config.collectPreviousPatch },
     }),
 );
 

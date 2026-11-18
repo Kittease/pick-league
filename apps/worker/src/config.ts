@@ -6,6 +6,8 @@ export interface WorkerConfig {
   databaseUrl: string;
   platforms: Platform[];
   logLevel: LogLevel;
+  /** Keep collecting the previous patch after the latest one is live (backfill by hand). */
+  collectPreviousPatch: boolean;
 }
 
 export class ConfigError extends Error {
@@ -40,8 +42,15 @@ export function loadConfig(env: Record<string, string | undefined>): WorkerConfi
   if (isLogLevel(rawLevel)) logLevel = rawLevel;
   else problems.push(`LOG_LEVEL must be one of ${LOG_LEVELS.join(', ')} (got "${rawLevel}")`);
 
+  const rawCollect = (env.COLLECT_PREVIOUS_PATCH ?? '').trim().toLowerCase();
+  let collectPreviousPatch = false;
+  if (rawCollect === 'true' || rawCollect === '1') collectPreviousPatch = true;
+  else if (rawCollect !== '' && rawCollect !== 'false' && rawCollect !== '0') {
+    problems.push(`COLLECT_PREVIOUS_PATCH must be true or false (got "${rawCollect}")`);
+  }
+
   if (problems.length > 0) {
     throw new ConfigError(`Invalid worker configuration:\n  - ${problems.join('\n  - ')}`);
   }
-  return { riotApiKey, databaseUrl, platforms, logLevel };
+  return { riotApiKey, databaseUrl, platforms, logLevel, collectPreviousPatch };
 }

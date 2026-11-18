@@ -115,6 +115,12 @@ export interface SchedulerOptions {
   /** A match deferred this many times by transient errors becomes FAILED (default 10). */
   maxTransientErrors: number;
   concurrency: { listing: number; match: number; daily: number; enrichment: number };
+  /**
+   * Keep collecting the previous patch after the latest one is live (default false). For a
+   * backfill of the previous patch by hand; while it is on, first listings go back up to
+   * `firstListingMaxMs`.
+   */
+  collectPreviousPatch: boolean;
 }
 
 export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
@@ -133,6 +139,7 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   maxTransientBackoffMs: 5 * 60_000,
   maxTransientErrors: 10,
   concurrency: { listing: 2, match: 3, daily: 1, enrichment: 2 },
+  collectPreviousPatch: false,
 };
 
 /**
@@ -687,9 +694,12 @@ export class PlatformWorker {
     if (live && this.generation === generation) this.latestLive = true;
   }
 
-  /** The previous patch is collected until the latest one is live on this platform. */
+  /**
+   * The previous patch is collected until the latest one is live on this platform (or always,
+   * with `collectPreviousPatch`).
+   */
   private collectsPrevious(): boolean {
-    return !this.latestLive;
+    return !this.latestLive || this.opts.collectPreviousPatch;
   }
 
   /**

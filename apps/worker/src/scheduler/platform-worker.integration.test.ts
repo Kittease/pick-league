@@ -727,6 +727,24 @@ d('PlatformWorker (Postgres)', () => {
     expect(await worker.processMatch(queued(ids.formerLate))).toBe('skipped');
   });
 
+  test('COLLECT_PREVIOUS_PATCH: the previous patch stays collected after the latest is live', async () => {
+    const backfill = new PlatformWorker({
+      platform: 'EUW1',
+      db,
+      riot,
+      patches,
+      clock: fixedClock,
+      options: { idleMs: 10, collectPreviousPatch: true },
+    });
+    await goLive(backfill);
+    expect((await backfill.progress()).latestPatchLive).toBe(true);
+    riot.matches.set('EUW1_7000000100', makeMatch('EUW1_7000000100', '15.21.700.1'));
+    riot.matches.set('EUW1_7000000010', makeMatch('EUW1_7000000010', '15.20.700.1'));
+    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000100', 'EUW1_7000000010']);
+    expect(await backfill.processMatch(queued('EUW1_7000000100'))).toBe('added');
+    expect(await backfill.processMatch(queued('EUW1_7000000010'))).toBe('skipped');
+  });
+
   test('patch newer than Data Dragon: deferred and a patch refresh is requested', async () => {
     riot.matches.set('EUW1_7000000900', makeMatch('EUW1_7000000900', '15.23.100.1'));
     await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000900', 'EUW1_7000000950']);
