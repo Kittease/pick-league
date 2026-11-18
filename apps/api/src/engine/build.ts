@@ -304,16 +304,17 @@ export function recommendBuild(req: BuildRequest, data: BuildData): BuildRespons
   const baseline = data.baseline;
   const baseWr = winRate(baseline);
   const byKind = (kind: ChoiceKind) => data.choices.filter((c) => c.kind === kind);
-  const fallback: Reason[] = data.patch.merged
-    ? [
-        {
-          kind: 'patch_fallback',
-          label: `${patchesLabel(data.patch.patches)} data: only ${formatGames(data.patch.currentGames)} on ${data.currentPatch}`,
-          delta: 0,
-          games: baseline.games,
-        },
-      ]
-    : [];
+  const fallback: Reason[] =
+    data.patch.previousWeight > 0
+      ? [
+          {
+            kind: 'patch_fallback',
+            label: `${patchesLabel(data.patch.patches)} data: only ${formatGames(data.patch.currentGames)} on ${data.currentPatch}`,
+            delta: 0,
+            games: baseline.games,
+          },
+        ]
+      : [];
 
   // Lane opponents and enemy traits.
   const playRates = rolePlayRates(data.roleStats);

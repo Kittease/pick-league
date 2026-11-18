@@ -1,7 +1,18 @@
 import { describe, expect, test } from 'bun:test';
 import { stageReference } from './build.ts';
 import { thresholds, traitsOf } from './fixtures.ts';
-import { choosePatches, formatDelta, formatGames, patchesLabel, shrink, sumByKey } from './math.ts';
+import {
+  blendPatches,
+  choosePatches,
+  formatDelta,
+  formatGames,
+  mixLike,
+  patchesLabel,
+  patchesUsedFor,
+  previousWeight,
+  shrink,
+  sumByKey,
+} from './math.ts';
 import { assignRoles, rolePlayRates } from './roles.ts';
 import { skillMaxOrder, synthesiseSkillSequence } from './skills.ts';
 import { compProfile, compTraits } from './traits.ts';
@@ -29,21 +40,91 @@ describe('choosePatches', () => {
   test('keeps the current patch alone from the threshold on', () => {
     expect(choosePatches('15.22', '15.21', 150, 900, 150)).toEqual({
       patches: ['15.22'],
-      merged: false,
+      previousWeight: 0,
+      previousShare: 0,
       currentGames: 150,
     });
   });
   test('adds the previous patch below the threshold', () => {
     expect(choosePatches('15.22', '15.21', 40, 10, 150)).toEqual({
       patches: ['15.22', '15.21'],
-      merged: true,
+      previousWeight: 1,
+      previousShare: 0.2,
       currentGames: 40,
     });
     expect(patchesLabel(['15.22', '15.21'])).toBe('15.22 + 15.21');
   });
   test('stays on the current patch when there is no previous data', () => {
-    expect(choosePatches('15.22', '15.21', 40, 0, 150).merged).toBe(false);
+    expect(choosePatches('15.22', '15.21', 40, 0, 150).previousWeight).toBe(0);
     expect(choosePatches('15.22', null, 40, 0, 150).patches).toEqual(['15.22']);
+  });
+});
+
+describe('previous patch prior', () => {
+  test('a previous-patch sample counts for at most the cap', () => {
+    expect(previousWeight(0, 1200)).toBe(0);
+    expect(previousWeight(600, 1200)).toBe(1);
+    expect(previousWeight(19_000, 1200)).toBeCloseTo(1200 / 19_000, 6);
+    expect(previousWeight(19_000, 1200)).toBeCloseTo(0.0632, 4);
+  });
+
+  test('worked example: 300 current games at +4 points, 19,000 previous at +1', () => {
+    const b = blendPatches({ value: 0.04, games: 300 }, { value: 0.01, games: 19_000 }, 1200);
+    expect(b.games).toBeCloseTo(1500, 9);
+    expect(b.value).toBeCloseTo((300 * 0.04 + 1200 * 0.01) / 1500, 9);
+    expect(b.value).toBeCloseTo(0.016, 9);
+    expect(b.previousShare).toBeCloseTo(0.8, 9);
+    expect(b.currentGames).toBe(300);
+    expect(b.previousGames).toBe(19_000);
+    expect(mixLike(b, 0.54, 0.51)).toBeCloseTo((300 * 0.54 + 1200 * 0.51) / 1500, 9);
+  });
+
+  test('missing samples', () => {
+    const onlyCurrent = blendPatches({ value: 0.03, games: 500 }, undefined, 1200);
+    expect(onlyCurrent).toMatchObject({ value: 0.03, games: 500, previousShare: 0 });
+    // A previous sample with no games is absent too.
+    expect(blendPatches({ value: 0.03, games: 500 }, { value: 0.5, games: 0 }, 1200)).toEqual(
+      onlyCurrent,
+    );
+    const onlyPrevious = blendPatches(undefined, { value: -0.02, games: 5000 }, 1200);
+    expect(onlyPrevious.value).toBeCloseTo(-0.02, 12);
+    expect(onlyPrevious.games).toBeCloseTo(1200, 9);
+    expect(onlyPrevious.previousShare).toBe(1);
+    expect(blendPatches(undefined, { value: -0.02, games: 300 }, 1200).games).toBe(300);
+    expect(blendPatches(undefined, undefined, 1200)).toMatchObject({
+      value: 0,
+      games: 0,
+      previousShare: 0,
+    });
+  });
+
+  test('continuity: no jump as current games grow (nothing happens at 150)', () => {
+    const previous = { value: 0.05, games: 900 };
+    const blends = Array.from({ length: 401 }, (_, n) =>
+      blendPatches({ value: 0, games: n }, previous, 1200),
+    );
+    const values = blends.map((b) => b.value);
+    const games = blends.map((b) => b.games);
+    const range = (xs: number[]) => Math.max(...xs) - Math.min(...xs);
+    // From 900 games at +5 points (n = 0) to 1,300 games at ~+3.5 points (n = 400).
+    expect(values[0]).toBeCloseTo(0.05, 12);
+    expect(values[400]).toBeCloseTo((0.05 * 900) / 1300, 12);
+    expect(games[400]).toBe(1300);
+    for (let n = 1; n <= 400; n++) {
+      expect(Math.abs((values[n] as number) - (values[n - 1] as number))).toBeLessThan(
+        0.01 * range(values),
+      );
+      expect(Math.abs((games[n] as number) - (games[n - 1] as number))).toBeLessThan(
+        0.01 * range(games),
+      );
+    }
+  });
+
+  test('patchesUsedFor lists the previous patch from 10 % of the effective games', () => {
+    const pair = { current: '15.22', previous: '15.21' };
+    expect(patchesUsedFor(pair, 0.09)).toEqual(['15.22']);
+    expect(patchesUsedFor(pair, 0.1)).toEqual(['15.22', '15.21']);
+    expect(patchesUsedFor({ current: '15.22', previous: null }, 1)).toEqual(['15.22']);
   });
 });
 

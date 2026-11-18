@@ -18,6 +18,25 @@ export const ENGINE_CONFIG = {
    * current and previous patches combined.
    */
   patchFallbackMinGames: 150,
+  /**
+   * The previous patch as a prior. Each statistic's previous-patch sample always contributes but
+   * counts for at most `cap` games (weight `min(1, cap / previous games)`), so it fades as games
+   * of the current patch arrive, with no threshold. Simulated inside 16.22: the strength estimate
+   * was off by 0.65–0.80 points with a prior of this size, 1.06–1.50 when the previous patch was
+   * dropped at 150 games.
+   */
+  previousPatchPrior: {
+    /** A champion+role's own record. */
+    strength: 1200,
+    /** Each pair statistic: a matchup, a duo, another ally or enemy, a composition trait, a lane phase. */
+    pair: 1200,
+    /** Builds: one factor per champion+role, from its previous-patch games (choices stay comparable). */
+    build: 3000,
+    /** `patchesUsed` lists the previous patch from this share of the effective games. */
+    listedShare: 0.1,
+    /** A `patch_fallback` reason says so from this share. */
+    reasonShare: 0.5,
+  },
   /** Champions with fewer games in the role (on the patch used) are not candidates. */
   minCandidateGames: 20,
 

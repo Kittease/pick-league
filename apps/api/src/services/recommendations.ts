@@ -113,7 +113,9 @@ export async function build(q: Queryable, req: BuildRequest): Promise<BuildRespo
   const cur = find(ctx.current);
   const prev = find(ctx.previous);
   const pc = choosePatches(ctx.current, ctx.previous, cur?.games ?? 0, prev?.games ?? 0);
-  const baseline = sumStats(pc.merged ? [cur, prev].flatMap((r) => r ?? []) : cur ? [cur] : []);
+  const baseline = sumStats(
+    pc.previousWeight > 0 ? [cur, prev].flatMap((r) => r ?? []) : cur ? [cur] : [],
+  );
   if (baseline.games === 0) {
     throw new ApiError('NO_DATA', `No games of champion ${req.championId} as ${req.role} yet`);
   }

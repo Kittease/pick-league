@@ -57,11 +57,96 @@ export const round = (x: number, digits = 4) => {
   return Math.round(x * f) / f;
 };
 
+/** The two kept patches. `previous` is null on the first patch or when a patch is forced. */
+export interface PatchPair {
+  current: PatchId;
+  previous: PatchId | null;
+}
+
+/** One statistic measured on one patch: a win rate, a delta, an average… over `games`. */
+export interface PatchSample {
+  value: number;
+  games: number;
+}
+
+export interface Blend {
+  /** Mean of the two values, weighted by current games and weight × previous games. */
+  value: number;
+  /** Effective games: current + weight × previous (not rounded). */
+  games: number;
+  currentGames: number;
+  previousGames: number;
+  /** min(1, cap / previousGames); 0 without previous games. */
+  previousWeight: number;
+  /** Share of the effective games that comes from the previous patch (0 when there are none). */
+  previousShare: number;
+}
+
+/** Weight of a previous-patch sample: it counts for at most `cap` games. */
+export function previousWeight(previousGames: number, cap: number): number {
+  return previousGames > 0 ? Math.min(1, cap / previousGames) : 0;
+}
+
+/**
+ * Blends one statistic's two per-patch samples (either may be missing or have 0 games): the
+ * previous patch is a prior worth at most `cap` games, so it fades as the current patch is played.
+ */
+export function blendPatches(
+  current: PatchSample | undefined,
+  previous: PatchSample | undefined,
+  cap: number,
+): Blend {
+  const currentGames = current && current.games > 0 ? current.games : 0;
+  const previousGames = previous && previous.games > 0 ? previous.games : 0;
+  const weight = previousWeight(previousGames, cap);
+  const fromPrevious = weight * previousGames;
+  const games = currentGames + fromPrevious;
+  if (games <= 0) {
+    return {
+      value: 0,
+      games: 0,
+      currentGames,
+      previousGames,
+      previousWeight: weight,
+      previousShare: 0,
+    };
+  }
+  const value =
+    ((current?.value ?? 0) * currentGames + (previous?.value ?? 0) * fromPrevious) / games;
+  return {
+    value,
+    games,
+    currentGames,
+    previousGames,
+    previousWeight: weight,
+    previousShare: fromPrevious / games,
+  };
+}
+
+/** Another value of the same cell (e.g. its win rate) mixed with the weights of `blend`. */
+export function mixLike(blend: Blend, current: number, previous: number): number {
+  if (blend.games <= 0) return 0;
+  const fromPrevious = blend.previousWeight * blend.previousGames;
+  return (current * blend.currentGames + previous * fromPrevious) / blend.games;
+}
+
+/** `[current]`, plus the previous patch when its share reaches `previousPatchPrior.listedShare`. */
+export function patchesUsedFor(patches: PatchPair, previousShare: number): PatchId[] {
+  return patches.previous !== null && previousShare >= ENGINE_CONFIG.previousPatchPrior.listedShare
+    ? [patches.current, patches.previous]
+    : [patches.current];
+}
+
+/** Effective games as shown in responses and labels. */
+export const shownGames = (games: number): number => Math.round(games);
+
 export interface PatchChoice {
-  /** Patches whose stats are combined, newest first: [current], or [current, previous]. */
+  /** Patches listed as used (see `patchesUsedFor`), newest first. */
   patches: PatchId[];
-  /** True when the previous patch is added because the current one lacks games. */
-  merged: boolean;
+  /** Weight of the previous patch's rows (0 = not used). */
+  previousWeight: number;
+  /** Share of the champion+role's effective games that comes from the previous patch. */
+  previousShare: number;
   /** Games of champion+role on the current patch alone. */
   currentGames: number;
 }
@@ -78,9 +163,14 @@ export function choosePatches(
   minGames: number = ENGINE_CONFIG.patchFallbackMinGames,
 ): PatchChoice {
   if (currentGames >= minGames || previous === null || previousGames === 0) {
-    return { patches: [current], merged: false, currentGames };
+    return { patches: [current], previousWeight: 0, previousShare: 0, currentGames };
   }
-  return { patches: [current, previous], merged: true, currentGames };
+  return {
+    patches: [current, previous],
+    previousWeight: 1,
+    previousShare: previousGames / (currentGames + previousGames),
+    currentGames,
+  };
 }
 
 /** "15.22" or "15.22 + 15.21" */

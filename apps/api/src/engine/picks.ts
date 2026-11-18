@@ -445,7 +445,7 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
           Math.abs(b.contribution) - Math.abs(a.contribution),
       )
       .map((c) => c.reason);
-    if (pc.merged) {
+    if (pc.previousWeight > 0) {
       reasons.unshift({
         kind: 'patch_fallback',
         label: `${patchesLabel(pc.patches)} data: only ${formatGames(pc.currentGames)} of ${champName} ${ROLE_LABELS[role]} on ${data.currentPatch}`,

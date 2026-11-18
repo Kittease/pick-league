@@ -33,7 +33,7 @@ function data(overrides: Partial<BuildData> = {}): BuildData {
   return {
     currentPatch: CUR,
     previousPatch: null,
-    patch: { patches: [CUR], merged: false, currentGames: 1000 },
+    patch: { patches: [CUR], previousWeight: 0, previousShare: 0, currentGames: 1000 },
     baseline: { games: 1000, wins: 500 },
     roleStats: [
       role(CUR, 89, 'UTILITY', 1000, 500),
@@ -728,7 +728,12 @@ describe('recommendBuild', () => {
       req(LEONA),
       data({
         previousPatch: '15.21',
-        patch: { patches: [CUR, '15.21'], merged: true, currentGames: 40 },
+        patch: {
+          patches: [CUR, '15.21'],
+          previousWeight: 1,
+          previousShare: 0.96,
+          currentGames: 40,
+        },
       }),
     );
     expect(b?.patchesUsed).toEqual([CUR, '15.21']);
