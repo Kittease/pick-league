@@ -86,6 +86,18 @@ describe.skipIf(!URL_)('stats status: collection (Postgres)', () => {
     expect(euw?.lastMatchStoredAt).not.toBeNull();
   });
 
+  test('a player id in the stored error never reaches the response', async () => {
+    const fakeId = `FAKE-PLAYER-ID_${'x'.repeat(63)}`;
+    await seedStatus('NA1', 0.5, {
+      error: `listing: Riot API match-v5.ids-by-puuid network error (/lol/match/v5/matches/by-puuid/${fakeId}/ids)`,
+    });
+    const c = await collection();
+    expect(c.platforms[0]?.lastError).toBe(
+      'listing: Riot API match-v5.ids-by-puuid network error (/lol/match/v5/matches/by-puuid/<redacted>/ids)',
+    );
+    expect(JSON.stringify(c)).not.toContain('xxxx');
+  });
+
   test('stalled when no platform heartbeated for 3 minutes', async () => {
     await seedStatus('KR', 4);
     await seedStatus('NA1', 12);

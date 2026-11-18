@@ -27,6 +27,26 @@ export function collectionState(
   return now.getTime() - lastHeartbeat > COLLECTION_STALL_MS ? 'stalled' : 'collecting';
 }
 
+/** Longest `lastError` served: enough to tell what failed. */
+const PUBLIC_ERROR_MAX_LENGTH = 300;
+
+/**
+ * The worker's last error as it may be served publicly. Riot request paths carry player ids
+ * (PUUIDs, 78 URL-safe characters) and `GET /stats/status` reaches the internet through the
+ * gateway: whatever follows `by-puuid/` and any id-like run of 40+ characters is replaced, even
+ * though the worker already redacts what it writes (older rows, future error sources). Match
+ * ids, endpoint names and hosts are much shorter and stay readable.
+ */
+export function publicError(message: string | null): string | null {
+  if (message === null) return null;
+  const clean = message
+    .replace(/(by-puuid\/)[A-Za-z0-9_%-]+/g, '$1<redacted>')
+    .replace(/[A-Za-z0-9_-]{40,}/g, '<redacted>');
+  return clean.length > PUBLIC_ERROR_MAX_LENGTH
+    ? `${clean.slice(0, PUBLIC_ERROR_MAX_LENGTH - 1)}…`
+    : clean;
+}
+
 /** One round trip: every `worker_status` row with its platform's newest stored match. */
 export async function readCollectionStatus(q: Queryable): Promise<CollectionStatus> {
   const rows = await q<
@@ -52,7 +72,7 @@ export async function readCollectionStatus(q: Queryable): Promise<CollectionStat
       platform: r.platform,
       heartbeatAt: r.heartbeat_at.toISOString(),
       authRejectedSince: r.auth_rejected_since?.toISOString() ?? null,
-      lastError: r.last_error,
+      lastError: publicError(r.last_error),
       lastErrorAt: r.last_error_at?.toISOString() ?? null,
       lastMatchStoredAt: r.last_match?.toISOString() ?? null,
     }),
