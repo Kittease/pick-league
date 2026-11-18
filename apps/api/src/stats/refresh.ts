@@ -39,6 +39,8 @@ export const STATS_REFRESH_ORDER: readonly {
   { view: 'stats_side_wins', concurrent: true },
   // Tier list filters by server and rank (0006_tierlist_filters.sql).
   { view: 'stats_tierlist_participants', concurrent: false, analyze: true },
+  // Results by game length, for the early / late profile (0019_game_length.sql).
+  { view: 'stats_champion_game_length', concurrent: true },
   { view: 'stats_tierlist_roles', concurrent: true },
   { view: 'stats_tierlist_vs', concurrent: true },
   { view: 'stats_tierlist_with', concurrent: true },
