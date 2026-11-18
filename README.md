@@ -81,8 +81,9 @@ bun run dev:desktop      # opens the app; start League whenever you like
 
 - It finds the League client by itself (and reconnects when the client restarts). During
   champion select it shows the best picks for your assigned role, each with its reasons
-  (win-rate delta + number of games) and **your mastery level on the champion icon**. Banned,
-  picked and not-owned champions are left out.
+  (win-rate delta + number of games) and **your mastery level on the champion icon**; picks are
+  ranked for your mastery of each champion (can be switched off in Settings). Banned, picked and
+  not-owned champions are left out.
   Once the lane opponent is picked, each pick also says how the lane usually goes against it
   ("Lane phase: −420 gold · −8 CS · −310 XP at 10 min", 2v2 for the bot lane).
 - When you lock in it switches to the build: the lane phase vs your lane opponent (at 10 and

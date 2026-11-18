@@ -421,11 +421,13 @@ Definitions: `packages/db/migrations/0002_stats_views.sql` (traits, compositions
 baselines, pairwise vs/with, build choices), `0003_stats_bans.sql` (tier list ban rates),
 `0006_tierlist_filters.sql` (tier list server/rank filters), `0007_support_quest_items.sql`,
 `0008_deterministic_comp_traits.sql`, `0010_lane_phase.sql`, `0012_choice_ally_contexts.sql` and
-`0015_items_done.sql`, `0016_side_wins.sql` and `0019_game_length.sql` (all eight below).
+`0015_items_done.sql`, `0016_side_wins.sql`, `0018_mastery_curve.sql` and `0019_game_length.sql` (all nine below).
 
 `stats_participant_choices` lists every build/rune/spell/skill choice of a participant as `(kind, choice, pos)`; `stats_choices`, `stats_choice_matchups` and `stats_choice_traits` aggregate it per champion + role, vs a lane opponent and vs an enemy composition trait; `stats_choice_duos` and `stats_choice_ally_traits` (items only) with a duo partner and with an ally composition trait.
 
 **Results per side** (`0016_side_wins.sql`). `stats_side_wins (patch, team_id, games, wins)`, unique `(patch, team_id)`: matches won by each side (team 100 = blue, 200 = red), remakes excluded, from `match_teams`. Two rows per patch; the side edge of the draft evaluation.
+
+**Mastery curve** (`0018_mastery_curve.sql`). `stats_champion_mastery (patch, position, champion_id, bucket, games, wins)`, unique `(patch, position, champion_id, bucket)`: games and wins of each champion + role by the player's mastery points on the champion, in buckets 0–6 (`width_bucket` over the edges 5k / 20k / 50k / 100k / 200k / 500k: 0 = under 5k … 6 = 500k and more; mirrored by `ENGINE_CONFIG.mastery.bucketEdges`). Source: non-remake participants with a position joined to `champion_masteries` on puuid + champion — the player's current mastery when their masteries were last fetched, not the mastery at match time; participants without a mastery row are left out. At most 7 rows per champion + role per patch; the mastery term of the picks. Its refresh takes about 3 minutes at 300k matches per patch (index lookups in `champion_masteries`).
 
 **Results by game length** (`0019_game_length.sql`). `stats_champion_game_length (patch, position, champion_id, bucket, games, wins)`, unique `(patch, position, champion_id, bucket)`: games and wins of a champion + role by length of the match (`matches.duration_s`), bucket `0` = under 25 min (< 1500 s), `1` = 25 to under 32 min, `2` = 32 min or more (≥ 1920 s; mirrors `GAME_LENGTH_MINUTES` of the API contract). One pass over `stats_tierlist_participants`, participants without a position excluded. Served (the early / late profile of `GET /tierlist/champion` and `POST /recommendations/draft`); explains, never scores.
 
@@ -492,7 +494,7 @@ banned matches / matches when every participant of a server is counted.
 
 ## Not in the database
 
-- **Your owned champions, your mastery, the live champion select, helper settings** (auto-apply toggle, API address): read from the League client by the desktop helper and kept on your machine.
+- **Your owned champions, your mastery, the live champion select, helper settings** (auto-apply toggle, API address): read from the League client by the desktop helper and kept on your machine. Your mastery points are sent with champion select picks requests (when "Rank picks for my mastery" is on) to compute the answer, and are not stored.
 - **Recommendation results**: computed by the API from the tables above at request time (with in-memory caching, since data changes at most hourly).
 
 ## Size estimate
