@@ -111,6 +111,53 @@ describe('TtlCache', () => {
     );
   });
 
+  test('picks cache keys separate mastery profiles by bucket', () => {
+    const base = { role: 'UTILITY', allies: [], enemies: [], bans: [] as number[] };
+    const key = picksCacheKey({
+      ...base,
+      masteries: [
+        { championId: 89, points: 12_000 },
+        { championId: 40, points: 600_000 },
+      ],
+    });
+    // Reordered, or other points in the same bucket (5k–20k): same answer, same key.
+    expect(
+      picksCacheKey({
+        ...base,
+        masteries: [
+          { championId: 40, points: 900_000 },
+          { championId: 89, points: 19_000 },
+        ],
+      }),
+    ).toBe(key);
+    // Another bucket.
+    expect(
+      picksCacheKey({
+        ...base,
+        masteries: [
+          { championId: 89, points: 20_000 },
+          { championId: 40, points: 600_000 },
+        ],
+      }),
+    ).not.toBe(key);
+    // 0 points = not listed.
+    expect(
+      picksCacheKey({
+        ...base,
+        masteries: [
+          { championId: 89, points: 12_000 },
+          { championId: 40, points: 600_000 },
+          { championId: 117, points: 0 },
+        ],
+      }),
+    ).toBe(key);
+    // Masteries sent (none above 0 points) still change the answer: not the same as no field.
+    expect(picksCacheKey({ ...base, masteries: [] })).not.toBe(picksCacheKey(base));
+    expect(picksCacheKey({ ...base, masteries: [{ championId: 117, points: 0 }] })).toBe(
+      picksCacheKey({ ...base, masteries: [] }),
+    );
+  });
+
   test('tier list cache keys include the server and rank filters', () => {
     const q = { role: 'UTILITY', patch: 'latest', platform: 'ALL', rank: 'MASTER' };
     const key = tierListCacheKey(q);

@@ -1,3 +1,5 @@
+import { masteryBucket, masteryPoints } from '../engine/mastery.ts';
+
 /**
  * In-memory TTL cache with a size cap (oldest entries evicted first).
  *
@@ -74,6 +76,18 @@ export class TtlCache<T> {
 
 const sortNums = (xs: readonly number[]) => [...new Set(xs)].sort((a, b) => a - b);
 
+/**
+ * The mastery profile of a picks request as `championId:bucket`, sorted. The answer only depends
+ * on buckets, and bucket 0 is the same as not listed, so those champions are left out.
+ */
+function masteryKey(masteries: readonly { championId: number; points: number }[]): string[] {
+  return [...masteryPoints(masteries)]
+    .map(([championId, points]) => [championId, masteryBucket(points)] as const)
+    .filter(([, bucket]) => bucket > 0)
+    .sort((a, b) => a[0] - b[0])
+    .map(([championId, bucket]) => `${championId}:${bucket}`);
+}
+
 /** Cache key of a picks request: order-insensitive lists, unknown (null) picks dropped. */
 export function picksCacheKey(req: {
   role: string;
@@ -83,6 +97,7 @@ export function picksCacheKey(req: {
   availableChampionIds?: readonly number[];
   limit?: number;
   patch?: string;
+  masteries?: readonly { championId: number; points: number }[];
 }): string {
   return JSON.stringify([
     'picks',
@@ -96,6 +111,8 @@ export function picksCacheKey(req: {
     req.availableChampionIds ? sortNums(req.availableChampionIds) : null,
     req.limit ?? null,
     req.patch ?? null,
+    // `[]` (masteries read, none above 0 points) still gets the mastery term: not the same as null.
+    req.masteries ? masteryKey(req.masteries) : null,
   ]);
 }
 

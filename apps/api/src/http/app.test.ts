@@ -4,6 +4,7 @@ import type { Db } from '@pick-league/db';
 import {
   type ApiErrorResponse,
   MAX_AVAILABLE_CHAMPION_IDS,
+  MAX_MASTERIES,
   MAX_REQUEST_BODY_BYTES,
   type StatsStatusResponse,
 } from '@pick-league/shared';
@@ -65,6 +66,21 @@ describe('request limits', () => {
     expect(JSON.stringify({ availableChampionIds: ids }).length).toBeLessThan(
       MAX_REQUEST_BODY_BYTES,
     );
+    expect(res.status).toBe(400);
+    expect(await errorCode(res)).toBe('BAD_REQUEST');
+  });
+
+  test('masteries are capped', async () => {
+    const masteries = Array.from({ length: MAX_MASTERIES + 1 }, (_, i) => ({
+      championId: i + 1,
+      points: 1000,
+    }));
+    const res = await app.request('/recommendations/picks', {
+      method: 'POST',
+      body: JSON.stringify({ role: 'UTILITY', masteries }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(JSON.stringify({ masteries }).length).toBeLessThan(MAX_REQUEST_BODY_BYTES);
     expect(res.status).toBe(400);
     expect(await errorCode(res)).toBe('BAD_REQUEST');
   });

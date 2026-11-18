@@ -53,17 +53,28 @@ export async function picks(q: Queryable, req: PicksRequest): Promise<PicksRespo
   const ctx = await patchContext(q, req.patch);
   const enemyIds = req.enemies.filter((e): e is number => e !== null);
   const allyIds = req.allies.flatMap((a) => (a.championId !== null ? [a.championId] : []));
-  const [roleStats, vs, withRows, compTraits, championTraits, thresholds, lanePhase, names] =
-    await Promise.all([
-      repo.loadRoleStats(q, ctx.patches),
-      repo.loadVsByEnemies(q, ctx.patches, req.role, enemyIds),
-      repo.loadWithByAllies(q, ctx.patches, req.role, allyIds),
-      repo.loadCompTraits(q, ctx.patches, req.role),
-      repo.loadChampionTraits(q, ctx.patches, [...enemyIds, ...allyIds]),
-      repo.loadThresholds(q, ctx.patches),
-      repo.loadLanePhaseByEnemies(q, ctx.patches, req.role, enemyIds),
-      repo.loadNames(q, ctx.patches),
-    ]);
+  const [
+    roleStats,
+    vs,
+    withRows,
+    compTraits,
+    championTraits,
+    thresholds,
+    lanePhase,
+    names,
+    mastery,
+  ] = await Promise.all([
+    repo.loadRoleStats(q, ctx.patches),
+    repo.loadVsByEnemies(q, ctx.patches, req.role, enemyIds),
+    repo.loadWithByAllies(q, ctx.patches, req.role, allyIds),
+    repo.loadCompTraits(q, ctx.patches, req.role),
+    repo.loadChampionTraits(q, ctx.patches, [...enemyIds, ...allyIds]),
+    repo.loadThresholds(q, ctx.patches),
+    repo.loadLanePhaseByEnemies(q, ctx.patches, req.role, enemyIds),
+    repo.loadNames(q, ctx.patches),
+    // Only champion select on the desktop sends masteries: nobody else reads the view.
+    req.masteries ? repo.loadMasteryRows(q, ctx.patches) : undefined,
+  ]);
   if (!roleStats.some((r) => r.position === req.role)) {
     throw new ApiError('NO_DATA', `No stats for role ${req.role} yet`);
   }
@@ -77,6 +88,7 @@ export async function picks(q: Queryable, req: PicksRequest): Promise<PicksRespo
     championTraits,
     thresholds,
     lanePhase,
+    mastery,
     names,
   });
 }
