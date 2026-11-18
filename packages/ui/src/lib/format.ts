@@ -52,6 +52,7 @@ export const REASON_KIND_LABEL: Record<ReasonKind, string> = {
   patch_fallback: 'Previous patch added',
   lane_phase: 'Lane phase',
   side: 'Side',
+  mastery: 'Your mastery',
 };
 
 const intFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });

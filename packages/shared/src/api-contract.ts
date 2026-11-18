@@ -101,6 +101,11 @@ export const REASON_KINDS = [
   'lane_phase',
   /** Draft evaluation: the edge of the side (blue or red) the team plays on. */
   'side',
+  /**
+   * Picks with `masteries`: how players with the user's mastery of the champion do compared
+   * with the champion's average (games = the sample behind it).
+   */
+  'mastery',
 ] as const;
 export type ReasonKind = (typeof REASON_KINDS)[number];
 
@@ -339,6 +344,8 @@ export interface StaticDataResponse {
 export const MAX_REQUEST_BODY_BYTES = 64 * 1024;
 /** Max `availableChampionIds` of a picks request (there are ~170 champions). */
 export const MAX_AVAILABLE_CHAMPION_IDS = 1000;
+/** Max `masteries` of a picks request (one per champion the user has played). */
+export const MAX_MASTERIES = 400;
 
 export const positionSchema = z.enum(POSITIONS);
 export const championIdSchema = z.number().int().positive();
@@ -348,6 +355,12 @@ export const patchIdSchema = z.string().regex(/^\d+\.\d+$/, 'expected a patch id
 export const pickAllySchema = z.object({
   championId: championIdSchema.nullable(),
   role: positionSchema.nullable(),
+});
+
+/** The user's mastery of one champion (League client only). */
+export const masterySchema = z.object({
+  championId: championIdSchema,
+  points: z.number().int().min(0),
 });
 
 export const picksRequestSchema = z.object({
@@ -361,6 +374,12 @@ export const picksRequestSchema = z.object({
   bans: z.array(championIdSchema).max(10).default([]),
   /** If given, candidates are restricted to these (e.g. the user's owned champions). */
   availableChampionIds: z.array(championIdSchema).max(MAX_AVAILABLE_CHAMPION_IDS).optional(),
+  /**
+   * The user's own mastery points per champion (desktop, champion select). When given, each
+   * candidate's score includes a `mastery` reason; a champion not listed counts as 0 points.
+   * Absent: no mastery term (same answer as before the field existed).
+   */
+  masteries: z.array(masterySchema).max(MAX_MASTERIES).optional(),
   /** Max candidates returned (default 20). */
   limit: z.number().int().min(1).max(100).optional(),
   /** Force a patch instead of the automatic current/previous fallback. */
@@ -398,7 +417,10 @@ export type BuildRequestInput = z.input<typeof buildRequestSchema>;
 
 export interface PickCandidate {
   championId: number;
-  /** Sum of shrunk win-rate deltas (higher = better); candidates are sorted by it, descending. */
+  /**
+   * Sum of shrunk win-rate deltas (higher = better), including the `mastery` term when the
+   * request has `masteries`; candidates are sorted by it, descending.
+   */
   score: number;
   /** 0..1, derived from sample sizes. */
   confidence: number;

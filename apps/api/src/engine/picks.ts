@@ -95,6 +95,8 @@ const KIND_ORDER: Record<Reason['kind'], number> = {
   // Same rank as matchup: placed right after the lane matchup it explains (see `order`).
   lane_phase: 1,
   duo: 2,
+  // After the lane and the duo, before the composition traits.
+  mastery: 2.5,
   vs_comp: 3,
   with_comp: 4,
   base: 5,

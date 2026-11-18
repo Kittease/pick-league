@@ -23,6 +23,15 @@ export {
   lanePhaseReason,
   lanePhaseRowsOf,
 } from './lane-phase.ts';
+export {
+  buildMasteryModel,
+  formatPoints,
+  type MasteryEffect,
+  type MasteryModel,
+  masteryBucket,
+  masteryPoints,
+  masteryReason,
+} from './mastery.ts';
 export * from './math.ts';
 export { type PicksData, recommendPicks, sideTraits } from './picks.ts';
 export * from './roles.ts';
