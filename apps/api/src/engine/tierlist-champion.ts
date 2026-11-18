@@ -124,7 +124,7 @@ export function buildTierListChampion(
     ).map((m) => {
       const lane = lanePhaseDiff(
         lanePhaseRowsOf(data.lanePhase ?? [], championId, m.championId, m.role),
-        patches,
+        { current: currentPatch, previous: patches.length > 1 ? previousPatch : null },
         10,
       );
       return lane ? { ...m, lane } : m;

@@ -6,6 +6,9 @@ import { lanePhaseDiff, lanePhaseReason } from './lane-phase.ts';
 const CUR = '15.22';
 const PREV = '15.21';
 const K = ENGINE_CONFIG.lanePhase.shrinkK;
+const CAP = ENGINE_CONFIG.previousPatchPrior.pair;
+const BOTH = { current: CUR, previous: PREV };
+const CUR_ONLY = { current: CUR, previous: null };
 
 describe('lanePhaseDiff', () => {
   const rows = [
@@ -13,10 +16,10 @@ describe('lanePhaseDiff', () => {
     lane(PREV, 117, 89, 'UTILITY', 40, { gold: -200, xp: -100, cs: -2 }),
   ];
 
-  test('patches combined by matchups, then shrunk toward 0', () => {
+  test('a previous row under the cap is summed with the current one, then shrunk toward 0', () => {
     // 100 matchups: gold (−400 × 60 − 200 × 40) / 100 = −320, kept × 100 / (100 + k).
     const keep = 100 / (100 + K);
-    expect(lanePhaseDiff(rows, [CUR, PREV], 10)).toEqual({
+    expect(lanePhaseDiff(rows, BOTH, 10)).toEqual({
       minute: 10,
       gold: Math.round(-320 * keep),
       xp: Math.round(-220 * keep),
@@ -26,19 +29,39 @@ describe('lanePhaseDiff', () => {
     });
   });
 
-  test('only the patches used', () => {
-    expect(lanePhaseDiff(rows, [CUR], 10)?.gold).toBe(Math.round((-400 * 60) / (60 + K)));
-    expect(lanePhaseDiff(rows, ['15.20'], 10)).toBeNull();
+  test('without a previous patch its rows are ignored, and rows of other patches always', () => {
+    expect(lanePhaseDiff(rows, CUR_ONLY, 10)?.gold).toBe(Math.round((-400 * 60) / (60 + K)));
+    expect(lanePhaseDiff(rows, { current: '15.20', previous: null }, 10)).toBeNull();
+    expect(lanePhaseDiff(rows, { current: '15.20', previous: '15.19' }, 10)).toBeNull();
+  });
+
+  test('a previous row over the cap counts for the cap', () => {
+    const big = [
+      lane(CUR, 117, 89, 'UTILITY', 300, { gold: -400, xp: -300, cs: -6 }),
+      lane(PREV, 117, 89, 'UTILITY', 5000, { gold: 200, xp: 100, cs: 2 }),
+    ];
+    // 300 + 1,200 effective matchups: gold (−400 × 300 + 200 × 1,200) / 1,500 = +80.
+    const n = 300 + CAP;
+    const keep = n / (n + K);
+    expect(lanePhaseDiff(big, BOTH, 10)).toEqual({
+      minute: 10,
+      gold: Math.round(((-400 * 300 + 200 * CAP) / n) * keep),
+      xp: Math.round(((-300 * 300 + 100 * CAP) / n) * keep),
+      cs: Math.round(((-6 * 300 + 2 * CAP) / n) * keep * 10) / 10,
+      duo: true,
+      games: 1500,
+    });
+    expect(lanePhaseDiff(big, BOTH, 10)?.gold).toBe(Math.round(80 * (1500 / (1500 + K))));
   });
 
   test('null under the minimum sample; 15 min uses its own count', () => {
     const min = ENGINE_CONFIG.lanePhase.minGames;
     const few = [lane(CUR, 117, 89, 'UTILITY', min - 1, { gold: -900, xp: 0, cs: 0 })];
-    expect(lanePhaseDiff(few, [CUR], 10)).toBeNull();
+    expect(lanePhaseDiff(few, CUR_ONLY, 10)).toBeNull();
     const enough = [lane(CUR, 117, 89, 'UTILITY', min, { gold: -900, xp: 0, cs: 0 })];
-    expect(lanePhaseDiff(enough, [CUR], 10)?.games).toBe(min);
+    expect(lanePhaseDiff(enough, CUR_ONLY, 10)?.games).toBe(min);
     // No 15-minute frames at all, then too few of them.
-    expect(lanePhaseDiff(rows, [CUR, PREV], 15)).toBeNull();
+    expect(lanePhaseDiff(rows, BOTH, 15)).toBeNull();
     const at15 = [
       lane(
         CUR,
@@ -51,7 +74,7 @@ describe('lanePhaseDiff', () => {
       ),
       lane(PREV, 117, 89, 'UTILITY', 10, { gold: 0, xp: 0, cs: 0 }),
     ];
-    expect(lanePhaseDiff(at15, [CUR, PREV], 15)).toMatchObject({
+    expect(lanePhaseDiff(at15, BOTH, 15)).toMatchObject({
       minute: 15,
       games: 30,
       gold: Math.round((600 * 30) / (30 + K)),
@@ -62,7 +85,7 @@ describe('lanePhaseDiff', () => {
 
   test('1v1 outside the bot lane', () => {
     const top = [lane(CUR, 122, 54, 'TOP', 50, { gold: 300, xp: 200, cs: 5 }, null, 'TOP')];
-    expect(lanePhaseDiff(top, [CUR], 10)?.duo).toBe(false);
+    expect(lanePhaseDiff(top, CUR_ONLY, 10)?.duo).toBe(false);
   });
 });
 

@@ -3,12 +3,13 @@
  * difference at 10 or 15 min (stats_champion_lane_phase; bot lane = 2v2). They explain a
  * matchup and never change a score: `delta` is 0 and `games` is the sample size.
  */
-import type { LanePhaseDiff, PatchId, Position, Reason } from '@pick-league/shared';
+import type { LanePhaseDiff, Position, Reason } from '@pick-league/shared';
 import { ENGINE_CONFIG } from './config.ts';
-import { round, shrink } from './math.ts';
+import { type PatchPair, previousWeight, round, shownGames, shrink } from './math.ts';
 import type { LanePhaseRow } from './types.ts';
 
 const LP = ENGINE_CONFIG.lanePhase;
+const PRIOR = ENGINE_CONFIG.previousPatchPrior;
 
 /** Bot laners are compared as a 2v2 (own + duo partner vs both enemy bot laners). */
 export function isDuoLane(role: Position): boolean {
@@ -27,13 +28,14 @@ const LANE_NAMES: Record<Position, string> = {
 const noNegativeZero = (x: number) => (x === 0 ? 0 : x);
 
 /**
- * Lane-phase difference at `minute` of `rows` (one champion vs one opponent, one row per patch)
- * on `patches`: per-patch averages combined by matchups, then shrunk toward 0 with
- * `lanePhase.shrinkK`. Null below `lanePhase.minGames` matchups with frames at that minute.
+ * Lane-phase difference at `minute` of `rows` (one champion vs one opponent, one row per patch):
+ * the current patch's averages, with the previous patch's as a prior worth at most
+ * `previousPatchPrior.pair` matchups, combined by (effective) matchups, then shrunk toward 0 with
+ * `lanePhase.shrinkK`. Null below `lanePhase.minGames` effective matchups at that minute.
  */
 export function lanePhaseDiff(
   rows: readonly LanePhaseRow[],
-  patches: readonly PatchId[],
+  patches: PatchPair,
   minute: 10 | 15,
 ): LanePhaseDiff | null {
   let games = 0;
@@ -41,9 +43,16 @@ export function lanePhaseDiff(
   let xp = 0;
   let cs = 0;
   for (const r of rows) {
-    if (!patches.includes(r.patch)) continue;
-    const n = minute === 10 ? r.games : r.games15;
-    if (n <= 0) continue;
+    const matchups = minute === 10 ? r.games : r.games15;
+    if (matchups <= 0) continue;
+    const weight =
+      r.patch === patches.current
+        ? 1
+        : r.patch === patches.previous
+          ? previousWeight(matchups, PRIOR.pair)
+          : 0;
+    if (weight === 0) continue;
+    const n = weight * matchups;
     games += n;
     gold += n * ((minute === 10 ? r.goldDiff10 : r.goldDiff15) ?? 0);
     xp += n * ((minute === 10 ? r.xpDiff10 : r.xpDiff15) ?? 0);
@@ -58,7 +67,7 @@ export function lanePhaseDiff(
     xp: noNegativeZero(Math.round(shrunk(xp))),
     cs: noNegativeZero(round(shrunk(cs), 1)),
     duo: isDuoLane(first.position),
-    games,
+    games: shownGames(games),
   };
 }
 

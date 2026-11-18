@@ -390,7 +390,14 @@ function recommendLanePhase(
   const rows = lanePhaseRowsOf(data.lanePhase, req.championId, opponent.championId, opponent.role);
   const note = opponent.known ? undefined : `likely ${ROLE_LABELS[opponent.role]}`;
   return ([10, 15] as const).flatMap((minute) => {
-    const diff = lanePhaseDiff(rows, data.patch.patches, minute);
+    const diff = lanePhaseDiff(
+      rows,
+      {
+        current: data.currentPatch,
+        previous: data.patch.previousWeight > 0 ? data.previousPatch : null,
+      },
+      minute,
+    );
     return diff
       ? [
           lanePhaseReason(

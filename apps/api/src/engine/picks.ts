@@ -324,7 +324,14 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
         laneOpponent.championId,
         laneOpponent.role,
       );
-      const diff = lanePhaseDiff(rows, pc.patches, 10);
+      const diff = lanePhaseDiff(
+        rows,
+        {
+          current: data.currentPatch,
+          previous: pc.previousWeight > 0 ? data.previousPatch : null,
+        },
+        10,
+      );
       if (diff) {
         components.push({
           reason: lanePhaseReason(
