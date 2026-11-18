@@ -22,6 +22,7 @@ import type {
   TeamDamage,
 } from '@pick-league/shared';
 import { DUO_ROLES, ENGINE_CONFIG, LANE_ROLES, ROLE_LABELS } from './config.ts';
+import { indexGameLength, teamGameLength } from './game-length.ts';
 import {
   choosePatches,
   formatDelta,
@@ -35,6 +36,7 @@ import {
 import { assignRoles, type RoleGuess, rolePlayRates } from './roles.ts';
 import type {
   ChampionTraitRow,
+  GameLengthRow,
   GamesWins,
   NameLookup,
   RoleStatRow,
@@ -61,6 +63,11 @@ export interface DraftData {
   championTraits: readonly ChampionTraitRow[];
   sides: readonly SideRow[];
   names: NameLookup;
+  /**
+   * stats_champion_game_length of the patches (every role, all summed): adds each team's early /
+   * late profile (`gameLength`). It explains and never changes the probability.
+   */
+  gameLength?: readonly GameLengthRow[];
 }
 
 const D = ENGINE_CONFIG.draft;
@@ -318,6 +325,19 @@ export function evaluateDraft(
       allies: teamDamage(allies, data),
       enemies: teamDamage(enemies, data),
     },
+    ...(data.gameLength ? { gameLength: draftGameLength(data.gameLength, roles) } : {}),
+  };
+}
+
+/** Each team's early / late profile, champions in their given or guessed roles. */
+function draftGameLength(
+  rows: readonly GameLengthRow[],
+  roles: DraftRoles,
+): NonNullable<DraftEvaluationResponse['gameLength']> {
+  const index = indexGameLength(rows);
+  return {
+    allies: teamGameLength(index, roles.allies),
+    enemies: teamGameLength(index, roles.enemies),
   };
 }
 

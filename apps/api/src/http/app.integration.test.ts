@@ -93,6 +93,66 @@ const shrunkLane = (x: number, n: number, digits = 0) => {
   return Math.round(((x * n) / (n + ENGINE_CONFIG.lanePhase.shrinkK)) * f) / f;
 };
 
+type GamesWinsCount = { games: number; wins: number };
+
+/**
+ * Early / late profile of every champion of `position`, recomputed in TypeScript from the
+ * generated matches of both patches (independent of the SQL view and of the engine module).
+ */
+function expectedGameLength(position: Position) {
+  const bucketOf = (s: number) => (s < 1500 ? 0 : s < 1920 ? 1 : 2);
+  const empty = (): GamesWinsCount[] => [0, 1, 2].map(() => ({ games: 0, wins: 0 }));
+  const own = new Map<number, GamesWinsCount[]>();
+  const role = empty();
+  for (const patch of [CUR, PREV]) {
+    for (const m of generateMatches(SEEDS[patch] as GenerateOptions)) {
+      if (m.match.isRemake) continue;
+      const b = bucketOf(m.match.durationS);
+      for (const p of m.participants) {
+        if (p.position !== position) continue;
+        const c = own.get(p.championId) ?? empty();
+        own.set(p.championId, c);
+        for (const acc of [c[b], role[b]] as GamesWinsCount[]) {
+          acc.games++;
+          if (p.win) acc.wins++;
+        }
+      }
+    }
+  }
+  const { shrinkK, minGames } = ENGINE_CONFIG.gameLength;
+  const sum = (x: GamesWinsCount[]) => ({
+    games: x.reduce((s, y) => s + y.games, 0),
+    wins: x.reduce((s, y) => s + y.wins, 0),
+  });
+  const R = sum(role);
+  const out = new Map<
+    number,
+    { early: number | null; late: number | null; earlyGames: number; lateGames: number }
+  >();
+  for (const [championId, c] of own) {
+    const N = sum(c);
+    const value = (b: 0 | 2) => {
+      const n = (c[b] as GamesWinsCount).games;
+      const rb = role[b] as GamesWinsCount;
+      if (n < minGames || N.games - n <= 0 || rb.games === 0) return null;
+      const raw =
+        (c[b] as GamesWinsCount).wins / n -
+        rb.wins / rb.games -
+        (N.wins / N.games - R.wins / R.games);
+      const nEff = 1 / (1 / n + 1 / (N.games - n));
+      const v = Math.round(((raw * nEff) / (nEff + shrinkK)) * 1e4) / 1e4;
+      return v === 0 ? 0 : v;
+    };
+    out.set(championId, {
+      early: value(0),
+      late: value(2),
+      earlyGames: (c[0] as GamesWinsCount).games,
+      lateGames: (c[2] as GamesWinsCount).games,
+    });
+  }
+  return out;
+}
+
 describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
   let db: Db;
   let cache: TtlCache<unknown>;
@@ -899,6 +959,56 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     const filtered = (await (await get(`${url}&platform=KR`)).json()) as TierListChampionResponse;
     expect(filtered.matchups.length).toBeGreaterThan(0);
     expect(filtered.matchups.some((m) => m.lane)).toBe(false);
+  });
+
+  test('game length view: every positioned participant of a non-remake match, once', async () => {
+    const [a] = await db<{ games: number }[]>`
+      SELECT sum(games)::int AS games FROM stats_champion_game_length`;
+    const [b] = await db<{ games: number }[]>`
+      SELECT sum(games)::int AS games FROM stats_champion_roles`;
+    expect(a?.games).toBeGreaterThan(0);
+    expect(a?.games).toBe(b?.games as number);
+  });
+
+  test('GET /tierlist/champion: early / late game profile, unfiltered only', async () => {
+    const expected = expectedGameLength('UTILITY');
+    const [championId, profile] = [...expected].sort(
+      ([, x], [, y]) => y.earlyGames + y.lateGames - (x.earlyGames + x.lateGames),
+    )[0] as [number, NonNullable<ReturnType<typeof expected.get>>];
+    // Not vacuous: the busiest support has enough long games for a late value.
+    expect(profile.late).toBeNumber();
+    const url = `/tierlist/champion?role=UTILITY&championId=${championId}`;
+    const res = await get(url);
+    expect(res.status).toBe(200);
+    const detail = (await res.json()) as TierListChampionResponse;
+    expect(detail.gameLength?.earlyGames).toBe(profile.earlyGames);
+    expect(detail.gameLength?.lateGames).toBe(profile.lateGames);
+    for (const key of ['early', 'late'] as const) {
+      const want = profile[key];
+      if (want === null) expect(detail.gameLength?.[key]).toBeNull();
+      else expect(detail.gameLength?.[key] as number).toBeCloseTo(want, 4);
+    }
+    const filtered = (await (await get(`${url}&platform=KR`)).json()) as TierListChampionResponse;
+    expect(filtered).not.toHaveProperty('gameLength');
+  });
+
+  test('draft: early / late profile of each team', async () => {
+    const allies = [
+      { championId: PLANTED.matchup.championId, role: 'UTILITY' as const },
+      { championId: 222, role: 'BOTTOM' as const },
+    ];
+    const res = await post('/recommendations/draft', {
+      allies,
+      enemies: [{ championId: PLANTED.matchup.opponentId, role: null }],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as DraftEvaluationResponse;
+    const g = body.gameLength;
+    expect(g?.allies.champions).toBeLessThanOrEqual(2);
+    expect(g?.enemies.champions).toBeLessThanOrEqual(1);
+    const support = expectedGameLength('UTILITY').get(allies[0]?.championId as number);
+    const bottom = expectedGameLength('BOTTOM').get(222);
+    expect(g?.allies.early as number).toBeCloseTo((support?.early ?? 0) + (bottom?.early ?? 0), 4);
   });
 
   test('stats refresh is skipped when matches did not change', async () => {

@@ -10,10 +10,18 @@ import type {
   TierListRelation,
 } from '@pick-league/shared';
 import { DUO_ROLES, ENGINE_CONFIG, LANE_ROLES } from './config.ts';
+import { championGameLength, indexGameLength } from './game-length.ts';
 import { lanePhaseDiff, lanePhaseRowsOf } from './lane-phase.ts';
 import { round, sampleConfidence, shrink, sumByKey, winRate } from './math.ts';
 import { championBaseline, rowsByPatchAndChampion } from './tierlist.ts';
-import type { GamesWins, LanePhaseRow, RoleStatRow, VsRow, WithRow } from './types.ts';
+import type {
+  GameLengthRow,
+  GamesWins,
+  LanePhaseRow,
+  RoleStatRow,
+  VsRow,
+  WithRow,
+} from './types.ts';
 
 export interface TierListChampionData {
   currentPatch: PatchId;
@@ -29,6 +37,11 @@ export interface TierListChampionData {
    * the matchups. Omitted (or empty) with server/rank filters: lane phase is unfiltered only.
    */
   lanePhase?: readonly LanePhaseRow[];
+  /**
+   * stats_champion_game_length of the role on the patches (all summed): adds `gameLength`.
+   * Omitted (or empty) with server/rank filters: the game-length profile is unfiltered only.
+   */
+  gameLength?: readonly GameLengthRow[];
 }
 
 /** The response without its filters; synergies always computed (the service drops them when filtered). */
@@ -91,6 +104,9 @@ export function buildTierListChampion(
   const isDuo = (r: WithRow) => DUO_ROLES[role].includes(r.allyPosition);
   const enemy = { id: (r: VsRow) => r.enemyId, role: (r: VsRow) => r.enemyPosition };
   const ally = { id: (r: WithRow) => r.allyId, role: (r: WithRow) => r.allyPosition };
+  const gameLength = data.gameLength?.length
+    ? championGameLength(indexGameLength(data.gameLength), role, championId)
+    : null;
   return {
     role,
     patch: currentPatch,
@@ -129,5 +145,6 @@ export function buildTierListChampion(
       ally.id,
       ally.role,
     ),
+    ...(gameLength ? { gameLength } : {}),
   };
 }

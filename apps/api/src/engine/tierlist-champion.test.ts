@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { ENGINE_CONFIG } from './config.ts';
 import { lane, role, vs, withAlly } from './fixtures.ts';
 import { buildTierListChampion, type TierListChampionData } from './tierlist-champion.ts';
+import type { GameLengthRow } from './types.ts';
 
 const CUR = '15.22';
 const PREV = '15.21';
@@ -188,4 +189,51 @@ describe('buildTierListChampion', () => {
     expect(byId.get(412)).not.toHaveProperty('lane');
     expect(d.duos.every((r) => r.lane === undefined)).toBe(true);
   });
+
+  test('carries the early / late game profile of the champion in the role', () => {
+    const d = buildTierListChampion(
+      'UTILITY',
+      111,
+      data({
+        gameLength: [
+          gameLength(CUR, 111, 0, 200, 120),
+          gameLength(CUR, 111, 1, 300, 150),
+          gameLength(CUR, 111, 2, 100, 40),
+          gameLength(CUR, 40, 0, 800, 380),
+          gameLength(CUR, 40, 1, 1200, 600),
+          gameLength(CUR, 40, 2, 400, 210),
+        ],
+      }),
+    );
+    expect(d.gameLength).toEqual({ early: 0.0256, late: -0.0254, earlyGames: 200, lateGames: 100 });
+  });
+
+  test('no game-length rows, or too few games: no gameLength property', () => {
+    expect(buildTierListChampion('UTILITY', 111, data())).not.toHaveProperty('gameLength');
+    const few = buildTierListChampion(
+      'UTILITY',
+      111,
+      data({
+        gameLength: [
+          gameLength(CUR, 111, 0, 50, 30),
+          gameLength(CUR, 111, 1, 300, 150),
+          gameLength(CUR, 111, 2, 50, 20),
+          gameLength(CUR, 40, 0, 800, 380),
+          gameLength(CUR, 40, 1, 1200, 600),
+          gameLength(CUR, 40, 2, 400, 210),
+        ],
+      }),
+    );
+    expect(few).not.toHaveProperty('gameLength');
+  });
 });
+
+function gameLength(
+  patch: string,
+  championId: number,
+  bucket: 0 | 1 | 2,
+  games: number,
+  wins: number,
+): GameLengthRow {
+  return { patch, position: 'UTILITY', championId, bucket, games, wins };
+}

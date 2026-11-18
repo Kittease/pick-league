@@ -182,12 +182,13 @@ export async function draft(q: Queryable, req: DraftRequest): Promise<DraftEvalu
   const roles = draftRoles(req, roleStats);
   const pairs = draftPairs(roles);
   const ids = [...req.allies, ...req.enemies].map((p) => p.championId);
-  const [vs, withRows, championTraits, sides, names] = await Promise.all([
+  const [vs, withRows, championTraits, sides, names, gameLength] = await Promise.all([
     repo.loadVsPairs(q, ctx.patches, pairs.vs),
     repo.loadWithPairs(q, ctx.patches, pairs.with),
     repo.loadChampionTraits(q, ctx.patches, ids),
     repo.loadSideWins(q, ctx.patches),
     repo.loadNames(q, ctx.patches),
+    repo.loadGameLength(q, ctx.patches),
   ]);
   return evaluateDraft(
     req,
@@ -200,6 +201,7 @@ export async function draft(q: Queryable, req: DraftRequest): Promise<DraftEvalu
       championTraits,
       sides,
       names,
+      gameLength,
     },
     roles,
   );

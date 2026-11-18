@@ -148,6 +148,14 @@ export interface LanePhaseRow {
   csDiff15: number | null;
 }
 
+/** stats_champion_game_length: bucket 0 = under 25 min, 1 = 25 to under 32 min, 2 = 32 min or more. */
+export interface GameLengthRow extends GamesWins {
+  patch: PatchId;
+  position: Position;
+  championId: number;
+  bucket: 0 | 1 | 2;
+}
+
 /** Static item info the build engine needs. */
 export interface ItemInfo {
   id: number;

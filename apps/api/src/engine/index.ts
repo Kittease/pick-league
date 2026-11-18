@@ -11,6 +11,12 @@ export {
   teamDamage,
 } from './draft.ts';
 export {
+  championGameLength,
+  type GameLengthIndex,
+  indexGameLength,
+  teamGameLength,
+} from './game-length.ts';
+export {
   formatLanePhase,
   isDuoLane,
   lanePhaseDiff,

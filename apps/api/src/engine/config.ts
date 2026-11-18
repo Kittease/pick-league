@@ -193,6 +193,20 @@ export const ENGINE_CONFIG = {
   },
 
   /**
+   * Early / late game profile (tier list champion details, draft evaluation): a champion's win
+   * rate in games under 25 min and of 32 min or more vs its overall win rate, compared with the
+   * role (stats_champion_game_length). Explains and never scores. Each delta is shrunk toward 0
+   * on the effective sample of "the bucket vs the champion's other games",
+   * 1 / (1 / n_bucket + 1 / n_other): on 16.22 the real spread between champions is 3.0 points
+   * for short games and 2.75 for long ones (k ≈ 270 and ≈ 330 effective games).
+   */
+  gameLength: {
+    shrinkK: 300,
+    /** A delta is shown only from this many games of champion+role in the bucket. */
+    minGames: 100,
+  },
+
+  /**
    * Draft evaluation (POST /recommendations/draft): the picks engine's deltas summed per team.
    * Weights from a held-out logistic fit on 16.22 (25k test matches): summed champion strengths
    * came out at ~0.92 of a calibrated win-rate difference and pair terms at ~0.62 (noisier), so

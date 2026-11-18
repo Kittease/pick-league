@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { draftRequestSchema } from '@pick-league/shared';
+import { draftRequestSchema, type Position } from '@pick-league/shared';
 import { ENGINE_CONFIG } from './config.ts';
 import { type DraftData, draftPairs, draftRoles, evaluateDraft } from './draft.ts';
 import { names, role, traitsOf, vs, withAlly } from './fixtures.ts';
+import { championGameLength, indexGameLength } from './game-length.ts';
+import type { GameLengthRow } from './types.ts';
 
 const CUR = '15.22';
 const D = ENGINE_CONFIG.draft;
@@ -198,5 +200,85 @@ describe('evaluateDraft', () => {
       ],
     });
     expect(r.damage.enemies).toEqual({ physical: 0, magic: 0, true: 0, champions: [] });
+  });
+
+  describe('game length profile', () => {
+    const gl = (
+      championId: number,
+      position: Position,
+      split: [number, number][],
+    ): GameLengthRow[] =>
+      split.map(([games, wins], bucket) => ({
+        patch: CUR,
+        position,
+        championId,
+        bucket: bucket as 0 | 1 | 2,
+        games,
+        wins,
+      }));
+    const rows = [
+      ...gl(412, 'UTILITY', [
+        [200, 120],
+        [300, 150],
+        [100, 40],
+      ]), // Thresh: strong early
+      ...gl(89, 'UTILITY', [
+        [300, 130],
+        [400, 200],
+        [300, 170],
+      ]), // Leona: strong late
+      ...gl(111, 'UTILITY', [
+        [800, 380],
+        [1200, 600],
+        [400, 210],
+      ]), // Nautilus
+      ...gl(222, 'BOTTOM', [
+        [300, 140],
+        [400, 200],
+        [300, 165],
+      ]), // Jinx: scales
+      ...gl(51, 'BOTTOM', [
+        [700, 360],
+        [900, 450],
+        [500, 240],
+      ]), // Caitlyn
+    ];
+    const draftReq = req({
+      allies: [
+        { championId: 412, role: 'UTILITY' },
+        { championId: 222, role: 'BOTTOM' },
+      ],
+      enemies: [{ championId: 89, role: null }], // guessed support
+    });
+
+    test("each team's sum of its champions' profiles, without changing the probability", () => {
+      const index = indexGameLength(rows);
+      const thresh = championGameLength(index, 'UTILITY', 412);
+      const jinx = championGameLength(index, 'BOTTOM', 222);
+      const leona = championGameLength(index, 'UTILITY', 89);
+      expect(thresh && jinx && leona).toBeTruthy();
+      const withRows = evaluateDraft(draftReq, data({ gameLength: rows }));
+      const without = evaluateDraft(draftReq, data());
+      expect(withRows.gameLength?.allies.champions).toBe(2);
+      expect(withRows.gameLength?.allies.early).toBeCloseTo(
+        (thresh?.early ?? 0) + (jinx?.early ?? 0),
+        4,
+      );
+      expect(withRows.gameLength?.allies.late).toBeCloseTo(
+        (thresh?.late ?? 0) + (jinx?.late ?? 0),
+        4,
+      );
+      expect(withRows.gameLength?.enemies).toEqual({
+        early: leona?.early ?? 0,
+        late: leona?.late ?? 0,
+        champions: 1,
+      });
+      expect(withRows.winProbability).toBe(without.winProbability);
+      expect(withRows.reasons).toEqual(without.reasons);
+    });
+
+    test('without game-length rows: no gameLength property', () => {
+      expect(evaluateDraft(draftReq, data())).not.toHaveProperty('gameLength');
+    });
   });
 });

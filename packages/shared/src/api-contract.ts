@@ -135,6 +135,31 @@ export interface LanePhaseDiff {
   games: number;
 }
 
+/** Game-length buckets of the early / late profile: under 25 min, 32 min or more. */
+export const GAME_LENGTH_MINUTES = { earlyUnder: 25, lateFrom: 32 } as const;
+
+/**
+ * How a champion+role does in short and long games: its win rate in games under 25 min (`early`)
+ * and of 32 min or more (`late`) minus its overall win rate, each compared with what the role does
+ * in those games, shrunk toward 0 by sample size. Explains, never scores.
+ */
+export interface GameLengthProfile {
+  /** Win-rate delta (0.028 = +2.8 points); null when the sample is too small. */
+  early: number | null;
+  late: number | null;
+  /** Games of champion+role under 25 min / of 32 min or more behind the deltas. */
+  earlyGames: number;
+  lateGames: number;
+}
+
+/** A team's early / late profile: the sum of its champions' deltas (a missing one counts 0). */
+export interface TeamGameLength {
+  early: number;
+  late: number;
+  /** Champions of the team that have a profile. */
+  champions: number;
+}
+
 export interface Reason {
   kind: ReasonKind;
   /** Human-readable, ready to display, e.g. "+2.8% vs Nautilus (bot lane, 412 games)". */
@@ -557,6 +582,11 @@ export interface DraftEvaluationResponse {
    */
   reasons: Reason[];
   damage: { allies: TeamDamage; enemies: TeamDamage };
+  /**
+   * Each team's early / late profile: the sum of its known champions' game-length deltas in their
+   * given or guessed roles. Explains, never changes `winProbability`.
+   */
+  gameLength?: { allies: TeamGameLength; enemies: TeamGameLength };
 }
 
 // ---------------------------------------------------------------------------
@@ -705,4 +735,10 @@ export interface TierListChampionResponse {
   synergies: TierListRelation[] | null;
   /** Filters applied (defaults filled in). */
   filters: TierListFilters;
+  /**
+   * Early / late game profile of champion+role (current and previous patch summed, or the
+   * requested patch alone). Omitted with server/rank filters (unfiltered data only) and when
+   * both deltas lack games.
+   */
+  gameLength?: GameLengthProfile;
 }

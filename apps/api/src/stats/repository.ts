@@ -22,6 +22,7 @@ import type {
   CompSide,
   CompThresholdRow,
   CompTraitRow,
+  GameLengthRow,
   ItemInfo,
   LanePhaseRow,
   NameLookup,
@@ -864,6 +865,43 @@ export async function loadSideWins(q: Queryable, patches: PatchId[]): Promise<Si
           {
             patch: r.patch,
             side: r.team_id === 100 ? ('blue' as const) : ('red' as const),
+            games: r.games,
+            wins: r.wins,
+          },
+        ]
+      : [],
+  );
+}
+
+/**
+ * Results by game length (stats_champion_game_length, 0019) per patch, of every role or only
+ * `position`: bucket 0 = under 25 min, 1 = 25 to under 32 min, 2 = 32 min or more.
+ */
+export async function loadGameLength(
+  q: Queryable,
+  patches: PatchId[],
+  position?: Position,
+): Promise<GameLengthRow[]> {
+  const rows = await q<
+    {
+      patch: string;
+      position: Position;
+      champion_id: number;
+      bucket: number;
+      games: number;
+      wins: number;
+    }[]
+  >`
+    SELECT patch, position, champion_id, bucket, games, wins FROM stats_champion_game_length
+    WHERE patch IN ${q(patches)} ${position ? q`AND position = ${position}` : q``}`;
+  return rows.flatMap((r) =>
+    r.bucket === 0 || r.bucket === 1 || r.bucket === 2
+      ? [
+          {
+            patch: r.patch,
+            position: r.position,
+            championId: r.champion_id,
+            bucket: r.bucket,
             games: r.games,
             wins: r.wins,
           },
