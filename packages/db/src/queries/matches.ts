@@ -1,3 +1,4 @@
+import type { PatchId, Platform } from '@pick-league/shared';
 import { byPuuid, chunks, inTransaction, type Queryable } from '../client.ts';
 import type { ParsedMatch } from '../types.ts';
 import { enqueueEnrichment } from './queues.ts';
@@ -256,5 +257,16 @@ export async function insertParsedMatch(
 /** Whether a match is already stored. */
 export async function matchExists(q: Queryable, matchId: string): Promise<boolean> {
   const [row] = await q`SELECT 1 FROM matches WHERE id = ${matchId}`;
+  return row !== undefined;
+}
+
+/** Whether a match of `patch` is stored for `platform`: the patch is live there. */
+export async function platformHasMatchOnPatch(
+  q: Queryable,
+  platform: Platform,
+  patch: PatchId,
+): Promise<boolean> {
+  const [row] = await q`
+    SELECT 1 FROM matches WHERE patch = ${patch} AND platform = ${platform} LIMIT 1`;
   return row !== undefined;
 }
