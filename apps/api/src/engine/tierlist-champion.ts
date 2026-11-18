@@ -1,7 +1,9 @@
 /**
  * Detail of one tier list champion: every lane opponent, duo partner and other ally it has enough
  * games with, each as a win-rate delta vs the champion's own baseline, shrunk by sample size and
- * sorted best first. Uses the same per-champion patch choice as its tier list entry.
+ * sorted best first. Each relation is measured inside each patch (vs the champion's own win rate
+ * on that patch), then the two patches are blended with the previous one as a capped prior, like
+ * the champion's tier list entry.
  */
 import type {
   PatchId,
@@ -12,7 +14,17 @@ import type {
 import { DUO_ROLES, ENGINE_CONFIG, LANE_ROLES } from './config.ts';
 import { championGameLength, indexGameLength } from './game-length.ts';
 import { lanePhaseDiff, lanePhaseRowsOf } from './lane-phase.ts';
-import { round, sampleConfidence, shrink, sumByKey, winRate } from './math.ts';
+import {
+  blendPatches,
+  mixLike,
+  type PatchPair,
+  round,
+  sampleConfidence,
+  shownGames,
+  shrink,
+  sumStats,
+  winRate,
+} from './math.ts';
 import { championBaseline, rowsByPatchAndChampion } from './tierlist.ts';
 import type {
   GameLengthRow,
@@ -52,6 +64,7 @@ export type TierListChampionDetail = Omit<TierListChampionResponse, 'filters' | 
 const TL = ENGINE_CONFIG.tierList;
 const K = ENGINE_CONFIG.tierList.shrinkK;
 const CK = ENGINE_CONFIG.confidenceK;
+const PRIOR = ENGINE_CONFIG.previousPatchPrior;
 
 /** Best first; ties: bigger sample, then champion id (stable output). */
 const byDelta = (a: TierListRelation, b: TierListRelation) =>
@@ -59,26 +72,42 @@ const byDelta = (a: TierListRelation, b: TierListRelation) =>
 
 function relations<R extends GamesWins & { patch: PatchId }>(
   rows: readonly R[],
-  patches: readonly PatchId[],
-  baseWr: number,
+  patches: PatchPair,
+  ownWinRate: (patch: PatchId) => GamesWins | undefined,
   k: { shrink: number; confidence: number },
   idOf: (r: R) => number,
   roleOf: (r: R) => Position,
 ): TierListRelation[] {
-  return sumByKey(
-    rows.filter((r) => patches.includes(r.patch)),
-    (r) => `${idOf(r)}|${roleOf(r)}`,
-  )
-    .filter((r) => r.games >= TL.minRelationGames)
-    .map((r) => ({
-      championId: idOf(r),
-      role: roleOf(r),
-      delta: round(shrink(winRate(r) - baseWr, r.games, k.shrink)),
-      winRate: round(winRate(r)),
-      games: r.games,
-      confidence: round(sampleConfidence(r.games, k.confidence), 3),
-    }))
-    .sort(byDelta);
+  const groups = new Map<string, R[]>();
+  for (const r of rows) {
+    const key = `${idOf(r)}|${roleOf(r)}`;
+    groups.set(key, [...(groups.get(key) ?? []), r]);
+  }
+  const out: TierListRelation[] = [];
+  for (const group of groups.values()) {
+    const first = group[0] as R;
+    const on = (patch: PatchId | null) =>
+      patch === null ? undefined : sumStats(group.filter((r) => r.patch === patch));
+    // Per patch: the relation's win rate vs the champion's own win rate on that patch.
+    const sample = (patch: PatchId | null) => {
+      const s = on(patch);
+      const own = patch === null ? undefined : ownWinRate(patch);
+      return s && s.games > 0 && own && own.games > 0
+        ? { value: winRate(s) - winRate(own), games: s.games }
+        : undefined;
+    };
+    const blend = blendPatches(sample(patches.current), sample(patches.previous), PRIOR.pair);
+    if (blend.games < TL.minRelationGames) continue;
+    out.push({
+      championId: idOf(first),
+      role: roleOf(first),
+      delta: round(shrink(blend.value, blend.games, k.shrink)),
+      winRate: round(mixLike(blend, winRate(on(patches.current)), winRate(on(patches.previous)))),
+      games: shownGames(blend.games),
+      confidence: round(sampleConfidence(blend.games, k.confidence), 3),
+    });
+  }
+  return out.sort(byDelta);
 }
 
 export function buildTierListChampion(
@@ -87,13 +116,12 @@ export function buildTierListChampion(
   data: TierListChampionData,
 ): TierListChampionDetail {
   const { currentPatch, previousPatch } = data;
-  const { patches, base } = championBaseline(
-    currentPatch,
-    previousPatch,
-    rowsByPatchAndChampion(data.roleStats, role),
-    championId,
-  );
-  const baseWr = winRate(base);
+  const pair: PatchPair = { current: currentPatch, previous: previousPatch };
+  const rows = rowsByPatchAndChampion(data.roleStats, role);
+  const roleWinRate = (patch: PatchId) =>
+    winRate(sumStats(data.roleStats.filter((r) => r.position === role && r.patch === patch)));
+  const b = championBaseline(pair, rows, roleWinRate, championId);
+  const own = (patch: PatchId) => rows.get(`${patch}|${championId}`);
   const vs = data.vs.filter(
     (r) =>
       r.position === role &&
@@ -111,36 +139,36 @@ export function buildTierListChampion(
     role,
     patch: currentPatch,
     championId,
-    patchesUsed: patches,
-    games: base.games,
-    winRate: round(baseWr),
+    patchesUsed: b.patches,
+    games: shownGames(b.games),
+    winRate: round(b.winRate),
     matchups: relations(
       vs,
-      patches,
-      baseWr,
+      pair,
+      own,
       { shrink: K.matchup, confidence: CK.matchup },
       enemy.id,
       enemy.role,
     ).map((m) => {
       const lane = lanePhaseDiff(
         lanePhaseRowsOf(data.lanePhase ?? [], championId, m.championId, m.role),
-        { current: currentPatch, previous: patches.length > 1 ? previousPatch : null },
+        pair,
         10,
       );
       return lane ? { ...m, lane } : m;
     }),
     duos: relations(
       allies.filter(isDuo),
-      patches,
-      baseWr,
+      pair,
+      own,
       { shrink: K.duo, confidence: CK.duo },
       ally.id,
       ally.role,
     ),
     synergies: relations(
       allies.filter((r) => !isDuo(r) && r.allyPosition !== role),
-      patches,
-      baseWr,
+      pair,
+      own,
       { shrink: K.synergy, confidence: CK.pair },
       ally.id,
       ally.role,

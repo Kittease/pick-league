@@ -7,16 +7,17 @@ import type { GameLengthRow } from './types.ts';
 const CUR = '15.22';
 const PREV = '15.21';
 const K = ENGINE_CONFIG.tierList.shrinkK;
+const CAP = ENGINE_CONFIG.previousPatchPrior.pair;
 
 function data(overrides: Partial<TierListChampionData> = {}): TierListChampionData {
   return {
     currentPatch: CUR,
     previousPatch: PREV,
     roleStats: [
-      role(CUR, 111, 'UTILITY', 2000, 1000), // Nautilus 50 %: enough games on current alone
+      role(CUR, 111, 'UTILITY', 2000, 1000), // Nautilus 50 % on both patches
       role(PREV, 111, 'UTILITY', 600, 300),
       role(CUR, 40, 'UTILITY', 50, 25), // Janna: few games on current…
-      role(PREV, 40, 'UTILITY', 450, 225), // …so both patches combined (250 / 500)
+      role(PREV, 40, 'UTILITY', 450, 225), // …mostly the previous patch (250 / 500)
       role(CUR, 64, 'JUNGLE', 1000, 500), // Lee Sin
     ],
     vs: [],
@@ -43,7 +44,7 @@ describe('buildTierListChampion', () => {
           vs(CUR, 111, 117, 'UTILITY', 4, 4), // under the floor
           vs(CUR, 111, 64, 'JUNGLE', 400, 400), // not a lane opponent
           vs(CUR, 40, 412, 'UTILITY', 400, 400), // another champion
-          vs(PREV, 111, 267, 'UTILITY', 400, 400), // patch not used
+          vs(PREV, 111, 267, 'UTILITY', 400, 400), // previous patch only: counts (under the cap)
         ],
       }),
     );
@@ -51,15 +52,19 @@ describe('buildTierListChampion', () => {
       role: 'UTILITY',
       patch: CUR,
       championId: 111,
-      patchesUsed: [CUR],
-      games: 2000,
+      // 600 previous games: 23 % of the effective games, listed.
+      patchesUsed: [CUR, PREV],
+      games: 2600,
       winRate: 0.5,
     });
     // Not capped: every opponent over the floor, worst ones at the end.
-    expect(ids(d.matchups)).toEqual([40, 222, 89, 16, 51, 412]);
-    expect(d.matchups[1]?.role).toBe('BOTTOM');
-    // +20 points raw, shrunk with k = 120 → 20 × 400 / 520.
-    expect(d.matchups[0]).toEqual({
+    expect(ids(d.matchups)).toEqual([267, 40, 222, 89, 16, 51, 412]);
+    // The previous-patch-only matchup: 100 % vs the champion's 50 % on 15.21, 400 games.
+    expect(d.matchups[0]).toMatchObject({ championId: 267, winRate: 1, games: 400 });
+    expect(d.matchups[0]?.delta).toBeCloseTo((0.5 * 400) / (400 + K.matchup), 4);
+    expect(d.matchups[2]?.role).toBe('BOTTOM');
+    // +20 points raw, shrunk with k = 550 → 20 × 400 / 950.
+    expect(d.matchups[1]).toEqual({
       championId: 40,
       role: 'UTILITY',
       delta: expect.closeTo((0.2 * 400) / (400 + K.matchup), 4),
@@ -129,6 +134,44 @@ describe('buildTierListChampion', () => {
     expect(ids(d.matchups)).toEqual([19]);
     expect(ids(d.duos)).toEqual([103, 122]);
     expect(ids(d.synergies)).toEqual([111, 222]);
+  });
+
+  test('a previous relation over the cap counts for 1,200 games', () => {
+    const d = buildTierListChampion(
+      'UTILITY',
+      111,
+      data({
+        roleStats: [
+          role(CUR, 111, 'UTILITY', 2000, 1000),
+          role(PREV, 111, 'UTILITY', 10_000, 5000),
+        ],
+        vs: [vs(CUR, 111, 40, 'UTILITY', 100, 60), vs(PREV, 111, 40, 'UTILITY', 3000, 1500)],
+      }),
+    );
+    const m = d.matchups[0];
+    expect(m?.games).toBe(100 + CAP);
+    expect(m?.games).toBe(1300);
+    // +10 points on 100 current games, 0 on 1,200 previous ones.
+    expect(m?.delta).toBeCloseTo(((100 * 0.1) / 1300) * (1300 / (1300 + K.matchup)), 4);
+    expect(m?.winRate).toBeCloseTo((100 * 0.6 + 1200 * 0.5) / 1300, 4);
+  });
+
+  test('a champion buffed on the new patch does not see all its matchups drop', () => {
+    // 50 % on 15.21, 56 % on 15.22; vs Thresh it does exactly as usual on each patch.
+    const d = buildTierListChampion(
+      'UTILITY',
+      111,
+      data({
+        roleStats: [role(CUR, 111, 'UTILITY', 3000, 1680), role(PREV, 111, 'UTILITY', 3000, 1500)],
+        vs: [vs(CUR, 111, 412, 'UTILITY', 50, 28), vs(PREV, 111, 412, 'UTILITY', 1000, 500)],
+      }),
+    );
+    const m = d.matchups[0];
+    expect(m?.games).toBe(1050);
+    expect(Math.abs(m?.delta ?? 1)).toBeLessThan(0.002);
+    expect(m?.delta).toBeCloseTo(0, 6);
+    // Summing the patches first would have put it at ≈ −2.7 points before shrinkage.
+    expect((28 + 500) / 1050 - (1680 + 1500) / 6000).toBeLessThan(-0.025);
   });
 
   test('a champion with few games on the current patch sums both patches, like its entry', () => {
