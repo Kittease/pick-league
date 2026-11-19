@@ -39,6 +39,8 @@ export const PRIORITY = {
   MATCH: 3,
   DAILY_REFRESH: 2,
   ENRICHMENT: 1,
+  /** Listings of untracked players: only what no other request is waiting for. */
+  EXTRA_MATCH_IDS: 0,
 } as const;
 export type Priority = (typeof PRIORITY)[keyof typeof PRIORITY];
 
@@ -91,6 +93,8 @@ export interface MatchIdsQuery {
   start?: number;
   /** 1..100 */
   count?: number;
+  /** Rate-limit priority (default `PRIORITY.MATCH_IDS`). */
+  priority?: Priority;
 }
 
 /** What the scheduler needs from Riot (a fake implements it in tests). */
@@ -190,7 +194,7 @@ export class RiotClient implements RiotApi {
       matchBaseUrl(platform),
       'match-v5.ids-by-puuid',
       `/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?${params}`,
-      PRIORITY.MATCH_IDS,
+      q.priority ?? PRIORITY.MATCH_IDS,
       signal,
       puuid,
     );

@@ -7,12 +7,15 @@
  * 3. match + timeline fetch             → match cluster, priority 3
  * 4. daily account + mastery refresh    → account cluster + platform host, priority 2
  * 5. enrichment (mastery + rank)        → platform host, priority 1
+ * 6. listing of untracked players       → match cluster, priority 0
  *
- * So level 5 only gets a host's budget when nothing of a higher level is waiting for it.
+ * So a level only gets a host's budget when nothing of a higher level is waiting for it.
  *
  * Players are tracked from the top of the ladder down: Challenger and Grandmaster, then Master by
  * LP, `masterStep` more each time the queues are nearly empty. Listings and match fetches follow
- * the ladder order too, so the best players' matches always come first.
+ * the ladder order too, so the best players' matches always come first. Riot's Master list stops
+ * at 10,000 players: once all of them are tracked and the queues are nearly empty, the highest
+ * ranked players seen in stored matches but not on the tracked ladder are listed too (level 6).
  */
 import {
   claimEnrichment,
@@ -26,6 +29,7 @@ import {
   deferMatch,
   deferMatchAfterError,
   enqueueMatchIds,
+  extraListingCandidates,
   failEnrichment,
   finishListing,
   finishWorkerRun,
@@ -60,6 +64,7 @@ import {
   type Platform,
   patchFromGameVersion,
   platformFromMatchId,
+  type SoloTier,
 } from '@pick-league/shared';
 import { type Clock, isAbortError, systemClock } from '../clock.ts';
 import { errorMessage, type Logger, silentLogger } from '../log.ts';
@@ -114,7 +119,21 @@ export interface SchedulerOptions {
   maxTransientBackoffMs: number;
   /** A match deferred this many times by transient errors becomes FAILED (default 10). */
   maxTransientErrors: number;
-  concurrency: { listing: number; match: number; daily: number; enrichment: number };
+  concurrency: {
+    listing: number;
+    match: number;
+    daily: number;
+    enrichment: number;
+    extraListing: number;
+  };
+  /**
+   * Untracked players (seen in stored matches, ranked by enrichment) are listed once every
+   * Master player of Riot's list is tracked and the queues are nearly empty: those of at least
+   * this tier (default MASTER), highest ranked first, each at most once per
+   * `extraListingIntervalMs` (default 6 h).
+   */
+  extraMinTier: SoloTier;
+  extraListingIntervalMs: number;
   /**
    * Keep collecting the previous patch after the latest one is live (default false). For a
    * backfill of the previous patch by hand; while it is on, first listings go back up to
@@ -138,7 +157,9 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   transientBackoffMs: 5_000,
   maxTransientBackoffMs: 5 * 60_000,
   maxTransientErrors: 10,
-  concurrency: { listing: 2, match: 3, daily: 1, enrichment: 2 },
+  concurrency: { listing: 2, match: 3, daily: 1, enrichment: 2, extraListing: 1 },
+  extraMinTier: 'MASTER',
+  extraListingIntervalMs: 6 * HOUR,
   collectPreviousPatch: false,
 };
 
@@ -163,7 +184,9 @@ export interface PlatformWorkerDeps {
   clock?: Clock;
   /** Requests sent so far for this platform (for `worker_runs`). */
   requestCount?: () => number;
-  options?: Partial<SchedulerOptions>;
+  options?: Partial<Omit<SchedulerOptions, 'concurrency'>> & {
+    concurrency?: Partial<SchedulerOptions['concurrency']>;
+  };
 }
 
 /** 'retry': transient error, the match was deferred without counting an attempt. */
@@ -191,6 +214,8 @@ export interface PlatformProgress {
   matchesRetried: number;
   enriched: number;
   dailyRefreshed: number;
+  /** Listings of untracked players (also counted in `playersPolled`). */
+  extraPlayersPolled: number;
 }
 
 /** Numeric part of 'EUW1_7234567890' (game ids grow with time on a platform). */
@@ -296,6 +321,9 @@ export class PlatformWorker {
   private readonly matchSource: WorkSource<QueuedMatch>;
   private readonly dailySource: WorkSource<DailyRefreshCandidate>;
   private readonly enrichmentSource: WorkSource<QueuedEnrichment>;
+  private readonly extraSource: WorkSource<string>;
+  /** Untracked players whose listing failed: not listed again before this time. */
+  private readonly extraCooldown = new Map<string, number>();
 
   private readonly counters = {
     matchesAdded: 0,
@@ -305,6 +333,7 @@ export class PlatformWorker {
     matchesRetried: 0,
     enriched: 0,
     dailyRefreshed: 0,
+    extraPlayersPolled: 0,
   };
   private run: { id: number; requestsAtStart: number; matches: number; players: number } | null =
     null;
@@ -361,6 +390,19 @@ export class PlatformWorker {
         return rows.filter((r) => !exclude.has(r.puuid));
       },
       (e) => e.puuid,
+    );
+    this.extraSource = new WorkSource(
+      async (exclude) => {
+        const now = this.clock.now();
+        for (const [p, until] of this.extraCooldown) if (until <= now) this.extraCooldown.delete(p);
+        const rows = await extraListingCandidates(this.db, this.platform, {
+          minTier: this.opts.extraMinTier,
+          syncedBefore: new Date(now - this.opts.extraListingIntervalMs),
+          limit: 20 + exclude.size + this.extraCooldown.size,
+        });
+        return rows.filter((p) => !exclude.has(p) && !this.extraCooldown.has(p));
+      },
+      (p) => p,
     );
   }
 
@@ -434,8 +476,25 @@ export class PlatformWorker {
    * `expandBelowPendingMatches` matches are PENDING.
    */
   async canTrackMoreMasters(): Promise<boolean> {
-    if (this.masterTotal <= this.masterTracked || !this.patches.ready) return false;
-    if (this.listingInFlight.size > 0) return false;
+    if (this.masterTotal <= this.masterTracked) return false;
+    return this.caughtUp();
+  }
+
+  /**
+   * Whether to list untracked players now: every Master player of Riot's list is tracked (it
+   * stops at 10,000) and the queues are nearly empty, as for `canTrackMoreMasters`.
+   */
+  async canListExtraPlayers(): Promise<boolean> {
+    if (this.masterTotal === 0 || this.masterTracked < this.masterTotal) return false;
+    return this.caughtUp();
+  }
+
+  /**
+   * No listing of a tracked player is waiting (players cooling down after a failed listing don't
+   * count) and at most `expandBelowPendingMatches` matches are PENDING.
+   */
+  private async caughtUp(): Promise<boolean> {
+    if (!this.patches.ready || this.listingInFlight.size > 0) return false;
     const now = this.clock.now();
     for (const p of this.played) {
       const until = this.listingCooldown.get(p);
@@ -528,8 +587,12 @@ export class PlatformWorker {
     this.played.add(puuid);
   }
 
-  /** Lists a player's ranked match ids since `matches_synced_until`; returns how many were new. */
-  async listPlayerMatches(puuid: string, signal?: AbortSignal): Promise<number> {
+  /**
+   * Lists a player's ranked match ids since `matches_synced_until`; returns how many were new.
+   * Untracked players (`extra`) are listed at the lowest priority and their matches are queued
+   * after every tracked player's.
+   */
+  async listPlayerMatches(puuid: string, signal?: AbortSignal, extra = false): Promise<number> {
     const now = this.clock.now();
     const since = await getMatchesSyncedUntil(this.db, puuid);
     const startMs =
@@ -541,7 +604,12 @@ export class PlatformWorker {
       const ids = await this.riot.getMatchIds(
         this.platform,
         puuid,
-        { startTime: Math.floor(startMs / 1000), start, count: 100 },
+        {
+          startTime: Math.floor(startMs / 1000),
+          start,
+          count: 100,
+          ...(extra ? { priority: PRIORITY.EXTRA_MATCH_IDS } : {}),
+        },
         signal,
       );
       // Ids come newest first: once one is known to be from an older patch, the rest are too.
@@ -550,14 +618,16 @@ export class PlatformWorker {
       const own = ids.filter((id) => platformFromMatchId(id) === this.platform);
       const oldAt = own.findIndex((id) => this.isKnownOldPatch(gameIdOf(id)));
       const kept = oldAt >= 0 ? own.slice(0, oldAt) : own;
-      added += await enqueueMatchIds(this.db, this.platform, kept, this.rankOf(puuid));
+      const fetchRank = extra ? this.ladderRank.size : this.rankOf(puuid);
+      added += await enqueueMatchIds(this.db, this.platform, kept, fetchRank);
       if (oldAt >= 0 || ids.length < 100) break;
     }
     // Clears the player's listing request, unless they played again since `now`.
     await finishListing(this.db, puuid, new Date(now - this.opts.listingOverlapMs), new Date(now));
     this.counters.playersPolled++;
+    if (extra) this.counters.extraPlayersPolled++;
     if (this.run) this.run.players++;
-    this.log.debug('match ids listed', { added, firstTime: since === null });
+    this.log.debug('match ids listed', { added, firstTime: since === null, extra });
     return added;
   }
 
@@ -922,6 +992,25 @@ export class PlatformWorker {
             return 'ok';
           },
           (e) => this.enrichmentSource.release(e),
+        ),
+      );
+    }
+    for (let i = 0; i < c.extraListing; i++) {
+      loops.push(
+        this.workLoop(
+          'extra listing',
+          signal,
+          async () => ((await this.canListExtraPlayers()) ? this.extraSource.next() : null),
+          async (p) => {
+            try {
+              await this.listPlayerMatches(p, signal, true);
+              return 'ok';
+            } catch (err) {
+              if (!isAbortError(err)) this.extraCooldown.set(p, this.clock.now() + HOUR);
+              throw err;
+            }
+          },
+          (p) => this.extraSource.release(p),
         ),
       );
     }

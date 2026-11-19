@@ -154,7 +154,7 @@ CREATE TABLE players (
   solo_losses           integer,
   rank_refreshed_at     timestamptz,
   masteries_refreshed_at timestamptz,
-  matches_synced_until  timestamptz,         -- tracked players only: newest match already listed → `startTime` for match ids
+  matches_synced_until  timestamptz,         -- listed players (tracked, or untracked Master+ ones): newest match already listed → `startTime` for match ids
   listing_requested_at  timestamptz,         -- tracked players only: "played" (ladder wins+losses changed), match ids not listed yet (0009)
   last_seen_in_match_at timestamptz,         -- used by cleanup and by the low-priority refresh rule
   created_at            timestamptz NOT NULL DEFAULT now()

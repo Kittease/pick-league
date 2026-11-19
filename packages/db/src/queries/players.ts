@@ -1,4 +1,4 @@
-import type { LadderTier, Platform } from '@pick-league/shared';
+import type { LadderTier, Platform, SoloTier } from '@pick-league/shared';
 import { byPuuid, chunks, inTransaction, type Queryable } from '../client.ts';
 import type {
   DailyRefreshCandidate,
@@ -165,6 +165,27 @@ export async function playersWithListingRequested(
     WHERE le.platform = ${platform} AND p.listing_requested_at IS NOT NULL
     ORDER BY p.listing_requested_at, p.puuid
     LIMIT ${limit}`;
+  return rows.map((r) => r.puuid);
+}
+
+/**
+ * Players of a platform that are not on the tracked ladder (seen in stored matches, ranked by
+ * enrichment) with a solo rank of at least `minTier`, whose match ids were never listed or were
+ * last synced before `syncedBefore`. Highest ranked first: tier, division, LP.
+ */
+export async function extraListingCandidates(
+  q: Queryable,
+  platform: Platform,
+  opts: { minTier: SoloTier; syncedBefore: Date; limit: number },
+): Promise<string[]> {
+  const rows = await q<{ puuid: string }[]>`
+    SELECT p.puuid FROM players p
+    WHERE p.platform = ${platform}
+      AND p.solo_tier >= ${opts.minTier}::solo_tier
+      AND (p.matches_synced_until IS NULL OR p.matches_synced_until < ${opts.syncedBefore})
+      AND NOT EXISTS (SELECT 1 FROM ladder_entries le WHERE le.puuid = p.puuid)
+    ORDER BY p.solo_tier DESC, p.solo_division NULLS FIRST, p.solo_lp DESC NULLS LAST, p.puuid
+    LIMIT ${opts.limit}`;
   return rows.map((r) => r.puuid);
 }
 
