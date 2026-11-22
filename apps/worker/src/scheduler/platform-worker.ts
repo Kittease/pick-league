@@ -178,6 +178,14 @@ export interface SchedulerOptions {
   /** A player whose last real listing is older than this is listed whatever is stored (default 24 h). */
   listingSkipSafetyMs: number;
   /**
+   * Riot's ladder counts a finished game late: measured on 2026-11-22, 11 % of the games that
+   * ended in the 2 minutes before a ladder refresh were in its wins + losses, 78 % of those that
+   * ended 8 to 10 minutes before, all of them from 10 minutes. A stored game that ended less than
+   * this before the ladder refresh may not be one of the new games, so it does not count for the
+   * skip rule (default 15 min).
+   */
+  listingSkipLadderLagMs: number;
+  /**
    * 'shadow' and 'on': a tracked player waits for the matches queued by better-placed players to
    * be fetched before being picked, at most this long (default 5 min), checking again after each
    * match and at least every `listingGatePollMs` (default 1 s).
@@ -222,6 +230,7 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   collectPreviousPatch: false,
   listingSkip: 'off',
   listingSkipSafetyMs: DAY,
+  listingSkipLadderLagMs: 15 * 60_000,
   listingGateMaxWaitMs: 5 * 60_000,
   listingGatePollMs: 1_000,
   diamondMaxTracked: 0,
@@ -1143,11 +1152,12 @@ export class PlatformWorker {
    * losses on the ladder, `snapshot` the ladder refresh that produced them, and the baseline of
    * their last real listing (`listed_games` at `listed_snapshot_at`, run at `listed_at`):
    * `explained` when `expected = games_now - listed_games` is positive and at least that many
-   * stored non-remake matches of the player ended after `listed_snapshot_at` and at or before
-   * `snapshot`. Never without a baseline, when the counters went down (season reset), or when
+   * stored non-remake matches of the player ended after `listed_snapshot_at` and at least
+   * `listingSkipLadderLagMs` before `snapshot`. Never without a baseline, when the counters went down (season reset), or when
    * `listed_at` is `listingSkipSafetyMs` old (a game Riot never counted would otherwise hide a
-   * later one for ever). A game that ended after the snapshot is not in `games_now`, so it must
-   * not stand for an older missing one; counting too few only costs a listing.
+   * later one for ever). A game that ended after the snapshot, or too shortly before it for Riot's
+   * ladder to have counted it, may not be in `games_now`, so it must not stand for an older
+   * missing one; counting too few only costs a listing.
    */
   private async checkListingSkip(
     puuid: string,
@@ -1173,7 +1183,9 @@ export class PlatformWorker {
     }
     const expected = gamesNow - listedGames;
     if (expected <= 0) return { explained: false, state };
-    const stored = await countStoredGamesEndedBetween(this.db, puuid, listedSnapshotAt, snapshotAt);
+    // Games that ended in the last minutes before the ladder refresh may not be in its counters.
+    const countedBy = new Date(snapshotAt.getTime() - this.opts.listingSkipLadderLagMs);
+    const stored = await countStoredGamesEndedBetween(this.db, puuid, listedSnapshotAt, countedBy);
     if (stored < expected) return { explained: false, state };
     return { explained: true, state, listedSnapshotAt, expected, stored };
   }

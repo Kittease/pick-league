@@ -190,10 +190,28 @@ d('PlatformWorker: listing skip rule (Postgres)', () => {
     expect(await w.listTrackedPlayer(P)).toBe('listed');
     expect(await baseline(P)).toEqual([61, NOW + HOUR, NOW + HOUR]);
 
-    // A game that ended exactly at the snapshot is in the counters. The one stored above, which
-    // ended 5 minutes after the previous snapshot, is in this window too: 2 expected, 2 stored.
-    await store(w, 'EUW1_7000000004', NOW + 2 * HOUR, [P]);
+    // A game that ended 15 minutes before the snapshot is in the counters. The one stored above,
+    // which ended 5 minutes after the previous snapshot, is in this window too: 2 expected, 2
+    // stored.
+    await store(w, 'EUW1_7000000004', NOW + 2 * HOUR - 15 * MIN, [P]);
     await anHourLater(w, 53);
+    expect(await w.listTrackedPlayer(P)).toBe('skipped');
+  });
+
+  test('on: a game that ended shortly before the ladder refresh does not count (Riot counts it late)', async () => {
+    const w = await tracked('on');
+    // One new game on the ladder, and the only stored one ended 10 minutes before the refresh:
+    // the ladder may not have it yet, so the counted game may be another one, not stored.
+    await store(w, 'EUW1_7000000001', NOW + 50 * MIN, [P]);
+    await anHourLater(w, 51);
+    expect(await w.listTrackedPlayer(P)).toBe('listed');
+    expect(await baseline(P)).toEqual([61, NOW + HOUR, NOW + HOUR]);
+  });
+
+  test('on: the margin for games Riot counts late is an option', async () => {
+    const w = await tracked('on', { listingSkipLadderLagMs: 5 * MIN });
+    await store(w, 'EUW1_7000000001', NOW + 50 * MIN, [P]);
+    await anHourLater(w, 51);
     expect(await w.listTrackedPlayer(P)).toBe('skipped');
   });
 

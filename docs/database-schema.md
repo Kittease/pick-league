@@ -196,7 +196,8 @@ CREATE TABLE ladder_entries (
 -- once updated_at is 24 h old; one who shows up on an apex list becomes an apex row.
 -- Skip rule: with expected = wins + losses - listed_games, a player about to be listed is skipped
 -- when expected > 0 and at least that many of their stored non-remake matches ended after
--- listed_snapshot_at and at or before games_changed_at; never when listed_at is 24 h old.
+-- listed_snapshot_at and at least 15 minutes before games_changed_at (Riot's ladder counts a
+-- finished game up to 10 minutes late); never when listed_at is 24 h old.
 
 CREATE TABLE champion_masteries (
   puuid          text     NOT NULL REFERENCES players ON DELETE CASCADE,
@@ -366,11 +367,13 @@ CREATE INDEX match_fetch_queue_pending_idx
 
 -- LISTING_SKIP=shadow (0024): every listing still runs; one row per listing the skip rule would
 -- have skipped that nevertheless added ids to match_fetch_queue. Recorded as is: a game that
--- started after snapshot_at is legitimately new, so real misses are found afterwards, e.g.
+-- ended after snapshot_at, or in the 10 minutes before it (not yet in Riot's counters), is
+-- legitimately new, so real misses are found afterwards, e.g.
 --   SELECT s.id, m.id, m.started_at FROM listing_skip_misses s
 --   CROSS JOIN LATERAL unnest(s.new_match_ids) AS new_id
 --   JOIN matches m ON m.id = new_id
---   WHERE NOT m.is_remake AND m.started_at + make_interval(secs => m.duration_s) <= s.snapshot_at;
+--   WHERE NOT m.is_remake
+--     AND m.started_at + make_interval(secs => m.duration_s) <= s.snapshot_at - interval '15 minutes';
 -- No foreign key (rows outlive a purged player) and no cleanup: empty it by hand after analysis.
 CREATE TABLE listing_skip_misses (
   id                 bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
