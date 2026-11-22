@@ -27,7 +27,10 @@ See [docs/architecture.md](docs/architecture.md) and [docs/database-schema.md](d
 ## Server (VPS)
 
 Runs on any Linux box with Docker (sized for 6 cores, 12 GB RAM, 100 GB disk; see the limits in
-`docker-compose.yml`).
+`docker-compose.yml`). The database keeps two patches at about 22 KB per match: ~13 GB for two full
+patches of every Master+ player (an estimate, see "Size estimate" in
+[docs/database-schema.md](docs/database-schema.md)), more with Diamond players
+(`DIAMOND_MAX_TRACKED`).
 
 1. Install Docker Engine with the compose plugin and clone this repository.
 2. `cp .env.example .env`, then set `RIOT_API_KEY`, a strong `POSTGRES_PASSWORD` (**before the
