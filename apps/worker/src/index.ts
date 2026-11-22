@@ -1,6 +1,7 @@
 /**
  * PickLeague worker: crawls high-elo ranked games from the Riot API into Postgres.
- * See docs/architecture.md ("Worker"). Config via env: RIOT_API_KEY, DATABASE_URL, PLATFORMS, LOG_LEVEL.
+ * See docs/architecture.md ("Worker"). Config via env: RIOT_API_KEY, DATABASE_URL, PLATFORMS,
+ * LOG_LEVEL, COLLECT_PREVIOUS_PATCH, LISTING_SKIP.
  */
 import { createDb, migrate } from '@pick-league/db';
 import { createDdragonClient } from '@pick-league/shared';
@@ -32,6 +33,11 @@ log.info('migrations ok', { applied: applied.length, platforms: config.platforms
 if (config.collectPreviousPatch) {
   log.warn('COLLECT_PREVIOUS_PATCH is on: the previous patch stays collected');
 }
+if (config.listingSkip !== 'off') {
+  log.info('collection settings', {
+    listingSkip: config.listingSkip,
+  });
+}
 
 const riot = new RiotClient({ apiKey: config.riotApiKey, log });
 const patches = new PatchTracker(db, createDdragonClient(), { log });
@@ -44,7 +50,10 @@ const workers = config.platforms.map(
       patches,
       log,
       requestCount: () => riot.requestsFor(platform),
-      options: { collectPreviousPatch: config.collectPreviousPatch },
+      options: {
+        collectPreviousPatch: config.collectPreviousPatch,
+        listingSkip: config.listingSkip,
+      },
     }),
 );
 

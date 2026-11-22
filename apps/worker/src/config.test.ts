@@ -27,3 +27,23 @@ describe('loadConfig: COLLECT_PREVIOUS_PATCH', () => {
     expect(load).toThrow(/COLLECT_PREVIOUS_PATCH/);
   });
 });
+
+describe('loadConfig: LISTING_SKIP', () => {
+  test.each([undefined, '', 'off', ' OFF '])('off with %p', (value) => {
+    expect(loadConfig({ ...VALID, LISTING_SKIP: value }).listingSkip).toBe('off');
+  });
+
+  test.each([
+    ['shadow', 'shadow'],
+    [' Shadow ', 'shadow'],
+    ['on', 'on'],
+  ] as const)('%p is %p', (value, mode) => {
+    expect(loadConfig({ ...VALID, LISTING_SKIP: value }).listingSkip).toBe(mode);
+  });
+
+  test('anything else is a configuration error', () => {
+    const load = () => loadConfig({ ...VALID, LISTING_SKIP: 'true' });
+    expect(load).toThrow(ConfigError);
+    expect(load).toThrow(/LISTING_SKIP/);
+  });
+});

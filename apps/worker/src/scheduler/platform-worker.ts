@@ -16,26 +16,36 @@
  * the ladder order too, so the best players' matches always come first. Riot's Master list stops
  * at 10,000 players: once all of them are tracked and the queues are nearly empty, the highest
  * ranked players seen in stored matches but not on the tracked ladder are listed too (level 6).
+ *
+ * Listing skip rule (`listingSkip` 'shadow' | 'on'): a tracked player whose new games are all
+ * stored already (found through other players) needs no listing. For that the matches a listing
+ * queues must be stored before the next players are decided, so a tracked player is only picked
+ * for a listing once no match queued by a better-placed player is still to be fetched.
  */
 import {
   claimEnrichment,
   claimPendingMatches,
+  clearListingRequest,
   clearWorkerAuthRejected,
   completeEnrichment,
   countEnrichmentQueue,
   countPendingMatches,
+  countStoredGamesEndedBetween,
   type DailyRefreshCandidate,
   type Db,
   deferMatch,
   deferMatchAfterError,
-  enqueueMatchIds,
+  enqueueNewMatchIds,
   extraListingCandidates,
   failEnrichment,
   finishListing,
   finishWorkerRun,
+  getListingSkipState,
   getMatchesSyncedUntil,
+  hasPendingMatchBefore,
   insertParsedMatch,
   type LadderEntryInput,
+  type ListingSkipState,
   ladderOrder,
   type MasteryInput,
   markMatchFailed,
@@ -47,8 +57,10 @@ import {
   playersWithListingRequested,
   type QueuedEnrichment,
   type QueuedMatch,
+  recordListingSkipMiss,
   recordWorkerError,
   replaceMasteries,
+  setListingBaseline,
   skipPendingMatchesUpTo,
   startWorkerRun,
   touchWorkerStatus,
@@ -57,8 +69,8 @@ import {
   upsertLadder,
 } from '@pick-league/db';
 import {
+  type ApexLadderTier,
   type ChampionMasteryDto,
-  type LadderTier,
   type LeagueListDto,
   type Platform,
   patchFromGameVersion,
@@ -77,6 +89,14 @@ import { WorkSource } from './work-source.ts';
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const MAX_LISTING_RETRY_MS = 6 * HOUR;
+
+/**
+ * Listing skip rule. 'off': every tracked player who played is listed. 'on': a player whose new
+ * games are all stored already is not listed. 'shadow': the rule is evaluated the same way but
+ * every listing still runs, and what a skipped listing would have missed is recorded.
+ */
+export const LISTING_SKIP_MODES = ['off', 'shadow', 'on'] as const;
+export type ListingSkipMode = (typeof LISTING_SKIP_MODES)[number];
 
 export interface SchedulerOptions {
   /** Ladder refresh period (default 1 h). */
@@ -139,6 +159,17 @@ export interface SchedulerOptions {
    * `firstListingMaxMs`.
    */
   collectPreviousPatch: boolean;
+  /** Listing skip rule (default 'off': exactly the behaviour without it). */
+  listingSkip: ListingSkipMode;
+  /** A player whose last real listing is older than this is listed whatever is stored (default 24 h). */
+  listingSkipSafetyMs: number;
+  /**
+   * 'shadow' and 'on': a tracked player waits for the matches queued by better-placed players to
+   * be fetched before being picked, at most this long (default 5 min), checking again after each
+   * match and at least every `listingGatePollMs` (default 1 s).
+   */
+  listingGateMaxWaitMs: number;
+  listingGatePollMs: number;
 }
 
 export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
@@ -160,6 +191,10 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   extraMinTier: 'MASTER',
   extraListingIntervalMs: 6 * HOUR,
   collectPreviousPatch: false,
+  listingSkip: 'off',
+  listingSkipSafetyMs: DAY,
+  listingGateMaxWaitMs: 5 * 60_000,
+  listingGatePollMs: 1_000,
 };
 
 /**
@@ -215,6 +250,13 @@ export interface PlatformProgress {
   dailyRefreshed: number;
   /** Listings of untracked players (also counted in `playersPolled`). */
   extraPlayersPolled: number;
+  /**
+   * Listing skip rule: listings not made because the player's new games were all stored
+   * ('shadow': listings that would not have been made; they ran and are in `playersPolled`).
+   */
+  listingsSkipped: number;
+  /** 'shadow': would-be-skipped listings that queued new match ids (`listing_skip_misses` rows). */
+  listingSkipMisses: number;
 }
 
 /** Numeric part of 'EUW1_7234567890' (game ids grow with time on a platform). */
@@ -223,7 +265,7 @@ export function gameIdOf(matchId: string): number | null {
   return Number.isSafeInteger(n) ? n : null;
 }
 
-export function toLadderEntries(list: LeagueListDto, tier: LadderTier): LadderEntryInput[] {
+export function toLadderEntries(list: LeagueListDto, tier: ApexLadderTier): LadderEntryInput[] {
   return (list.entries ?? [])
     .filter((e) => typeof e.puuid === 'string' && e.puuid !== '')
     .map((e) => ({
@@ -245,6 +287,14 @@ export function byLp(entries: readonly LadderEntryInput[]): LadderEntryInput[] {
 
 /** Ladder position of a player not on the tracked ladder (listed after every tracked player). */
 const UNRANKED = Number.MAX_SAFE_INTEGER;
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = () => {};
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
 
 export function toMasteries(list: readonly ChampionMasteryDto[]): MasteryInput[] {
   return list.map((m) => ({
@@ -333,7 +383,11 @@ export class PlatformWorker {
     enriched: 0,
     dailyRefreshed: 0,
     extraPlayersPolled: 0,
+    listingsSkipped: 0,
+    listingSkipMisses: 0,
   };
+  /** Resolved (and replaced) each time a match loop finishes a match: wakes waiting listings. */
+  private matchSettled = deferred();
   private run: { id: number; requestsAtStart: number; matches: number; players: number } | null =
     null;
   private lastError: string | null = null;
@@ -542,10 +596,10 @@ export class PlatformWorker {
   }
 
   /**
-   * Next player to list: the best ladder position first (ties: the first one added), skipping
+   * The player to list next: the best ladder position first (ties: the first one added), skipping
    * players being listed or cooling down after a failure.
    */
-  private nextPlayedPlayer(): string | null {
+  private peekPlayedPlayer(): string | null {
     const now = this.clock.now();
     let next: string | null = null;
     let nextRank = Number.POSITIVE_INFINITY;
@@ -561,11 +615,62 @@ export class PlatformWorker {
         if (rank === 0) break;
       }
     }
-    if (next === null) return null;
-    this.played.delete(next);
-    this.listingInFlight.add(next);
-    this.listingsStartedDuringLoad?.add(next);
     return next;
+  }
+
+  /** Starts the listing of a player of `played`; false when another loop took them meanwhile. */
+  private takePlayedPlayer(puuid: string): boolean {
+    if (!this.played.has(puuid) || this.listingInFlight.has(puuid)) return false;
+    this.played.delete(puuid);
+    this.listingInFlight.add(puuid);
+    this.listingsStartedDuringLoad?.add(puuid);
+    return true;
+  }
+
+  private nextPlayedPlayer(): string | null {
+    const next = this.peekPlayedPlayer();
+    return next !== null && this.takePlayedPlayer(next) ? next : null;
+  }
+
+  /**
+   * `nextPlayedPlayer` for the skip rule ('shadow' and 'on'): the player is only handed out once
+   * no match queued by a better-placed player is still to be fetched, so that whether their new
+   * games are stored is decided on everything the players before them brought. Matches queued by
+   * players below them, by untracked players, and retried or deferred ones (all with a higher
+   * `fetch_rank`) are not waited for: a backlog of those never delays a listing. Neither does a
+   * match that stays unfetched: after `listingGateMaxWaitMs` the player is listed anyway.
+   */
+  private async nextPlayedPlayerAfterMatches(signal: AbortSignal): Promise<string | null> {
+    let waitingSince: number | null = null;
+    for (;;) {
+      const next = this.peekPlayedPlayer();
+      if (next === null) return null;
+      const now = this.clock.now();
+      waitingSince ??= now;
+      const open =
+        now - waitingSince >= this.opts.listingGateMaxWaitMs ||
+        !(await hasPendingMatchBefore(
+          this.db,
+          this.platform,
+          Math.min(this.rankOf(next), this.ladderRank.size),
+        ));
+      if (open) {
+        if (this.takePlayedPlayer(next)) return next;
+        continue;
+      }
+      // Until a match loop finishes a match, or the poll interval.
+      await Promise.race([
+        this.matchSettled.promise,
+        this.clock.sleep(this.opts.listingGatePollMs, signal),
+      ]);
+    }
+  }
+
+  /** A match loop finished a match (stored, skipped, failed or deferred). */
+  private noteMatchSettled(): void {
+    const settled = this.matchSettled;
+    this.matchSettled = deferred();
+    settled.resolve();
   }
 
   private listingDone(puuid: string, ok: boolean): void {
@@ -587,11 +692,111 @@ export class PlatformWorker {
   }
 
   /**
-   * Lists a player's ranked match ids since `matches_synced_until`; returns how many were new.
-   * Untracked players (`extra`) are listed at the lowest priority and their matches are queued
-   * after every tracked player's.
+   * Lists a tracked player the ladder says played, unless the skip rule says their new games are
+   * all stored already (`listingSkip`):
+   *
+   * - 'off': always listed.
+   * - 'on': when the rule holds (`checkListingSkip`), the listing request is cleared without
+   *   calling Riot; `matches_synced_until` and the baseline stay, so the next real listing still
+   *   covers the whole period and the counts stay cumulative.
+   * - 'shadow': always listed. When the rule holds the baseline stays, as in 'on', and if the
+   *   listing queued new match ids they are recorded in `listing_skip_misses`.
+   *
+   * A real listing the rule did not hold for sets the baseline: the ladder counters it was decided
+   * on, and now.
    */
-  async listPlayerMatches(puuid: string, signal?: AbortSignal, extra = false): Promise<number> {
+  async listTrackedPlayer(puuid: string, signal?: AbortSignal): Promise<'listed' | 'skipped'> {
+    const mode = this.opts.listingSkip;
+    if (mode === 'off') {
+      await this.listPlayerMatches(puuid, signal);
+      return 'listed';
+    }
+    const checkedAt = this.clock.now();
+    const check = await this.checkListingSkip(puuid, checkedAt);
+    if (check.explained && mode === 'on') {
+      await clearListingRequest(this.db, puuid, check.state.snapshotAt);
+      this.counters.listingsSkipped++;
+      this.log.debug('listing skipped', { expected: check.expected, stored: check.stored });
+      return 'skipped';
+    }
+    const newIds: string[] = [];
+    await this.listPlayerMatches(puuid, signal, false, newIds);
+    if (check.explained) {
+      this.counters.listingsSkipped++;
+      if (newIds.length > 0) {
+        await recordListingSkipMiss(this.db, {
+          puuid,
+          platform: this.platform,
+          checkedAt: new Date(checkedAt),
+          listedSnapshotAt: check.listedSnapshotAt,
+          snapshotAt: check.state.snapshotAt,
+          expected: check.expected,
+          stored: check.stored,
+          newMatchIds: newIds,
+        });
+        this.counters.listingSkipMisses++;
+      }
+    } else if (check.state) {
+      await setListingBaseline(this.db, puuid, {
+        games: check.state.gamesNow,
+        snapshotAt: check.state.snapshotAt,
+        listedAt: new Date(checkedAt),
+      });
+    }
+    return 'listed';
+  }
+
+  /**
+   * The skip rule for a tracked player about to be listed. With `games_now` the player's wins +
+   * losses on the ladder, `snapshot` the ladder refresh that produced them, and the baseline of
+   * their last real listing (`listed_games` at `listed_snapshot_at`, run at `listed_at`):
+   * `explained` when `expected = games_now - listed_games` is positive and at least that many
+   * stored non-remake matches of the player ended after `listed_snapshot_at` and at or before
+   * `snapshot`. Never without a baseline, when the counters went down (season reset), or when
+   * `listed_at` is `listingSkipSafetyMs` old (a game Riot never counted would otherwise hide a
+   * later one for ever). A game that ended after the snapshot is not in `games_now`, so it must
+   * not stand for an older missing one; counting too few only costs a listing.
+   */
+  private async checkListingSkip(
+    puuid: string,
+    now: number,
+  ): Promise<
+    | { explained: false; state: ListingSkipState | null }
+    | {
+        explained: true;
+        state: ListingSkipState;
+        listedSnapshotAt: Date;
+        expected: number;
+        stored: number;
+      }
+  > {
+    const state = await getListingSkipState(this.db, puuid);
+    if (state === null) return { explained: false, state };
+    const { gamesNow, snapshotAt, listedGames, listedSnapshotAt, listedAt } = state;
+    if (listedGames === null || listedSnapshotAt === null || listedAt === null) {
+      return { explained: false, state };
+    }
+    if (listedAt.getTime() <= now - this.opts.listingSkipSafetyMs) {
+      return { explained: false, state };
+    }
+    const expected = gamesNow - listedGames;
+    if (expected <= 0) return { explained: false, state };
+    const stored = await countStoredGamesEndedBetween(this.db, puuid, listedSnapshotAt, snapshotAt);
+    if (stored < expected) return { explained: false, state };
+    return { explained: true, state, listedSnapshotAt, expected, stored };
+  }
+
+  /**
+   * Lists a player's ranked match ids since `matches_synced_until`; returns how many were new
+   * (and adds them to `newIds`). Untracked players (`extra`) are listed at the lowest priority
+   * and their matches are queued after every tracked player's.
+   */
+  async listPlayerMatches(
+    puuid: string,
+    signal?: AbortSignal,
+    extra = false,
+    newIds?: string[],
+  ): Promise<number> {
     const now = this.clock.now();
     const since = await getMatchesSyncedUntil(this.db, puuid);
     const startMs =
@@ -618,7 +823,14 @@ export class PlatformWorker {
       const oldAt = own.findIndex((id) => this.isKnownOldPatch(gameIdOf(id)));
       const kept = oldAt >= 0 ? own.slice(0, oldAt) : own;
       const fetchRank = extra ? this.ladderRank.size : this.rankOf(puuid);
-      added += await enqueueMatchIds(this.db, this.platform, kept, fetchRank);
+      const queued = await enqueueNewMatchIds(this.db, this.platform, kept, fetchRank);
+      added += queued.length;
+      newIds?.push(...queued);
+      // Skip rule: these matches are wanted before the next players are decided, so the match
+      // loops must not first work through what they had already claimed (a probe is left alone).
+      if (queued.length > 0 && !extra && this.opts.listingSkip !== 'off' && !this.probe.active) {
+        this.matchSource.clear();
+      }
       if (oldAt >= 0 || ids.length < 100) break;
     }
     // Clears the player's listing request, unless they played again since `now`.
@@ -915,14 +1127,17 @@ export class PlatformWorker {
     await this.openRun();
     const c = this.opts.concurrency;
     const loops: Promise<void>[] = [this.heartbeatLoop(signal), this.ladderLoop(signal)];
+    // Skip rule: listings wait for the matches of better-placed players (if anything fetches them).
+    const afterMatches = this.opts.listingSkip !== 'off' && c.match > 0;
     for (let i = 0; i < c.listing; i++) {
       loops.push(
         this.workLoop(
           'listing',
           signal,
-          async () => this.nextPlayedPlayer(),
+          async () =>
+            afterMatches ? this.nextPlayedPlayerAfterMatches(signal) : this.nextPlayedPlayer(),
           async (p) => {
-            await this.listPlayerMatches(p, signal);
+            await this.listTrackedPlayer(p, signal);
             return 'ok';
           },
           (p, ok) => this.listingDone(p, ok),
@@ -939,6 +1154,7 @@ export class PlatformWorker {
           (m) => {
             this.matchSource.release(m);
             if (this.probe.inFlight === m.matchId) this.probe.inFlight = null;
+            this.noteMatchSettled();
           },
         ),
       );

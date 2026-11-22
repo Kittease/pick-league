@@ -33,6 +33,14 @@ export class WorkSource<T> {
     this.inFlight.delete(this.key(item));
   }
 
+  /**
+   * Drops the buffered items so the next `next` reads the database again (better work arrived).
+   * Items already handed out are not affected.
+   */
+  clear(): void {
+    this.buffer = [];
+  }
+
   get size(): number {
     return this.buffer.length;
   }

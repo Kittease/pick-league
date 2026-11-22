@@ -51,6 +51,28 @@ export function makeMatch(id: string, gameVersion: string, player1?: string) {
   return { match, timeline };
 }
 
+/**
+ * A latest-patch fixture match with the given start, length and first participants (the other
+ * participants keep puuids of their own); `remake`: ended by an early surrender vote.
+ */
+export function makeTimedMatch(
+  id: string,
+  opts: { startMs: number; durationS?: number; players?: readonly string[]; remake?: boolean },
+) {
+  const m = makeMatch(id, '15.22.715.1234');
+  const durationS = opts.remake ? 200 : (opts.durationS ?? 1800);
+  m.match.info.gameCreation = opts.startMs - 60_000;
+  m.match.info.gameStartTimestamp = opts.startMs;
+  m.match.info.gameDuration = durationS;
+  m.match.info.gameEndTimestamp = opts.startMs + durationS * 1000;
+  (opts.players ?? []).forEach((puuid, i) => {
+    const p = m.match.info.participants[i];
+    if (p) p.puuid = puuid;
+  });
+  if (opts.remake) for (const p of m.match.info.participants) p.gameEndedInEarlySurrender = true;
+  return m;
+}
+
 export class FakeRiot implements RiotApi {
   calls: string[] = [];
   leagues: Record<ApexLadderTier, LeagueListDto> = {
@@ -86,9 +108,13 @@ export class FakeRiot implements RiotApi {
     const start = q.start ?? 0;
     return all.slice(start, start + (q.count ?? 100));
   }
+  /** Matches whose fetch waits for a promise (after recording the call). */
+  matchGates = new Map<string, Promise<void>>();
+
   async getMatch(_p: Platform, id: string) {
     this.calls.push(`match:${id}`);
     this.maybeThrow(`match:${id}`);
+    await this.matchGates.get(id);
     return this.matches.get(id)?.match ?? null;
   }
   async getTimeline(_p: Platform, id: string) {

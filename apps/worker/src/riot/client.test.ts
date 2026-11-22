@@ -250,4 +250,21 @@ describe('RiotClient', () => {
       'enrich',
     ]);
   });
+
+  test('match host: tracked listings, then matches, then the listings of untracked players', async () => {
+    const { client, clock, calls } = setup(() => json([]), { appLimit: '1:1' });
+    await client.getMatch('EUW1', 'EUW1_1');
+    client.getMatchIds('EUW1', 'untracked', { priority: PRIORITY.EXTRA_MATCH_IDS });
+    client.getTimeline('EUW1', 'EUW1_2');
+    client.getMatch('EUW1', 'EUW1_3');
+    client.getMatchIds('EUW1', 'tracked', {});
+    for (let i = 0; i < 5; i++) await clock.advance(1000);
+    expect(calls.map((c) => c.url.split('/matches/')[1]?.split('?')[0])).toEqual([
+      'EUW1_1',
+      'by-puuid/tracked/ids',
+      'EUW1_2/timeline',
+      'EUW1_3',
+      'by-puuid/untracked/ids',
+    ]);
+  });
 });

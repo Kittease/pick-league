@@ -1,5 +1,6 @@
 import { type Platform, parsePlatformList } from '@pick-league/shared';
 import { isLogLevel, LOG_LEVELS, type LogLevel } from './log.ts';
+import { LISTING_SKIP_MODES, type ListingSkipMode } from './scheduler/platform-worker.ts';
 
 export interface WorkerConfig {
   riotApiKey: string;
@@ -8,6 +9,11 @@ export interface WorkerConfig {
   logLevel: LogLevel;
   /** Keep collecting the previous patch after the latest one is live (backfill by hand). */
   collectPreviousPatch: boolean;
+  /**
+   * Listing skip rule: 'off' (default), 'shadow' (evaluated and recorded, every listing still
+   * runs) or 'on' (a tracked player whose new games are all stored is not listed).
+   */
+  listingSkip: ListingSkipMode;
 }
 
 export class ConfigError extends Error {
@@ -49,8 +55,25 @@ export function loadConfig(env: Record<string, string | undefined>): WorkerConfi
     problems.push(`COLLECT_PREVIOUS_PATCH must be true or false (got "${rawCollect}")`);
   }
 
+  const rawSkip = (env.LISTING_SKIP ?? '').trim().toLowerCase() || 'off';
+  let listingSkip: ListingSkipMode = 'off';
+  if ((LISTING_SKIP_MODES as readonly string[]).includes(rawSkip)) {
+    listingSkip = rawSkip as ListingSkipMode;
+  } else {
+    problems.push(
+      `LISTING_SKIP must be one of ${LISTING_SKIP_MODES.join(', ')} (got "${rawSkip}")`,
+    );
+  }
+
   if (problems.length > 0) {
     throw new ConfigError(`Invalid worker configuration:\n  - ${problems.join('\n  - ')}`);
   }
-  return { riotApiKey, databaseUrl, platforms, logLevel, collectPreviousPatch };
+  return {
+    riotApiKey,
+    databaseUrl,
+    platforms,
+    logLevel,
+    collectPreviousPatch,
+    listingSkip,
+  };
 }
