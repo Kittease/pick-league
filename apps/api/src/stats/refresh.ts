@@ -8,16 +8,25 @@ import type { Db, Queryable } from '@pick-league/db';
 import type { StatsStatusResponse } from '@pick-league/shared';
 import { readCollectionStatus } from './collection.ts';
 
-/** Refresh order (dependencies first). `concurrent` = read by requests. */
+/**
+ * Refresh order (dependencies first). `concurrent` = read by requests. `noNestedLoops` = refreshed
+ * with `enable_nestloop = off`.
+ */
 export const STATS_REFRESH_ORDER: readonly {
   view: string;
   concurrent: boolean;
   analyze?: boolean;
+  noNestedLoops?: boolean;
 }[] = [
   { view: 'stats_champion_traits', concurrent: true },
   { view: 'stats_team_comp', concurrent: false, analyze: true },
   { view: 'stats_comp_thresholds', concurrent: true },
-  { view: 'stats_participants', concurrent: false, analyze: true },
+  // The planner expects 1 row from the purchases without their undone ones (an anti join on three
+  // columns), where there are ~100 million. A nested loop and a hash join then cost the same to
+  // it, and the day it picked the nested loop between two of these sets the refresh never ended
+  // (33 h on 2026-11-21, stats frozen, nightly dump waiting on its lock). Every join here is an
+  // equality between large sets: none of them should ever be a nested loop.
+  { view: 'stats_participants', concurrent: false, analyze: true, noNestedLoops: true },
   // Support quest upgrades (0007_support_quest_items.sql), read by stats_participant_choices.
   { view: 'stats_quest_items', concurrent: false, analyze: true },
   { view: 'stats_champion_roles', concurrent: true },
@@ -73,6 +82,12 @@ export interface RefreshOptions {
    * live in /dev/shm: only raise it where Postgres has enough of it (the compose file gives 1 GB).
    */
   parallelWorkers?: number;
+  /**
+   * `statement_timeout` of each statement of the refresh (default '2h', several times the slowest
+   * view). A view that runs past it fails the refresh, which is tried again at the next tick,
+   * rather than holding the refresh lock and its table locks with no end.
+   */
+  statementTimeout?: string;
   /** Views to refresh, in order (default `STATS_REFRESH_ORDER`; tests use a shorter list). */
   views?: typeof STATS_REFRESH_ORDER;
 }
@@ -199,13 +214,21 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
         // memory segment" past ~65k matches. Serial plans spill to disk instead.
         const workers = Math.max(0, Math.floor(options.parallelWorkers ?? 0));
         await conn.unsafe(`SET max_parallel_workers_per_gather = ${workers}`);
+        await conn.unsafe(
+          `SET statement_timeout = '${(options.statementTimeout ?? '2h').replace(/'/g, '')}'`,
+        );
         // Fresh planner statistics: the views join large tables whose size changes a lot.
         await conn.unsafe('ANALYZE matches, participants, item_events, skill_events');
         for (const step of options.views ?? STATS_REFRESH_ORDER) {
           const t = performance.now();
-          await conn.unsafe(
-            `REFRESH MATERIALIZED VIEW ${step.concurrent ? 'CONCURRENTLY ' : ''}${step.view}`,
-          );
+          if (step.noNestedLoops) await conn.unsafe('SET enable_nestloop = off');
+          try {
+            await conn.unsafe(
+              `REFRESH MATERIALIZED VIEW ${step.concurrent ? 'CONCURRENTLY ' : ''}${step.view}`,
+            );
+          } finally {
+            if (step.noNestedLoops) await conn.unsafe('RESET enable_nestloop');
+          }
           if (step.analyze) await conn.unsafe(`ANALYZE ${step.view}`);
           views[step.view] = Math.round(performance.now() - t);
         }
@@ -223,6 +246,7 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
       } finally {
         await conn.unsafe('RESET work_mem');
         await conn.unsafe('RESET max_parallel_workers_per_gather');
+        await conn.unsafe('RESET statement_timeout');
       }
     } finally {
       await conn`SELECT pg_advisory_unlock(${STATS_REFRESH_LOCK_KEY})`;

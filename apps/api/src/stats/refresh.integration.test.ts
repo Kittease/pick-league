@@ -161,6 +161,52 @@ describe.skipIf(!URL_)('stats refresh (Postgres)', () => {
     expect((await status(app)).refreshing).toBe(false);
   }, 60_000);
 
+  test('a view marked noNestedLoops is planned without nested loops, the next ones as usual', async () => {
+    // The views record the planner setting they were refreshed with.
+    for (const name of ['stats_test_plan_a', 'stats_test_plan_b']) {
+      await db.unsafe(`
+        CREATE MATERIALIZED VIEW IF NOT EXISTS ${name} AS
+        SELECT current_setting('enable_nestloop') AS nested_loops WITH NO DATA`);
+    }
+    const result = await refreshStats(db, {
+      force: true,
+      views: [
+        { view: 'stats_test_plan_a', concurrent: false, noNestedLoops: true },
+        { view: 'stats_test_plan_b', concurrent: false },
+      ],
+    });
+    expect(result.reason).toBe('refreshed');
+    const [a] = await db<{ nested_loops: string }[]>`SELECT nested_loops FROM stats_test_plan_a`;
+    const [b] = await db<{ nested_loops: string }[]>`SELECT nested_loops FROM stats_test_plan_b`;
+    expect(a?.nested_loops).toBe('off');
+    expect(b?.nested_loops).toBe('on');
+  }, 60_000);
+
+  test('a view running past the statement timeout fails the refresh and frees the lock', async () => {
+    await db.unsafe(`
+      CREATE MATERIALIZED VIEW IF NOT EXISTS stats_test_slow AS
+      SELECT pg_sleep(5)::text AS slept WITH NO DATA`);
+    const slow = [{ view: 'stats_test_slow', concurrent: false }];
+    const started = performance.now();
+    const failure = await refreshStats(db, {
+      force: true,
+      views: slow,
+      statementTimeout: '200ms',
+    }).catch((err: unknown) => err);
+    expect(failure).toBeInstanceOf(StatsRefreshError);
+    expect((failure as StatsRefreshError).message).toContain('statement timeout');
+    expect(performance.now() - started).toBeLessThan(4_000);
+    const [log] = await db<{ error: string | null; finished_at: Date | null }[]>`
+      SELECT error, finished_at FROM stats_refresh_log ORDER BY id DESC LIMIT 1`;
+    expect(log?.error).toContain('statement timeout');
+    expect(log?.finished_at).not.toBeNull();
+
+    // The lock is free and the session's timeout is back to its default: a refresh works again.
+    const { app, refresher } = setup();
+    expect((await status(app)).refreshing).toBe(false);
+    expect((await refresher.tick(true))?.reason).toBe('refreshed');
+  }, 120_000);
+
   test('there is no manual refresh endpoint', async () => {
     const { app } = setup();
     expect((await app.request('/stats/refresh', { method: 'POST' })).status).toBe(404);

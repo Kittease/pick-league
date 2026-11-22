@@ -418,6 +418,10 @@ laptop era, gone since the stack runs on a shared server.
 Materialized views computed from the tables above, refreshed by the API in the order of
 `STATS_REFRESH_ORDER` (`apps/api/src/stats/refresh.ts`): served views have a unique index and are
 refreshed `CONCURRENTLY`, intermediate ones plainly. All are keyed by patch and exclude remakes.
+Each statement of a refresh has a `statement_timeout` (2 h): a view that runs past it fails the
+refresh, tried again at the next tick. `stats_participants` is refreshed with
+`enable_nestloop = off`: the planner expects 1 row from its purchases (really ~100 million), so a
+nested loop looks as cheap as a hash join and, once picked, never ends.
 Definitions: `packages/db/migrations/0002_stats_views.sql` (traits, compositions, champion+role
 baselines, pairwise vs/with, build choices), `0003_stats_bans.sql` (tier list ban rates),
 `0006_tierlist_filters.sql` (tier list server/rank filters), `0007_support_quest_items.sql`,
