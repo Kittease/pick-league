@@ -157,6 +157,20 @@ export interface GameLengthRow extends GamesWins {
 }
 
 /**
+ * stats_item_swaps (0022_item_swaps.sql), for one champion + role: participants who sold a
+ * completed item at full build and bought another one in its place, per patch.
+ */
+export interface ItemSwapRow {
+  patch: PatchId;
+  soldItemId: number;
+  boughtItemId: number;
+  /** Participants who made the swap (a pair counts once per participant). */
+  games: number;
+  /** Sum of the game minutes of those swaps (average = minuteSum / games). */
+  minuteSum: number;
+}
+
+/**
  * stats_champion_mastery (0018_mastery_curve.sql): games of champion + role by the player's
  * mastery points on the champion (`bucket` 0–6, see `ENGINE_CONFIG.mastery.bucketEdges`).
  */

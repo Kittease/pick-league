@@ -26,6 +26,7 @@ import type {
   CompTraitRow,
   GameLengthRow,
   ItemInfo,
+  ItemSwapRow,
   LanePhaseRow,
   MasteryRow,
   NameLookup,
@@ -556,6 +557,37 @@ export async function loadLanePhaseOfChampion(
     WHERE patch IN ${q(patches)} AND champion_id = ${championId} AND position = ${position}
       ${enemyIds ? q`AND enemy_id IN ${q(enemyIds)}` : q``}`;
   return rows.map(toLanePhaseRow);
+}
+
+/**
+ * Late-game swaps of champion + role (stats_item_swaps, 0022) per patch: completed item sold at
+ * full build → completed item bought in its place.
+ */
+export async function loadItemSwaps(
+  q: Queryable,
+  patches: PatchId[],
+  position: Position,
+  championId: number,
+): Promise<ItemSwapRow[]> {
+  if (!isStoredChampionId(championId)) return [];
+  const rows = await q<
+    {
+      patch: string;
+      sold_item_id: number;
+      bought_item_id: number;
+      games: number;
+      minute_sum: number;
+    }[]
+  >`
+    SELECT patch, sold_item_id, bought_item_id, games, minute_sum FROM stats_item_swaps
+    WHERE patch IN ${q(patches)} AND position = ${position} AND champion_id = ${championId}`;
+  return rows.map((r) => ({
+    patch: r.patch,
+    soldItemId: r.sold_item_id,
+    boughtItemId: r.bought_item_id,
+    games: r.games,
+    minuteSum: r.minute_sum,
+  }));
 }
 
 export async function loadItems(q: Queryable, patch: PatchId): Promise<Map<number, ItemInfo>> {

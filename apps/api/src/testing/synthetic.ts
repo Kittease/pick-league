@@ -158,7 +158,20 @@ export const PLANTED = {
   lane: { championId: 89, opponentId: 16, goldPerMin: 45, xpPerMin: 30, csPerMin: 0.8 },
   /** Every `shortFramesEvery`-th match has frames up to minute 13 only (no 15-minute frame). */
   shortFramesEvery: 20,
+  /**
+   * Late-game boots swap: once the build is full (boots + 5 core items) with game time left, 2
+   * participants in 8 sell their boots and buy Plated Steelcaps 1.2 s later (Mercury's Treads
+   * when they wore Steelcaps), and 1 in 8 sells them and takes the sale back (UNDO). Decided by
+   * match index and participant id (`lateSwapKind`), without a random draw.
+   */
+  lateSwap: { boots: 3047, otherBoots: 3111, gapMs: 1200 },
 } as const;
+
+/** What a participant with a full build does with their boots (see `PLANTED.lateSwap`). */
+function lateSwapKind(n: number, participantId: number): 'swap' | 'undone_sale' | null {
+  const k = (n * 3 + participantId) % 8;
+  return k < 2 ? 'swap' : k === 2 ? 'undone_sale' : null;
+}
 
 interface ItemDef {
   id: number;
@@ -999,20 +1012,34 @@ function loadout(rng: Rng, champ: SynthChampion): Loadout {
 
 function itemEvents(
   rng: Rng,
+  n: number,
   participantId: number,
   l: Loadout,
   durationS: number,
 ): ParsedItemEvent[] {
   const events: ParsedItemEvent[] = [];
-  const push = (atMs: number, type: ParsedItemEvent['type'], itemId: number) =>
+  const goldOf = (itemId: number) => ITEMS_BY_ID.get(itemId)?.gold ?? 0;
+  /** `undoneSaleOf`: an UNDO of the sale of that item (Riot: item 0 before, the item after). */
+  const push = (
+    atMs: number,
+    type: ParsedItemEvent['type'],
+    itemId: number,
+    undoneSaleOf?: number,
+  ) =>
     events.push({
       participantId,
       seq: events.length + 1,
       atMs,
       type,
       itemId,
-      undoAfterItemId: type === 'UNDO' ? 0 : null,
-      undoGoldGain: type === 'UNDO' ? (ITEMS_BY_ID.get(itemId)?.gold ?? 0) : null,
+      undoAfterItemId: type === 'UNDO' ? (undoneSaleOf ?? 0) : null,
+      // A purchase taken back refunds the item, a sale taken back costs its sell price again.
+      undoGoldGain:
+        type !== 'UNDO'
+          ? null
+          : undoneSaleOf === undefined
+            ? goldOf(itemId)
+            : -Math.round(goldOf(undoneSaleOf) * 0.7),
     });
   push(2000, 'PURCHASED', 3340);
   // Sometimes buy the wrong starter and undo it.
@@ -1043,9 +1070,22 @@ function itemEvents(
   buy(l.core[0] as number);
   push(t, 'PURCHASED', l.boots);
   t += 1000;
+  let coreBought = 1;
   for (const id of l.core.slice(1)) {
     if (t > durationS * 1000) break;
     buy(id);
+    coreBought++;
+  }
+  // Full build with game time left: some swap their boots, some sell them and undo the sale.
+  const late =
+    coreBought === l.core.length && t <= durationS * 1000 ? lateSwapKind(n, participantId) : null;
+  if (late === 'swap') {
+    const { boots, otherBoots, gapMs } = PLANTED.lateSwap;
+    push(t, 'SOLD', l.boots);
+    push(t + gapMs, 'PURCHASED', l.boots === boots ? otherBoots : boots);
+  } else if (late === 'undone_sale') {
+    push(t, 'SOLD', l.boots);
+    push(t + 800, 'UNDO', 0, l.boots);
   }
   return events;
 }
@@ -1218,7 +1258,7 @@ export function generateMatches(options: GenerateOptions): ParsedMatch[] {
           positionYByMinute: Array.from({ length: frameCount }, () => 7000),
         });
         if (!isRemake) {
-          itemEv.push(...itemEvents(rng, participantId, l, durationS));
+          itemEv.push(...itemEvents(rng, n, participantId, l, durationS));
           skillEv.push(...skillEvents(participantId, l.champ, rng));
         }
       });

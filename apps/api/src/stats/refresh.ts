@@ -53,6 +53,9 @@ export const STATS_REFRESH_ORDER: readonly {
   { view: 'stats_tierlist_participants', concurrent: false, analyze: true },
   // Results by game length, for the early / late profile (0019_game_length.sql).
   { view: 'stats_champion_game_length', concurrent: true },
+  // Late-game item swaps of the build (0022_item_swaps.sql): replays the item events of the
+  // participants who sold a completed item; stats_tierlist_participants says who they are.
+  { view: 'stats_item_swaps', concurrent: true },
   { view: 'stats_tierlist_roles', concurrent: true },
   { view: 'stats_tierlist_vs', concurrent: true },
   { view: 'stats_tierlist_with', concurrent: true },
