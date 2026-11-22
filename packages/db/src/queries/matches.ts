@@ -25,7 +25,8 @@ const emptyToNull = (s: string | null | undefined): string | null =>
 /**
  * Stores a parsed match in one transaction:
  * 1. `players` rows for all 10 participants (Riot ID from the payload; the name is only
- *    overwritten by a payload at least as recent as the stored one; `last_seen_in_match_at` bumped),
+ *    overwritten by a payload at least as recent as the stored one; `last_seen_in_match_at` bumped,
+ *    and `last_seen_with_master_at` too when one of the 10 is known as Master or above),
  * 2. `matches`, `match_teams`, `match_bans`, `participants`, `item_events`, `skill_events`,
  * 3. optionally: enrichment enqueue + queue row marked DONE.
  *
@@ -65,6 +66,18 @@ export async function insertParsedMatch(
       byPuuid,
     );
     if (players.length > 0) {
+      // A "Master+ game": at least one participant is known as Master, Grandmaster or Challenger
+      // right now (tracked on an apex ladder, or by their stored solo rank). All 10 are then
+      // marked, which is how the Diamond players of Master+ lobbies are found; a Diamond lobby
+      // marks nobody. (Players this match creates have no known rank yet.)
+      const [apex] = await tx`
+        SELECT 1 FROM players p
+        WHERE p.puuid = ANY(${players.map((p) => p.puuid)}::text[])
+          AND (p.solo_tier >= 'MASTER'
+               OR EXISTS (SELECT 1 FROM ladder_entries le
+                          WHERE le.puuid = p.puuid AND le.tier <> 'DIAMOND'))
+        LIMIT 1`;
+      const withMaster = apex !== undefined;
       await tx`
         INSERT INTO players ${tx(
           players.map((p) => {
@@ -76,6 +89,7 @@ export async function insertParsedMatch(
               tag_line: gameName === null ? null : emptyToNull(p.riotIdTagLine),
               name_updated_at: gameName === null ? null : m.startedAt,
               last_seen_in_match_at: m.startedAt,
+              last_seen_with_master_at: withMaster ? m.startedAt : null,
             };
           }),
         )}
@@ -89,7 +103,8 @@ export async function insertParsedMatch(
           name_updated_at = CASE WHEN EXCLUDED.game_name IS NOT NULL
               AND EXCLUDED.name_updated_at >= COALESCE(players.name_updated_at, '-infinity')
             THEN EXCLUDED.name_updated_at ELSE players.name_updated_at END,
-          last_seen_in_match_at = GREATEST(players.last_seen_in_match_at, EXCLUDED.last_seen_in_match_at)`;
+          last_seen_in_match_at = GREATEST(players.last_seen_in_match_at, EXCLUDED.last_seen_in_match_at),
+          last_seen_with_master_at = GREATEST(players.last_seen_with_master_at, EXCLUDED.last_seen_with_master_at)`;
     }
 
     if (parsed.teams.length > 0) {

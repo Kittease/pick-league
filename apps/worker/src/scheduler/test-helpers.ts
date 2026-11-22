@@ -1,9 +1,9 @@
 /** Fakes shared by the scheduler integration tests (a fake Riot API, patches, a fixed clock). */
 import type { Db } from '@pick-league/db';
 import {
+  type ApexLadderTier,
   type ChampionMasteryDto,
   comparePatches,
-  type LadderTier,
   type LeagueEntryDto,
   type LeagueListDto,
   type MatchDto,
@@ -53,7 +53,7 @@ export function makeMatch(id: string, gameVersion: string, player1?: string) {
 
 export class FakeRiot implements RiotApi {
   calls: string[] = [];
-  leagues: Record<LadderTier, LeagueListDto> = {
+  leagues: Record<ApexLadderTier, LeagueListDto> = {
     CHALLENGER: { leagueId: 'l', tier: 'CHALLENGER', name: 'n', queue: 'q', entries: [] },
     GRANDMASTER: { leagueId: 'l', tier: 'GRANDMASTER', name: 'n', queue: 'q', entries: [] },
     MASTER: { leagueId: 'l', tier: 'MASTER', name: 'n', queue: 'q', entries: [] },
@@ -69,7 +69,7 @@ export class FakeRiot implements RiotApi {
     if (err) throw err;
   }
 
-  async getLeague(_p: Platform, tier: LadderTier) {
+  async getLeague(_p: Platform, tier: ApexLadderTier) {
     this.calls.push(`league:${tier}`);
     this.maybeThrow(`league:${tier}`);
     return this.leagues[tier];

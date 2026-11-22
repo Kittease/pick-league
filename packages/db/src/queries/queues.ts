@@ -24,10 +24,20 @@ export async function enqueueMatchIds(
   matchIds: readonly string[],
   fetchRank: number = QUEUE_BACK_RANK,
 ): Promise<number> {
+  return (await enqueueNewMatchIds(q, platform, matchIds, fetchRank)).length;
+}
+
+/** `enqueueMatchIds`, returning the ids that were new. */
+export async function enqueueNewMatchIds(
+  q: Queryable,
+  platform: Platform,
+  matchIds: readonly string[],
+  fetchRank: number = QUEUE_BACK_RANK,
+): Promise<string[]> {
   const unique = [...new Set(matchIds)];
-  if (unique.length === 0) return 0;
+  if (unique.length === 0) return [];
   const rank = Math.min(Math.max(Math.trunc(fetchRank), 0), QUEUE_BACK_RANK);
-  const rows = await q<{ inserted: boolean }[]>`
+  const rows = await q<{ match_id: string; inserted: boolean }[]>`
     INSERT INTO match_fetch_queue ${q(
       unique.map((match_id) => ({ match_id, platform, fetch_rank: rank })),
     )}
@@ -35,8 +45,25 @@ export async function enqueueMatchIds(
       WHERE match_fetch_queue.status = 'PENDING'
         AND match_fetch_queue.last_error IS NULL
         AND EXCLUDED.fetch_rank < match_fetch_queue.fetch_rank
-    RETURNING (xmax = 0) AS inserted`;
-  return rows.filter((r) => r.inserted).length;
+    RETURNING match_id, (xmax = 0) AS inserted`;
+  return rows.filter((r) => r.inserted).map((r) => r.match_id);
+}
+
+/**
+ * Whether a PENDING match of a platform has a `fetch_rank` below `rank`: a match listed by a
+ * better-placed tracked player is still to be fetched (retried and deferred matches are at the
+ * back of the queue, so they never count). One index probe.
+ */
+export async function hasPendingMatchBefore(
+  q: Queryable,
+  platform: Platform,
+  rank: number,
+): Promise<boolean> {
+  const [row] = await q`
+    SELECT 1 FROM match_fetch_queue
+    WHERE platform = ${platform} AND status = 'PENDING' AND fetch_rank < ${Math.trunc(rank)}
+    LIMIT 1`;
+  return row !== undefined;
 }
 
 /**

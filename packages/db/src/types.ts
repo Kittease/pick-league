@@ -163,9 +163,16 @@ export interface PatchRow {
 export interface LadderEntryInput {
   puuid: string;
   tier: LadderTier;
+  /** 1..4 for DIAMOND; absent or null for the apex tiers. */
+  division?: number | null;
   leaguePoints: number;
   wins: number;
   losses: number;
+  /**
+   * When Riot gave this entry (default: the upsert's `now`). A Diamond sweep takes minutes, so
+   * each of its entries carries the time of its own page.
+   */
+  seenAt?: Date;
 }
 
 export interface LadderUpsertResult {
@@ -175,6 +182,48 @@ export interface LadderUpsertResult {
   added: string[];
   /** Number of ladder entries removed (players who dropped off). */
   removed: number;
+}
+
+/** A row of the tracked ladder, in ladder order (`ladderOrder`). */
+export interface LadderOrderRow {
+  puuid: string;
+  tier: LadderTier;
+  /** 1..4 for DIAMOND, null for the apex tiers. */
+  division: number | null;
+  leaguePoints: number;
+}
+
+/** A tracked Diamond player as stored (`trackedDiamondEntries`). */
+export interface TrackedDiamondEntry {
+  puuid: string;
+  division: number;
+  leaguePoints: number;
+  /** When a complete sweep last saw the player. */
+  seenAt: Date;
+}
+
+/** What the listing skip rule reads about a tracked player (`getListingSkipState`). */
+export interface ListingSkipState {
+  /** Current wins + losses on the ladder. */
+  gamesNow: number;
+  /** The ladder refresh that produced them. */
+  snapshotAt: Date;
+  /** Baseline set by the last real listing (all null before the first one). */
+  listedGames: number | null;
+  listedSnapshotAt: Date | null;
+  listedAt: Date | null;
+}
+
+/** A `listing_skip_misses` row (LISTING_SKIP=shadow). */
+export interface ListingSkipMissInput {
+  puuid: string;
+  platform: Platform;
+  checkedAt: Date;
+  listedSnapshotAt: Date;
+  snapshotAt: Date;
+  expected: number;
+  stored: number;
+  newMatchIds: readonly string[];
 }
 
 export interface MasteryInput {

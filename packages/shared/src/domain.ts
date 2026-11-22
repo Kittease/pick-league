@@ -16,9 +16,20 @@ export function parsePosition(value: string | null | undefined): Position | null
   return isPosition(value) ? value : null;
 }
 
-/** Ladders crawled by the worker (Postgres enum `ladder_tier`). */
-export const LADDER_TIERS = ['CHALLENGER', 'GRANDMASTER', 'MASTER'] as const;
+/** Apex ladders: each one is a single league-v4 list (`challengerleagues`, …). */
+export const APEX_LADDER_TIERS = ['CHALLENGER', 'GRANDMASTER', 'MASTER'] as const;
+export type ApexLadderTier = (typeof APEX_LADDER_TIERS)[number];
+
+/**
+ * Tiers of the players the worker tracks (Postgres enum `ladder_tier`, in its order): the apex
+ * ladders, then Diamond (tracked only with `DIAMOND_MAX_TRACKED`, with a division).
+ */
+export const LADDER_TIERS = [...APEX_LADDER_TIERS, 'DIAMOND'] as const;
 export type LadderTier = (typeof LADDER_TIERS)[number];
+
+/** Riot division strings, best first (index + 1 = the division number stored). */
+export const DIVISIONS = ['I', 'II', 'III', 'IV'] as const;
+export type Division = (typeof DIVISIONS)[number];
 
 /** Solo-queue tiers, lowest first (Postgres enum `solo_tier`). */
 export const SOLO_TIERS = [
