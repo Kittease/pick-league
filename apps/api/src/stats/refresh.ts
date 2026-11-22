@@ -8,23 +8,31 @@ import type { Db, Queryable } from '@pick-league/db';
 import type { StatsStatusResponse } from '@pick-league/shared';
 import { readCollectionStatus } from './collection.ts';
 
-/** Refresh order (dependencies first). `concurrent` = read by requests. */
+/**
+ * Refresh order (dependencies first). `concurrent` = read by requests. `noNestedLoops` = refreshed
+ * with `enable_nestloop = off`.
+ */
 export const STATS_REFRESH_ORDER: readonly {
   view: string;
   concurrent: boolean;
   analyze?: boolean;
+  noNestedLoops?: boolean;
 }[] = [
   { view: 'stats_champion_traits', concurrent: true },
   { view: 'stats_team_comp', concurrent: false, analyze: true },
   { view: 'stats_comp_thresholds', concurrent: true },
   // Each participant's build is computed from its own participant_events row
-  // (0026_stats_on_participant_events.sql): a nested loop per participant, by design. The joins
-  // left around it are between base tables and views on their keys, which the planner estimates
-  // well; the sets it got wrong by a factor of 100 million when the events were rows (the day it
-  // picked a nested loop between two of them the refresh ran 33 h, hence the `enable_nestloop =
-  // off` this view was refreshed with until then) no longer exist.
-  { view: 'stats_participants', concurrent: false, analyze: true },
-  // Support quest upgrades (0007_support_quest_items.sql), read by stats_participant_choices.
+  // (0026_stats_on_participant_events.sql): a nested loop per participant, by design, which the
+  // planner keeps whatever the setting (it has no other way to run it). The setting is for the
+  // joins around it (participants with their events, their two teams, their champion): each is an
+  // equality over every participant, and one pass with a hash join is a third faster than the
+  // index lookups per participant the planner otherwise prefers (measured on 400,000 participants).
+  // It is no longer a protection: the sets the planner got wrong by a factor of 100 million when
+  // the events were rows (the day it picked a nested loop between two of them the refresh ran
+  // 33 h) do not exist any more.
+  { view: 'stats_participants', concurrent: false, analyze: true, noNestedLoops: true },
+  // Support quest upgrades (0007_support_quest_items.sql, on participant_events since 0026), read
+  // by stats_participant_choices.
   { view: 'stats_quest_items', concurrent: false, analyze: true },
   { view: 'stats_champion_roles', concurrent: true },
   { view: 'stats_champion_vs', concurrent: true },
@@ -50,8 +58,9 @@ export const STATS_REFRESH_ORDER: readonly {
   { view: 'stats_tierlist_participants', concurrent: false, analyze: true },
   // Results by game length, for the early / late profile (0019_game_length.sql).
   { view: 'stats_champion_game_length', concurrent: true },
-  // Late-game item swaps of the build (0022_item_swaps.sql): looks into the item events of the
-  // participants who sold an item; stats_tierlist_participants says who they are.
+  // Late-game item swaps of the build (0022_item_swaps.sql, on participant_events since 0026):
+  // looks into the item events of the participants who sold an item; stats_tierlist_participants
+  // says who they are.
   { view: 'stats_item_swaps', concurrent: true },
   { view: 'stats_tierlist_roles', concurrent: true },
   { view: 'stats_tierlist_vs', concurrent: true },
@@ -221,9 +230,14 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
         await conn.unsafe('ANALYZE matches, participants, participant_events');
         for (const step of options.views ?? STATS_REFRESH_ORDER) {
           const t = performance.now();
-          await conn.unsafe(
-            `REFRESH MATERIALIZED VIEW ${step.concurrent ? 'CONCURRENTLY ' : ''}${step.view}`,
-          );
+          if (step.noNestedLoops) await conn.unsafe('SET enable_nestloop = off');
+          try {
+            await conn.unsafe(
+              `REFRESH MATERIALIZED VIEW ${step.concurrent ? 'CONCURRENTLY ' : ''}${step.view}`,
+            );
+          } finally {
+            if (step.noNestedLoops) await conn.unsafe('RESET enable_nestloop');
+          }
           if (step.analyze) await conn.unsafe(`ANALYZE ${step.view}`);
           views[step.view] = Math.round(performance.now() - t);
         }

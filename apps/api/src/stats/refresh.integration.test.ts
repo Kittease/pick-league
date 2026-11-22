@@ -161,6 +161,27 @@ describe.skipIf(!URL_)('stats refresh (Postgres)', () => {
     expect((await status(app)).refreshing).toBe(false);
   }, 60_000);
 
+  test('a view marked noNestedLoops is planned without nested loops, the next ones as usual', async () => {
+    // The views record the planner setting they were refreshed with.
+    for (const name of ['stats_test_plan_a', 'stats_test_plan_b']) {
+      await db.unsafe(`
+        CREATE MATERIALIZED VIEW IF NOT EXISTS ${name} AS
+        SELECT current_setting('enable_nestloop') AS nested_loops WITH NO DATA`);
+    }
+    const result = await refreshStats(db, {
+      force: true,
+      views: [
+        { view: 'stats_test_plan_a', concurrent: false, noNestedLoops: true },
+        { view: 'stats_test_plan_b', concurrent: false },
+      ],
+    });
+    expect(result.reason).toBe('refreshed');
+    const [a] = await db<{ nested_loops: string }[]>`SELECT nested_loops FROM stats_test_plan_a`;
+    const [b] = await db<{ nested_loops: string }[]>`SELECT nested_loops FROM stats_test_plan_b`;
+    expect(a?.nested_loops).toBe('off');
+    expect(b?.nested_loops).toBe('on');
+  }, 60_000);
+
   test('a view running past the statement timeout fails the refresh and frees the lock', async () => {
     await db.unsafe(`
       CREATE MATERIALIZED VIEW IF NOT EXISTS stats_test_slow AS

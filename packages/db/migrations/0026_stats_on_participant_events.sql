@@ -153,6 +153,11 @@ $$;
 --     one array_position finds: they are sorted by item then position), in purchase order: the
 --     early items (not completed, first bought after 60 s and before the first completed item),
 --     the completed items, and how many of them came before the boots.
+--
+-- Built, and refreshed (STATS_REFRESH_ORDER), with enable_nestloop = off: the per-participant
+-- subqueries stay nested loops (there is no other way to run them), the joins around them become
+-- hash joins over one pass of each table, a third faster than index lookups per participant.
+SET LOCAL enable_nestloop = off;
 CREATE MATERIALIZED VIEW stats_participants_0026 AS
 WITH item_flags AS MATERIALIZED (
   SELECT array_agg(per_patch.patch ORDER BY per_patch.patch) AS patches,
@@ -278,6 +283,7 @@ LEFT JOIN stats_team_comp opp ON opp.match_id = p.match_id AND opp.team_id <> p.
 LEFT JOIN stats_champion_traits ct ON ct.patch = m.patch AND ct.champion_id = p.champion_id
 LEFT JOIN stats_comp_thresholds th ON th.patch = m.patch
 WHERE NOT m.is_remake AND p.position IS NOT NULL;
+SET LOCAL enable_nestloop = on;
 CREATE UNIQUE INDEX stats_participants_0026_pk
   ON stats_participants_0026 (match_id, participant_id);
 ANALYZE stats_participants_0026;
