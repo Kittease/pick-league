@@ -164,32 +164,15 @@ describe('parseMatch: participants', () => {
       runes: [8010, 9111, 9104, 8299, 8444, 8453],
       statShards: [5005, 5008, 5011],
       finalItems: [3078, 3047, 6610, 0, 1036, 0, 3340],
-      champLevel: 15,
-      kills: 4,
-      deaths: 3,
-      assists: 5,
-      laneMinions: 150,
-      jungleMinions: 8,
-      goldEarned: 12000,
-      goldSpent: 11000,
       damageToChampions: 19000,
       physicalDamageToChampions: 15000,
       magicDamageToChampions: 3000,
       trueDamageToChampions: 1000,
       damageTaken: 22000,
       damageSelfMitigated: 12000,
-      damageToBuildings: 1000,
-      damageToObjectives: 5000,
       healingDone: 3000,
-      healsOnTeammates: 0,
-      shieldsOnTeammates: 0,
       ccTimeOnOthersS: 20,
-      visionScore: 30,
-      wardsPlaced: 12,
-      wardsKilled: 4,
-      controlWardsBought: 3,
     });
-    expect(participants[4]).toMatchObject({ healsOnTeammates: 2500, shieldsOnTeammates: 4000 });
   });
 
   test('empty teamPosition → null; empty Riot ID → null', () => {
@@ -205,10 +188,6 @@ describe('parseMatch: participants', () => {
     expect(p2?.goldByMinute).toEqual([502, 902, 1302, 1702]);
     expect(p2?.xpByMinute).toEqual([2, 302, 602, 902]);
     expect(p2?.csByMinute).toEqual([0, 4, 8, 12]);
-    expect(p2?.levelByMinute).toEqual([1, 2, 3, 4]);
-    expect(p2?.damageToChampionsByMinute).toEqual([2, 102, 202, 302]);
-    expect(p2?.positionXByMinute).toEqual([502, 1502, 2502, 3502]);
-    expect(p2?.positionYByMinute).toEqual([402, 1402, 2402, 3402]);
   });
 
   test('a frame missing a participant repeats its previous values', () => {
@@ -220,12 +199,12 @@ describe('parseMatch: participants', () => {
   test('missing stats default to 0', () => {
     const { participants } = parse((m) => {
       const p = m.info.participants[0] as unknown as Record<string, unknown>;
-      delete p.totalDamageShieldedOnTeammates;
-      delete p.visionWardsBoughtInGame;
+      delete p.totalHeal;
+      delete p.timeCCingOthers;
       delete p.item5;
     });
-    expect(participants[0]?.shieldsOnTeammates).toBe(0);
-    expect(participants[0]?.controlWardsBought).toBe(0);
+    expect(participants[0]?.healingDone).toBe(0);
+    expect(participants[0]?.ccTimeOnOthersS).toBe(0);
     expect(participants[0]?.finalItems[5]).toBe(0);
   });
 

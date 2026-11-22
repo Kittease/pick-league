@@ -166,30 +166,14 @@ export interface MatchParticipantDto {
   item5: number;
   item6: number;
 
-  champLevel: number;
-  kills: number;
-  deaths: number;
-  assists: number;
-  totalMinionsKilled: number;
-  neutralMinionsKilled: number;
-  goldEarned: number;
-  goldSpent: number;
   totalDamageDealtToChampions: number;
   physicalDamageDealtToChampions: number;
   magicDamageDealtToChampions: number;
   trueDamageDealtToChampions: number;
   totalDamageTaken: number;
   damageSelfMitigated: number;
-  damageDealtToBuildings: number;
-  damageDealtToObjectives: number;
   totalHeal: number;
-  totalHealsOnTeammates: number;
-  totalDamageShieldedOnTeammates: number;
   timeCCingOthers: number;
-  visionScore: number;
-  wardsPlaced: number;
-  wardsKilled: number;
-  visionWardsBoughtInGame: number;
 
   /** True for remakes. */
   gameEndedInEarlySurrender: boolean;
@@ -254,24 +238,12 @@ export interface TimelineFrameDto {
   events: TimelineEventDto[];
 }
 
-export interface PositionDto {
-  x: number;
-  y: number;
-}
-
 export interface ParticipantFrameDto {
   participantId: number;
-  currentGold: number;
   totalGold: number;
   xp: number;
-  level: number;
   minionsKilled: number;
   jungleMinionsKilled: number;
-  position: PositionDto;
-  damageStats: {
-    totalDamageDoneToChampions: number;
-    [key: string]: number;
-  };
 }
 
 interface EventBase {

@@ -246,7 +246,7 @@ describe.skipIf(!TEST_DATABASE_URL)('storage migrations on a populated database'
     await rm(before, { recursive: true, force: true });
   });
 
-  test('events become arrays per participant, unread masteries go, and the stats keep their rows', async () => {
+  test('events become arrays, unread masteries and columns go, and the stats keep their rows', async () => {
     await populateOldLayout(db);
     // The stats as the previous version computed them (the views the rewritten ones read first).
     for (const view of [
@@ -396,6 +396,63 @@ describe.skipIf(!TEST_DATABASE_URL)('storage migrations on a populated database'
         last_played_at: new Date('2026-11-01T00:00:00Z'),
       },
     ]);
+
+    // participants: the columns nothing read are gone, the others kept their values, and the
+    // views that read them still refresh.
+    const columns = await db<{ column_name: string }[]>`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'participants' ORDER BY ordinal_position`;
+    expect(columns.map((c) => c.column_name)).toEqual([
+      'match_id',
+      'participant_id',
+      'puuid',
+      'team_id',
+      'champion_id',
+      'position',
+      'win',
+      'summoner_spell_1',
+      'summoner_spell_2',
+      'rune_primary_tree',
+      'rune_secondary_tree',
+      'runes',
+      'stat_shards',
+      'final_items',
+      'damage_to_champions',
+      'physical_damage_to_champions',
+      'magic_damage_to_champions',
+      'true_damage_to_champions',
+      'damage_taken',
+      'damage_self_mitigated',
+      'healing_done',
+      'cc_time_on_others_s',
+      'gold_by_minute',
+      'xp_by_minute',
+      'cs_by_minute',
+    ]);
+    const [kept] = await db`
+      SELECT puuid, final_items, damage_to_champions, physical_damage_to_champions,
+             magic_damage_to_champions, true_damage_to_champions, damage_taken,
+             damage_self_mitigated, healing_done, cc_time_on_others_s,
+             gold_by_minute, xp_by_minute, cs_by_minute
+      FROM participants WHERE match_id = ${MATCH} AND participant_id = 10`;
+    expect(kept).toEqual({
+      puuid: fakePuuid(10),
+      final_items: [3869, 0, 0, 0, 0, 0, 3340],
+      damage_to_champions: 15000,
+      physical_damage_to_champions: 9000,
+      magic_damage_to_champions: 5000,
+      true_damage_to_champions: 1000,
+      damage_taken: 18000,
+      damage_self_mitigated: 9000,
+      healing_done: 1500,
+      cc_time_on_others_s: 20,
+      gold_by_minute: [500, 900],
+      xp_by_minute: [0, 280],
+      cs_by_minute: [0, 6],
+    });
+    for (const view of ['stats_champion_traits', 'stats_champion_lane_phase']) {
+      await db.unsafe(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${view}`);
+    }
 
     // The old tables are gone, and deleting a match still takes its events with it.
     const [gone] = await db`

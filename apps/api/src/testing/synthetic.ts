@@ -1186,6 +1186,11 @@ export function generateMatches(options: GenerateOptions): ParsedMatch[] {
           quest === null
             ? [...l.core.slice(0, 5), l.boots, 3340]
             : [quest, ...l.core.slice(0, 4), l.boots, 3340];
+        // Three draws that used to be kills / deaths / assists (no longer stored): kept so that
+        // every later draw, hence every generated match, stays what the tests were written on.
+        rng();
+        rng();
+        rng();
         participants.push({
           participantId,
           puuid: `synthetic-puuid-${id}-${participantId}`,
@@ -1202,32 +1207,16 @@ export function generateMatches(options: GenerateOptions): ParsedMatch[] {
           runes: [...l.page.runes],
           statShards: [...l.page.shards],
           finalItems,
-          champLevel: 15,
-          kills: Math.floor(rng() * 10),
-          deaths: Math.floor(rng() * 8),
-          assists: Math.floor(rng() * 15),
-          laneMinions: 150,
-          jungleMinions: 10,
-          goldEarned: 11000,
-          goldSpent: 10500,
           damageToChampions: dmg,
           physicalDamageToChampions: phys,
           magicDamageToChampions: magic,
           trueDamageToChampions: Math.max(0, Math.round(dmg * trueShare)),
           damageTaken: Math.round(k.tank * 0.6 * (durationS / 60) * between(rng, 0.8, 1.2)),
           damageSelfMitigated: Math.round(k.tank * 0.4 * (durationS / 60) * between(rng, 0.8, 1.2)),
-          damageToBuildings: 2000,
-          damageToObjectives: 4000,
           healingDone: Math.round(
             (l.champ.healing ?? 5) * (durationS / 60) * between(rng, 0.8, 1.2),
           ),
-          healsOnTeammates: 0,
-          shieldsOnTeammates: 0,
           ccTimeOnOthersS: Math.round(k.cc * (durationS / 60) * between(rng, 0.7, 1.3)),
-          visionScore: 25,
-          wardsPlaced: 10,
-          wardsKilled: 3,
-          controlWardsBought: 2,
           ...timelineFrames(
             n,
             participantId,
@@ -1236,12 +1225,6 @@ export function generateMatches(options: GenerateOptions): ParsedMatch[] {
             ((ti === 0 ? red : blue)[i] as Loadout).champ,
             frameCount,
           ),
-          levelByMinute: Array.from({ length: frameCount }, (_, m) =>
-            Math.min(18, 1 + Math.floor(m / 2)),
-          ),
-          damageToChampionsByMinute: Array.from({ length: frameCount }, (_, m) => m * 500),
-          positionXByMinute: Array.from({ length: frameCount }, () => 7000),
-          positionYByMinute: Array.from({ length: frameCount }, () => 7000),
         });
         if (!isRemake) {
           itemEv.push(...itemEvents(rng, n, participantId, l, durationS));

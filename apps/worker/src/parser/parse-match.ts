@@ -192,30 +192,14 @@ function parseParticipant(
     summonerSpell2: num(p.summoner2Id),
     ...parseRunes(p),
     finalItems: [p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6].map(num),
-    champLevel: num(p.champLevel),
-    kills: num(p.kills),
-    deaths: num(p.deaths),
-    assists: num(p.assists),
-    laneMinions: num(p.totalMinionsKilled),
-    jungleMinions: num(p.neutralMinionsKilled),
-    goldEarned: num(p.goldEarned),
-    goldSpent: num(p.goldSpent),
     damageToChampions: num(p.totalDamageDealtToChampions),
     physicalDamageToChampions: num(p.physicalDamageDealtToChampions),
     magicDamageToChampions: num(p.magicDamageDealtToChampions),
     trueDamageToChampions: num(p.trueDamageDealtToChampions),
     damageTaken: num(p.totalDamageTaken),
     damageSelfMitigated: num(p.damageSelfMitigated),
-    damageToBuildings: num(p.damageDealtToBuildings),
-    damageToObjectives: num(p.damageDealtToObjectives),
     healingDone: num(p.totalHeal),
-    healsOnTeammates: num(p.totalHealsOnTeammates),
-    shieldsOnTeammates: num(p.totalDamageShieldedOnTeammates),
     ccTimeOnOthersS: num(p.timeCCingOthers),
-    visionScore: num(p.visionScore),
-    wardsPlaced: num(p.wardsPlaced),
-    wardsKilled: num(p.wardsKilled),
-    controlWardsBought: num(p.visionWardsBoughtInGame),
     ...perMinute,
   };
 }
@@ -226,10 +210,6 @@ function participantFrames(participantId: number, frames: TimelineDto['info']['f
     goldByMinute: [] as number[],
     xpByMinute: [] as number[],
     csByMinute: [] as number[],
-    levelByMinute: [] as number[],
-    damageToChampionsByMinute: [] as number[],
-    positionXByMinute: [] as number[],
-    positionYByMinute: [] as number[],
   };
   let last: ParticipantFrameDto | undefined;
   for (const f of frames) {
@@ -238,10 +218,6 @@ function participantFrames(participantId: number, frames: TimelineDto['info']['f
     out.goldByMinute.push(num(pf?.totalGold));
     out.xpByMinute.push(num(pf?.xp));
     out.csByMinute.push(num(pf?.minionsKilled) + num(pf?.jungleMinionsKilled));
-    out.levelByMinute.push(num(pf?.level));
-    out.damageToChampionsByMinute.push(num(pf?.damageStats?.totalDamageDoneToChampions));
-    out.positionXByMinute.push(num(pf?.position?.x));
-    out.positionYByMinute.push(num(pf?.position?.y));
   }
   return out;
 }

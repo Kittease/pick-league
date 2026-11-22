@@ -620,7 +620,7 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       ]);
 
       const [p] = await db`
-        SELECT runes, stat_shards, final_items, gold_by_minute, position_x_by_minute, position
+        SELECT runes, stat_shards, final_items, gold_by_minute, cs_by_minute, position
         FROM participants WHERE match_id = 'EUW1_100' AND participant_id = 1`;
       expect(p?.runes).toEqual([8005, 9111, 9104, 8014, 8444, 8451]);
       expect(p?.final_items).toEqual([3006, 0, 0, 0, 0, 0, 3340]);

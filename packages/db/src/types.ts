@@ -79,40 +79,21 @@ export interface ParsedParticipant {
   /** 7: item0..item6 (6 = trinket), 0 = empty. */
   finalItems: number[];
 
-  champLevel: number;
-  kills: number;
-  deaths: number;
-  assists: number;
-  laneMinions: number;
-  jungleMinions: number;
-  goldEarned: number;
-  goldSpent: number;
+  // End-of-game totals (what the champion trait profiles read).
   damageToChampions: number;
   physicalDamageToChampions: number;
   magicDamageToChampions: number;
   trueDamageToChampions: number;
   damageTaken: number;
   damageSelfMitigated: number;
-  damageToBuildings: number;
-  damageToObjectives: number;
   healingDone: number;
-  healsOnTeammates: number;
-  shieldsOnTeammates: number;
   ccTimeOnOthersS: number;
-  visionScore: number;
-  wardsPlaced: number;
-  wardsKilled: number;
-  controlWardsBought: number;
 
-  /** One value per timeline frame (index 0 = minute 0). */
+  /** One value per timeline frame (index 0 = minute 0): what the lane phase reads. */
   goldByMinute: number[];
   xpByMinute: number[];
   /** Lane + jungle minions. */
   csByMinute: number[];
-  levelByMinute: number[];
-  damageToChampionsByMinute: number[];
-  positionXByMinute: number[];
-  positionYByMinute: number[];
 }
 
 /** A purchase, a sale or an undo of a participant. */
