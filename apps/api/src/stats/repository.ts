@@ -724,7 +724,7 @@ export async function loadPatchMatches(
 /** Segments to sum: one platform (null = every server) and the minimum player rank level. */
 export interface TierListSegment {
   platform: Platform | null;
-  /** 0 = every player, 1 = Grandmaster+, 2 = Challenger (see stats_tierlist_participants). */
+  /** 0 = every player, 1 = Master+, 2 = Grandmaster+, 3 = Challenger (see stats_tierlist_participants). */
   minRankLevel: number;
 }
 

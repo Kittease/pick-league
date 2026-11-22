@@ -18,7 +18,7 @@ import type { ApiResult } from './types';
  * serializable data; failures come back as `{ ok: false }`, never as thrown errors.
  */
 export interface PickLeagueData {
-  /** Tier list of a role (latest patch), filtered by server and rank (default: all, Master+). */
+  /** Tier list of a role (latest patch), filtered by server and rank (default: all, Diamond+). */
   getTierList(role: Position, filters?: TierListFilters): Promise<ApiResult<TierListResponse>>;
   /** Matchups, duos and synergies of a tier list champion (fetched when it is selected). */
   getTierListChampion(

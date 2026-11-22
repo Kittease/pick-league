@@ -25,11 +25,16 @@ import * as repo from '../stats/repository.ts';
 import { patchContext } from './recommendations.ts';
 
 /** Minimum `rank_level` of stats_tierlist_participants per rank filter. */
-const MIN_RANK_LEVEL: Record<TierListRank, number> = { MASTER: 0, GRANDMASTER: 1, CHALLENGER: 2 };
+const MIN_RANK_LEVEL: Record<TierListRank, number> = {
+  DIAMOND: 0,
+  MASTER: 1,
+  GRANDMASTER: 2,
+  CHALLENGER: 3,
+};
 
 /** Segment of the filtered views, or null for the defaults (every player: unfiltered views). */
 export function tierListSegment(filters: TierListFilters): repo.TierListSegment | null {
-  if (filters.platform === 'ALL' && filters.rank === 'MASTER') return null;
+  if (filters.platform === 'ALL' && filters.rank === 'DIAMOND') return null;
   return {
     platform: filters.platform === 'ALL' ? null : filters.platform,
     minRankLevel: MIN_RANK_LEVEL[filters.rank],

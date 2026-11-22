@@ -737,8 +737,8 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
 
   test('GET /tierlist: default filters are echoed and the filtered views agree with the unfiltered ones', async () => {
     const body = (await (await get('/tierlist?role=BOTTOM')).json()) as TierListResponse;
-    expect(body.filters).toEqual({ platform: 'ALL', rank: 'MASTER' });
-    const explicit = await get('/tierlist?role=BOTTOM&patch=latest&platform=ALL&rank=MASTER');
+    expect(body.filters).toEqual({ platform: 'ALL', rank: 'DIAMOND' });
+    const explicit = await get('/tierlist?role=BOTTOM&patch=latest&platform=ALL&rank=DIAMOND');
     expect(await explicit.json()).toEqual(body);
 
     // Every segment summed (no platform, rank level >= 0) = the unfiltered views.
@@ -800,7 +800,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       ),
     );
     const kr = byServer[0] as TierListResponse;
-    expect(kr.filters).toEqual({ platform: 'KR', rank: 'MASTER' });
+    expect(kr.filters).toEqual({ platform: 'KR', rank: 'DIAMOND' });
     // One support per team of the KR matches on CUR, remakes excluded.
     const [kr2] = await db<{ n: number }[]>`
       SELECT count(*)::int AS n FROM participants p JOIN matches m ON m.id = p.match_id
@@ -842,6 +842,13 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     ).json()) as TierListResponse;
     expect(gm.filters).toEqual({ platform: 'EUW1', rank: 'GRANDMASTER' });
     expect(gm.roleGames).toBe(await roleGames(['CHALLENGER', 'GRANDMASTER'], 'EUW1'));
+    // Master+ is a filter of its own: Diamond players and players without a rank are left out.
+    const master = (await (
+      await get('/tierlist?role=UTILITY&rank=MASTER')
+    ).json()) as TierListResponse;
+    expect(master.filters).toEqual({ platform: 'ALL', rank: 'MASTER' });
+    expect(master.roleGames).toBe(await roleGames(['CHALLENGER', 'GRANDMASTER', 'MASTER']));
+    expect(master.roleGames).toBeGreaterThan(gm.roleGames);
 
     // Fewer games per champion than unfiltered; the previous patch is still listed for some.
     const all = (await (await get('/tierlist?role=UTILITY')).json()) as TierListResponse;
@@ -867,7 +874,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
   });
 
   test('GET /tierlist: bad filters', async () => {
-    for (const qs of ['platform=EUW', 'platform=euw1', 'rank=DIAMOND', 'rank=master']) {
+    for (const qs of ['platform=EUW', 'platform=euw1', 'rank=EMERALD', 'rank=master']) {
       const res = await get(`/tierlist?role=TOP&${qs}`);
       expect(res.status).toBe(400);
       expect(((await res.json()) as ApiErrorResponse).error.code).toBe('BAD_REQUEST');
@@ -900,7 +907,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(planted).toBeLessThan(3);
     expect(naut.matchups[planted]?.delta).toBeGreaterThan(0.03);
     expect(naut.duos.every((d) => d.role === 'BOTTOM')).toBe(true);
-    expect(naut.filters).toEqual({ platform: 'ALL', rank: 'MASTER' });
+    expect(naut.filters).toEqual({ platform: 'ALL', rank: 'DIAMOND' });
     expect(naut.synergies?.length).toBeGreaterThan(0);
     expect((naut.synergies ?? []).every((s) => ['TOP', 'JUNGLE', 'MIDDLE'].includes(s.role))).toBe(
       true,
@@ -924,7 +931,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     const url = '/tierlist/champion?role=UTILITY&championId=111';
     const all = (await (await get(url)).json()) as TierListChampionResponse;
     const kr = (await (await get(`${url}&platform=KR`)).json()) as TierListChampionResponse;
-    expect(kr.filters).toEqual({ platform: 'KR', rank: 'MASTER' });
+    expect(kr.filters).toEqual({ platform: 'KR', rank: 'DIAMOND' });
     expect(kr.synergies).toBeNull();
     expect(kr.games).toBeLessThan(all.games);
     expect(kr.matchups.length).toBeGreaterThan(0);

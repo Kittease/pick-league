@@ -535,9 +535,10 @@ TOP / JUNGLE / MIDDLE compare the two players (1v1). BOTTOM / UTILITY compare th
 **Tier list filters** (`0006_tierlist_filters.sql`):
 
 ```sql
--- rank_level = 2 CHALLENGER, 1 GRANDMASTER, 0 anything else (MASTER, below Master, unknown),
--- from players.solo_tier at refresh time. Filter "Grandmaster+" = rank_level >= 1,
--- "Challenger only" = 2; "Master+" (default) and "all servers" read the unfiltered views.
+-- rank_level = 3 CHALLENGER, 2 GRANDMASTER, 1 MASTER, 0 anything else (Diamond, below, unknown),
+-- from players.solo_tier at refresh time (0029_tierlist_master_filter.sql; 2 / 1 / 0 before, with
+-- Master in 0). Filter "Master+" = rank_level >= 1, "Grandmaster+" = rank_level >= 2,
+-- "Challenger only" = 3; "Diamond+" (default) and "all servers" read the unfiltered views.
 
 -- Intermediate: one row per participant of a non-remake match (position may be NULL).
 stats_tierlist_participants (patch, platform, rank_level, match_id, participant_id,

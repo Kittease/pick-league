@@ -460,7 +460,7 @@ export function ChampionRelations({
         />
       ) : (
         <p className="text-[11px] leading-snug text-muted-foreground">
-          Synergies with other allies are only available for all servers at Master+.
+          Synergies with other allies are only available for all servers at Diamond+.
         </p>
       )}
     </div>

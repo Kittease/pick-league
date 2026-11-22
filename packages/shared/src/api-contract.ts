@@ -662,10 +662,12 @@ export type TierListPlatform = (typeof TIER_LIST_PLATFORMS)[number];
 
 /**
  * Rank filter of the tier list, on each counted player's current solo tier (not the tier at match
- * time): 'MASTER' = Master+ (default, every player: the matches come from Master+ ladders),
- * 'GRANDMASTER' = Grandmaster and Challenger players, 'CHALLENGER' = Challenger players only.
+ * time): 'DIAMOND' = Diamond+ (default, every player of every stored game: the matches come from
+ * the Master+ ladders and the tracked Diamond players), 'MASTER' = Master, Grandmaster and
+ * Challenger players, 'GRANDMASTER' = Grandmaster and Challenger players, 'CHALLENGER' =
+ * Challenger players only.
  */
-export const TIER_LIST_RANKS = ['MASTER', 'GRANDMASTER', 'CHALLENGER'] as const;
+export const TIER_LIST_RANKS = ['DIAMOND', 'MASTER', 'GRANDMASTER', 'CHALLENGER'] as const;
 export type TierListRank = (typeof TIER_LIST_RANKS)[number];
 
 export interface TierListFilters {
@@ -673,7 +675,7 @@ export interface TierListFilters {
   rank: TierListRank;
 }
 
-export const DEFAULT_TIER_LIST_FILTERS: TierListFilters = { platform: 'ALL', rank: 'MASTER' };
+export const DEFAULT_TIER_LIST_FILTERS: TierListFilters = { platform: 'ALL', rank: 'DIAMOND' };
 
 /** Filters from untrusted input (IPC, local storage): unknown values fall back to the defaults. */
 export function toTierListFilters(value: unknown): TierListFilters {
@@ -688,13 +690,13 @@ export function toTierListFilters(value: unknown): TierListFilters {
 
 /**
  * Query string of `GET /tierlist`. `patch` = a patch id or 'latest' (default). `platform` and
- * `rank` filter the counted players (defaults: every server, Master+ = no rank filter).
+ * `rank` filter the counted players (defaults: every server, Diamond+ = no rank filter).
  */
 export const tierListQuerySchema = z.object({
   role: positionSchema,
   patch: z.union([z.literal('latest'), patchIdSchema]).default('latest'),
   platform: z.enum(TIER_LIST_PLATFORMS).default('ALL'),
-  rank: z.enum(TIER_LIST_RANKS).default('MASTER'),
+  rank: z.enum(TIER_LIST_RANKS).default('DIAMOND'),
 });
 export type TierListQuery = z.infer<typeof tierListQuerySchema>;
 export type TierListQueryInput = z.input<typeof tierListQuerySchema>;

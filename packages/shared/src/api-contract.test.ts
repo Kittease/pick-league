@@ -10,18 +10,19 @@ import {
 } from './api-contract.ts';
 
 describe('tier list filters', () => {
-  test('query defaults to every server and Master+', () => {
+  test('query defaults to every server and Diamond+', () => {
     expect(tierListQuerySchema.parse({ role: 'UTILITY' })).toEqual({
       role: 'UTILITY',
       patch: 'latest',
       platform: 'ALL',
-      rank: 'MASTER',
+      rank: 'DIAMOND',
     });
     expect(
       tierListQuerySchema.parse({ role: 'TOP', platform: 'VN2', rank: 'CHALLENGER' }),
     ).toMatchObject({ platform: 'VN2', rank: 'CHALLENGER' });
     expect(tierListQuerySchema.safeParse({ role: 'TOP', platform: 'EUW' }).success).toBe(false);
-    expect(tierListQuerySchema.safeParse({ role: 'TOP', rank: 'DIAMOND' }).success).toBe(false);
+    expect(tierListQuerySchema.parse({ role: 'TOP', rank: 'MASTER' }).rank).toBe('MASTER');
+    expect(tierListQuerySchema.safeParse({ role: 'TOP', rank: 'EMERALD' }).success).toBe(false);
   });
 
   test('untrusted filters fall back to the defaults field by field', () => {
@@ -33,8 +34,8 @@ describe('tier list filters', () => {
       platform: 'ALL',
       rank: 'CHALLENGER',
     });
-    expect(toTierListFilters(null)).toEqual({ platform: 'ALL', rank: 'MASTER' });
-    expect(toTierListFilters('KR')).toEqual({ platform: 'ALL', rank: 'MASTER' });
+    expect(toTierListFilters(null)).toEqual({ platform: 'ALL', rank: 'DIAMOND' });
+    expect(toTierListFilters('KR')).toEqual({ platform: 'ALL', rank: 'DIAMOND' });
   });
 });
 

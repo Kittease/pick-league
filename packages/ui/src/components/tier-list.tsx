@@ -179,6 +179,7 @@ const PLATFORM_LABEL: Record<TierListPlatform, string> = {
 };
 
 const RANK_LABEL: Record<TierListRank, string> = {
+  DIAMOND: 'Diamond+',
   MASTER: 'Master+',
   GRANDMASTER: 'Grandmaster+',
   CHALLENGER: 'Challenger only',
@@ -778,7 +779,7 @@ export function TierListPage({
             onChange={(platform) => setFilters({ platform })}
           />
           <FilterSelect
-            label="Players' current solo rank. Master+ keeps every player of these matches: about 1 in 6 is currently below Master"
+            label="Players' current solo rank. Diamond+ keeps every player of the stored matches (Master+ lobbies and the games of tracked Diamond players)"
             value={filters.rank}
             labels={RANK_LABEL}
             onChange={(rank) => setFilters({ rank })}
@@ -854,7 +855,7 @@ export function TierListPage({
             {data && rows.length === 0 && (
               <p className="p-6 text-sm text-muted-foreground">
                 {data.entries.length === 0
-                  ? filters.platform === 'ALL' && filters.rank === 'MASTER'
+                  ? filters.platform === 'ALL' && filters.rank === 'DIAMOND'
                     ? `No champion has enough games in ${lane === 'ALL' ? 'any role' : 'this role'} yet.`
                     : `No champion has enough games in ${lane === 'ALL' ? 'any role' : 'this role'} with this server and rank yet.`
                   : 'No champion matches the filters.'}
