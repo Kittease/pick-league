@@ -13,8 +13,9 @@
  * here, so whatever logs or stores a Riot error downstream never sees one.
  */
 import {
+  type ApexLadderTier,
   type ChampionMasteryDto,
-  type LadderTier,
+  type Division,
   type LeagueEntryDto,
   type LeagueListDto,
   type MatchDto,
@@ -33,6 +34,11 @@ import { HostLimiter, type HostLimiterOptions, type HostLimiterStats } from './r
 /** Priority levels of docs/architecture.md (higher = served first). */
 export const PRIORITY = {
   LADDER: 5,
+  /**
+   * Pages of the Diamond sweep, on the platform host: after the apex ladders, before the
+   * masteries and rank lookups of the same host (the sweep decides who played).
+   */
+  DIAMOND_SWEEP: 4,
   MATCH_IDS: 4,
   MATCH: 3,
   DAILY_REFRESH: 2,
@@ -97,7 +103,17 @@ export interface MatchIdsQuery {
 
 /** What the scheduler needs from Riot (a fake implements it in tests). */
 export interface RiotApi {
-  getLeague(platform: Platform, tier: LadderTier, signal?: AbortSignal): Promise<LeagueListDto>;
+  getLeague(platform: Platform, tier: ApexLadderTier, signal?: AbortSignal): Promise<LeagueListDto>;
+  /**
+   * One page (from 1) of the solo queue entries of a Diamond division: up to 205 entries in no
+   * particular order, an empty array after the last page.
+   */
+  getDiamondEntries(
+    platform: Platform,
+    division: Division,
+    page: number,
+    signal?: AbortSignal,
+  ): Promise<LeagueEntryDto[]>;
   getMatchIds(
     platform: Platform,
     puuid: string,
@@ -161,7 +177,7 @@ export class RiotClient implements RiotApi {
     this.log = options.log ?? silentLogger;
   }
 
-  getLeague(platform: Platform, tier: LadderTier, signal?: AbortSignal) {
+  getLeague(platform: Platform, tier: ApexLadderTier, signal?: AbortSignal) {
     const kind = `${tier.toLowerCase()}leagues`;
     return this.getOrThrow<LeagueListDto>(
       platform,
@@ -169,6 +185,17 @@ export class RiotClient implements RiotApi {
       `league-v4.${kind}`,
       `/lol/league/v4/${kind}/by-queue/${RANKED_SOLO_QUEUE}`,
       PRIORITY.LADDER,
+      signal,
+    );
+  }
+
+  getDiamondEntries(platform: Platform, division: Division, page: number, signal?: AbortSignal) {
+    return this.getOrThrow<LeagueEntryDto[]>(
+      platform,
+      platformBaseUrl(platform),
+      'league-v4.entries',
+      `/lol/league/v4/entries/${RANKED_SOLO_QUEUE}/DIAMOND/${division}?page=${Math.trunc(page)}`,
+      PRIORITY.DIAMOND_SWEEP,
       signal,
     );
   }

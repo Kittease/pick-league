@@ -14,6 +14,8 @@ export interface WorkerConfig {
    * runs) or 'on' (a tracked player whose new games are all stored is not listed).
    */
   listingSkip: ListingSkipMode;
+  /** Diamond players tracked at most, per platform (default 0: Diamond is not read at all). */
+  diamondMaxTracked: number;
 }
 
 export class ConfigError extends Error {
@@ -65,6 +67,15 @@ export function loadConfig(env: Record<string, string | undefined>): WorkerConfi
     );
   }
 
+  const rawDiamond = (env.DIAMOND_MAX_TRACKED ?? '').trim() || '0';
+  let diamondMaxTracked = 0;
+  if (/^\d{1,7}$/.test(rawDiamond)) diamondMaxTracked = Number(rawDiamond);
+  else {
+    problems.push(
+      `DIAMOND_MAX_TRACKED must be a whole number of players, 0 to 9999999 (got "${rawDiamond}")`,
+    );
+  }
+
   if (problems.length > 0) {
     throw new ConfigError(`Invalid worker configuration:\n  - ${problems.join('\n  - ')}`);
   }
@@ -75,5 +86,6 @@ export function loadConfig(env: Record<string, string | undefined>): WorkerConfi
     logLevel,
     collectPreviousPatch,
     listingSkip,
+    diamondMaxTracked,
   };
 }

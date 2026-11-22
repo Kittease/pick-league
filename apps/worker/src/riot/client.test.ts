@@ -267,4 +267,34 @@ describe('RiotClient', () => {
       'by-puuid/untracked/ids',
     ]);
   });
+
+  test('a Diamond division page is asked on the platform host, by division and page', async () => {
+    const { client, calls } = setup(() => json([]));
+    expect(await client.getDiamondEntries('KR', 'II', 3)).toEqual([]);
+    expect(calls.map((c) => c.url)).toEqual([
+      'https://kr.api.riotgames.com/lol/league/v4/entries/RANKED_SOLO_5x5/DIAMOND/II?page=3',
+    ]);
+  });
+
+  test('a missing Diamond page is an error, not the end of the division', async () => {
+    const { client } = setup(() => new Response('{}', { status: 404 }));
+    await expect(client.getDiamondEntries('KR', 'I', 1)).rejects.toThrow(RiotHttpError);
+  });
+
+  test('Diamond pages go out after the apex ladders and before masteries and rank lookups', async () => {
+    const { client, clock, calls } = setup(() => json([]), { appLimit: '1:1' });
+    await client.getMasteries('EUW1', 'first', PRIORITY.ENRICHMENT);
+    client.getMasteries('EUW1', 'enrich', PRIORITY.ENRICHMENT);
+    client.getMasteries('EUW1', 'daily', PRIORITY.DAILY_REFRESH);
+    client.getDiamondEntries('EUW1', 'I', 1);
+    client.getLeague('EUW1', 'MASTER');
+    for (let i = 0; i < 5; i++) await clock.advance(1000);
+    expect(calls.map((c) => c.url.split('/').slice(-1)[0])).toEqual([
+      'first',
+      'RANKED_SOLO_5x5',
+      'I?page=1',
+      'daily',
+      'enrich',
+    ]);
+  });
 });

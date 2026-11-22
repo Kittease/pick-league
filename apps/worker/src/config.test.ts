@@ -47,3 +47,19 @@ describe('loadConfig: LISTING_SKIP', () => {
     expect(load).toThrow(/LISTING_SKIP/);
   });
 });
+
+describe('loadConfig: DIAMOND_MAX_TRACKED', () => {
+  test.each([undefined, '', '0'])('none with %p', (value) => {
+    expect(loadConfig({ ...VALID, DIAMOND_MAX_TRACKED: value }).diamondMaxTracked).toBe(0);
+  });
+
+  test('a number of players', () => {
+    expect(loadConfig({ ...VALID, DIAMOND_MAX_TRACKED: ' 5000 ' }).diamondMaxTracked).toBe(5000);
+  });
+
+  test.each(['-1', '2.5', 'all', '1e4'])('%p is a configuration error', (value) => {
+    const load = () => loadConfig({ ...VALID, DIAMOND_MAX_TRACKED: value });
+    expect(load).toThrow(ConfigError);
+    expect(load).toThrow(/DIAMOND_MAX_TRACKED/);
+  });
+});

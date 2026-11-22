@@ -4,6 +4,7 @@ import {
   type ApexLadderTier,
   type ChampionMasteryDto,
   comparePatches,
+  type Division,
   type LeagueEntryDto,
   type LeagueListDto,
   type MatchDto,
@@ -73,6 +74,28 @@ export function makeTimedMatch(
   return m;
 }
 
+/** A solo queue entry of a Diamond division page. */
+export function diamondEntry(
+  puuid: string,
+  division: Division,
+  leaguePoints: number,
+  games: number,
+): LeagueEntryDto {
+  return {
+    puuid,
+    queueType: 'RANKED_SOLO_5x5',
+    tier: 'DIAMOND',
+    rank: division,
+    leaguePoints,
+    wins: games,
+    losses: 10,
+    hotStreak: false,
+    veteran: false,
+    freshBlood: false,
+    inactive: false,
+  };
+}
+
 export class FakeRiot implements RiotApi {
   calls: string[] = [];
   leagues: Record<ApexLadderTier, LeagueListDto> = {
@@ -80,6 +103,9 @@ export class FakeRiot implements RiotApi {
     GRANDMASTER: { leagueId: 'l', tier: 'GRANDMASTER', name: 'n', queue: 'q', entries: [] },
     MASTER: { leagueId: 'l', tier: 'MASTER', name: 'n', queue: 'q', entries: [] },
   };
+  /** Diamond divisions, served `diamondPageSize` entries per page. */
+  diamond: Record<Division, LeagueEntryDto[]> = { I: [], II: [], III: [], IV: [] };
+  diamondPageSize = 2;
   matchIds = new Map<string, string[]>();
   idQueries: MatchIdsQuery[] = [];
   matches = new Map<string, { match: MatchDto; timeline: TimelineDto }>();
@@ -95,6 +121,12 @@ export class FakeRiot implements RiotApi {
     this.calls.push(`league:${tier}`);
     this.maybeThrow(`league:${tier}`);
     return this.leagues[tier];
+  }
+  async getDiamondEntries(_p: Platform, division: Division, page: number) {
+    this.calls.push(`diamond:${division}:${page}`);
+    this.maybeThrow(`diamond:${division}:${page}`);
+    const from = (page - 1) * this.diamondPageSize;
+    return this.diamond[division].slice(from, from + this.diamondPageSize);
   }
   /** When set, match-id listings wait for it (after recording the call). */
   idsGate: Promise<void> | null = null;

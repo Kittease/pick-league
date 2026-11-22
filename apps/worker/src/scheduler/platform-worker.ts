@@ -3,6 +3,7 @@
  * rate limiters, which serve the highest priority first (docs/architecture.md, "Worker"):
  *
  * 1. ladder refresh (hourly, and when Master grows) → platform host, priority 5
+ *    (with Diamond tracking: then the Diamond sweep → platform host, priority 4)
  * 2. match-id listing of "played" players → match cluster, priority 4
  * 3. match + timeline fetch             → match cluster, priority 3
  * 4. daily account + mastery refresh    → account cluster + platform host, priority 2
@@ -21,6 +22,10 @@
  * stored already (found through other players) needs no listing. For that the matches a listing
  * queues must be stored before the next players are decided, so a tracked player is only picked
  * for a listing once no match queued by a better-placed player is still to be fetched.
+ *
+ * Diamond tracking (`diamondMaxTracked` > 0): after each hourly ladder refresh the four Diamond
+ * divisions are read page by page, and up to that many Diamond players are tracked after the apex
+ * players: first those seen in a Master+ game lately, then Diamond I by LP when budget remains.
  */
 import {
   claimEnrichment,
@@ -54,6 +59,7 @@ import {
   pickProbeMatch,
   platformHasMatchOnPatch,
   playersNeedingDailyRefresh,
+  playersSeenWithMasterSince,
   playersWithListingRequested,
   type QueuedEnrichment,
   type QueuedMatch,
@@ -64,20 +70,26 @@ import {
   skipPendingMatchesUpTo,
   startWorkerRun,
   touchWorkerStatus,
+  trackedDiamondEntries,
   trackedPlayersNeverListed,
   updatePlayerRank,
+  upsertDiamondLadder,
   upsertLadder,
 } from '@pick-league/db';
 import {
   type ApexLadderTier,
   type ChampionMasteryDto,
+  DIVISIONS,
+  type Division,
+  type LeagueEntryDto,
   type LeagueListDto,
   type Platform,
   patchFromGameVersion,
   platformFromMatchId,
+  RANKED_SOLO_QUEUE,
   type SoloTier,
 } from '@pick-league/shared';
-import { type Clock, isAbortError, systemClock } from '../clock.ts';
+import { abortError, type Clock, isAbortError, systemClock } from '../clock.ts';
 import { errorMessage, type Logger, silentLogger } from '../log.ts';
 import { MatchParseError, parseMatch } from '../parser/parse-match.ts';
 import type { PatchVerdict } from '../patches.ts';
@@ -89,6 +101,8 @@ import { WorkSource } from './work-source.ts';
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const MAX_LISTING_RETRY_MS = 6 * HOUR;
+/** A Diamond division that has not ended after this many pages fails the sweep (KR has ~250). */
+const MAX_DIAMOND_PAGES = 5_000;
 
 /**
  * Listing skip rule. 'off': every tracked player who played is listed. 'on': a player whose new
@@ -170,6 +184,21 @@ export interface SchedulerOptions {
    */
   listingGateMaxWaitMs: number;
   listingGatePollMs: number;
+  /**
+   * Diamond players tracked at most, after the apex players (default 0: none, and no Diamond
+   * request is made). First those seen in a Master+ game during `diamondWithMasterWindowMs`
+   * (default 7 days), by division then LP; then Diamond I players by LP, `diamondStep` more
+   * (default 500) each time the platform has caught up, every Master player of Riot's list is
+   * tracked and no untracked player is due for a listing.
+   */
+  diamondMaxTracked: number;
+  diamondStep: number;
+  diamondWithMasterWindowMs: number;
+  /**
+   * A tracked Diamond player missing from complete sweeps is kept as is, and dropped once the
+   * last sweep that saw them is older than this (default 24 h).
+   */
+  diamondKeepMs: number;
 }
 
 export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
@@ -195,6 +224,10 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   listingSkipSafetyMs: DAY,
   listingGateMaxWaitMs: 5 * 60_000,
   listingGatePollMs: 1_000,
+  diamondMaxTracked: 0,
+  diamondStep: 500,
+  diamondWithMasterWindowMs: 7 * DAY,
+  diamondKeepMs: DAY,
 };
 
 /**
@@ -257,12 +290,117 @@ export interface PlatformProgress {
   listingsSkipped: number;
   /** 'shadow': would-be-skipped listings that queued new match ids (`listing_skip_misses` rows). */
   listingSkipMisses: number;
+  /** Diamond tracking; null when it is off (`diamondMaxTracked` = 0). */
+  diamond: DiamondProgress | null;
+}
+
+export interface DiamondProgress {
+  /** Players of the last complete sweep per division (I, II, III, IV); null before the first one. */
+  seen: [number, number, number, number] | null;
+  /** Diamond players tracked. */
+  tracked: number;
+  /** Of them, as of the last complete sweep: seen in a Master+ game lately / Diamond I by LP. */
+  trackedWithMaster: number | null;
+  trackedDiamondOne: number | null;
+  /** `diamondMaxTracked`. */
+  cap: number;
 }
 
 /** Numeric part of 'EUW1_7234567890' (game ids grow with time on a platform). */
 export function gameIdOf(matchId: string): number | null {
   const n = Number(matchId.split('_')[1]);
   return Number.isSafeInteger(n) ? n : null;
+}
+
+/** A Diamond player as a sweep saw them (or, for one it missed, as stored). */
+export interface DiamondEntry {
+  puuid: string;
+  /** 1..4 */
+  division: number;
+  leaguePoints: number;
+  wins: number;
+  losses: number;
+  /** When their page was fetched. */
+  seenAt: number;
+}
+
+type DiamondRank = Pick<DiamondEntry, 'puuid' | 'division' | 'leaguePoints'>;
+
+/** Valid solo queue Diamond entries of a sweep page, as division `division` (1..4). */
+export function toDiamondEntries(
+  page: readonly LeagueEntryDto[],
+  division: number,
+  seenAt: number,
+): DiamondEntry[] {
+  return page
+    .filter(
+      (e) =>
+        typeof e.puuid === 'string' &&
+        e.puuid !== '' &&
+        (e.tier === undefined || e.tier === 'DIAMOND') &&
+        (e.queueType === undefined || e.queueType === RANKED_SOLO_QUEUE),
+    )
+    .map((e) => ({
+      puuid: e.puuid,
+      division,
+      leaguePoints: e.leaguePoints ?? 0,
+      wins: e.wins ?? 0,
+      losses: e.losses ?? 0,
+      seenAt,
+    }));
+}
+
+/** Diamond players from the top down: division I first, then LP (most first). */
+export function byDivisionThenLp(a: DiamondRank, b: DiamondRank): number {
+  return (
+    a.division - b.division ||
+    b.leaguePoints - a.leaguePoints ||
+    (a.puuid < b.puuid ? -1 : a.puuid > b.puuid ? 1 : 0)
+  );
+}
+
+function toDiamondLadderEntry(e: DiamondEntry): LadderEntryInput {
+  return {
+    puuid: e.puuid,
+    tier: 'DIAMOND',
+    division: e.division,
+    leaguePoints: e.leaguePoints,
+    wins: e.wins,
+    losses: e.losses,
+    seenAt: new Date(e.seenAt),
+  };
+}
+
+export interface DiamondSelection {
+  /** Seen in a Master+ game lately, top down, at most `cap`. */
+  withMaster: DiamondEntry[];
+  /** Diamond I players by LP, at most `extra` and the room left under `cap`. */
+  diamondOne: DiamondEntry[];
+  /** The next Diamond I players by LP, not tracked. */
+  reserve: DiamondEntry[];
+}
+
+/**
+ * Which Diamond players to track: those of `seenWithMaster` first (division, then LP), then
+ * Diamond I players by LP, at most `extra` of them; `cap` players in all.
+ */
+export function selectDiamondPlayers(
+  candidates: readonly DiamondEntry[],
+  seenWithMaster: ReadonlySet<string>,
+  cap: number,
+  extra: number,
+): DiamondSelection {
+  const first: DiamondEntry[] = [];
+  const others: DiamondEntry[] = [];
+  for (const c of candidates) {
+    if (seenWithMaster.has(c.puuid)) first.push(c);
+    else if (c.division === 1) others.push(c);
+  }
+  first.sort(byDivisionThenLp);
+  others.sort(byDivisionThenLp);
+  const withMaster = first.slice(0, Math.max(0, cap));
+  const room = Math.max(0, Math.min(extra, cap - withMaster.length));
+  return { withMaster, diamondOne: others.slice(0, room), reserve: others.slice(room) };
 }
 
 export function toLadderEntries(list: LeagueListDto, tier: ApexLadderTier): LadderEntryInput[] {
@@ -319,8 +457,32 @@ export class PlatformWorker {
 
   /** Players to list (best ladder position first). Durable copy: `players.listing_requested_at`. */
   private readonly played = new Set<string>();
-  /** Ladder position of each tracked player (0 = first Challenger), from the last refresh. */
+  /**
+   * Ladder position of each tracked player (0 = first Challenger), from the last refresh: the
+   * apex players (`apexOrder`), then the tracked Diamond players (`diamond.tracked`).
+   */
   private ladderRank = new Map<string, number>();
+  private apexOrder: string[] = [];
+  /** Every player of Riot's three apex lists at the last refresh (tracked or not). */
+  private apexPuuids = new Set<string>();
+  /** Diamond tracking (`diamondMaxTracked` > 0). */
+  private readonly diamond = {
+    /** Tracked Diamond players, top down (division, then LP). */
+    tracked: [] as DiamondRank[],
+    /** Players per division of the last complete sweep. */
+    seen: null as [number, number, number, number] | null,
+    /** Tracked players of each group at the last complete sweep. */
+    withMaster: null as number | null,
+    diamondOne: null as number | null,
+    /**
+     * Diamond I players that may be tracked beyond those seen in a Master+ game: grows by
+     * `diamondStep` when budget remains (null until the first complete sweep, which reads it
+     * back from the stored rows).
+     */
+    extra: null as number | null,
+    /** The next Diamond I players by LP, from the last complete sweep. */
+    reserve: [] as DiamondEntry[],
+  };
   /** Master players tracked: grows by `masterStep` when the queues are nearly empty. */
   private masterTracked = 0;
   /** Players in the whole Master tier at the last ladder refresh (0 = not refreshed yet). */
@@ -487,8 +649,15 @@ export class PlatformWorker {
       this.log.warn('empty ladder from Riot, not stored');
       return 0;
     }
-    const result = await upsertLadder(this.db, this.platform, entries, new Date(this.clock.now()));
-    this.setLadderOrder(entries.map((e) => e.puuid));
+    // With Diamond tracking the Diamond rows belong to the sweep; without it they are removed.
+    const keepDiamond = this.opts.diamondMaxTracked > 0;
+    const result = await upsertLadder(this.db, this.platform, entries, new Date(this.clock.now()), {
+      keepDiamond,
+    });
+    this.apexOrder = entries.map((e) => e.puuid);
+    if (keepDiamond) this.apexPuuids = new Set([...entries, ...masters].map((e) => e.puuid));
+    else this.diamond.tracked = [];
+    this.applyLadderOrder();
     this.masterTracked = tracked.length;
     for (const p of result.played) this.played.add(p);
     await this.loadPendingListings();
@@ -504,10 +673,14 @@ export class PlatformWorker {
     return result.played.length;
   }
 
-  /** Ladder positions from a top-down list of puuids (a player listed twice keeps the first). */
-  private setLadderOrder(puuids: readonly string[]): void {
+  /**
+   * Ladder positions, top down: every apex player, then the tracked Diamond players (a player in
+   * both keeps the apex position).
+   */
+  private applyLadderOrder(): void {
     const rank = new Map<string, number>();
-    for (const p of puuids) if (!rank.has(p)) rank.set(p, rank.size);
+    for (const p of this.apexOrder) if (!rank.has(p)) rank.set(p, rank.size);
+    for (const d of this.diamond.tracked) if (!rank.has(d.puuid)) rank.set(d.puuid, rank.size);
     this.ladderRank = rank;
   }
 
@@ -518,7 +691,11 @@ export class PlatformWorker {
   /** The tracked ladder as stored, before this process refreshes it (at startup). */
   private async loadLadderOrder(): Promise<void> {
     const rows = await ladderOrder(this.db, this.platform);
-    this.setLadderOrder(rows.map((r) => r.puuid));
+    this.apexOrder = rows.filter((r) => r.tier !== 'DIAMOND').map((r) => r.puuid);
+    this.diamond.tracked = rows
+      .filter((r) => r.tier === 'DIAMOND')
+      .map((r) => ({ puuid: r.puuid, division: r.division ?? 4, leaguePoints: r.leaguePoints }));
+    this.applyLadderOrder();
     this.masterTracked = rows.filter((r) => r.tier === 'MASTER').length;
     this.ladderLoaded = true;
   }
@@ -565,6 +742,221 @@ export class PlatformWorker {
       from,
       to: this.masterTracked,
       masterTotal: this.masterTotal,
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Level 1, continued: Diamond players (`diamondMaxTracked` > 0)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Reads the four Diamond divisions page by page and tracks at most `diamondMaxTracked` Diamond
+   * players: first those seen in a Master+ game during `diamondWithMasterWindowMs` (division,
+   * then LP), then as many Diamond I players by LP as the budget allowed so far (`diamond.extra`,
+   * see `trackMoreDiamonds`). Marks who played; returns how many (null: tracking is off, or Riot
+   * answered with no player at all and nothing was changed).
+   *
+   * A page that fails throws and nothing is changed: nobody is removed nor taken as "did not
+   * play". A tracked player the sweep did not see (moved between pages meanwhile, promoted,
+   * decayed) is kept as is, until the last sweep that saw them is `diamondKeepMs` old; one who is
+   * on Riot's apex lists now is left to the apex ladder.
+   */
+  async refreshDiamonds(signal?: AbortSignal): Promise<number | null> {
+    const cap = this.opts.diamondMaxTracked;
+    if (cap <= 0) return null;
+    if (!this.ladderLoaded) await this.loadLadderOrder();
+    // Read before the sweep (nothing else writes the Diamond rows meanwhile; a player marked
+    // during the sweep is taken by the next one).
+    const [stored, withMaster] = await Promise.all([
+      trackedDiamondEntries(this.db, this.platform),
+      playersSeenWithMasterSince(
+        this.db,
+        this.platform,
+        new Date(this.clock.now() - this.opts.diamondWithMasterWindowMs),
+      ),
+    ]);
+    const seenWithMaster = new Set(withMaster);
+    const storedPuuids = new Set(stored.map((r) => r.puuid));
+    // A sweep is up to 140,000 entries: only those that can be tracked (Diamond I, or seen in a
+    // Master+ game) or are tracked are kept in memory, the others are counted as their page is read.
+    const sweep = await this.sweepDiamond(
+      (e) => e.division === 1 || seenWithMaster.has(e.puuid) || storedPuuids.has(e.puuid),
+      signal,
+    );
+    const seen = sweep.seen;
+    if (seen.every((n) => n === 0)) {
+      this.log.warn('empty Diamond sweep from Riot, not applied');
+      return null;
+    }
+    const now = this.clock.now();
+    // A player seen twice (moved between pages or divisions meanwhile) keeps the latest entry.
+    const swept = new Map<string, DiamondEntry>();
+    for (const e of sweep.entries) {
+      if (this.apexPuuids.has(e.puuid)) continue;
+      const other = swept.get(e.puuid);
+      if (!other || other.seenAt <= e.seenAt) swept.set(e.puuid, e);
+    }
+
+    // Tracked players the sweep did not see compete as they are stored.
+    const candidates = [...swept.values()];
+    const missing = new Set<string>();
+    for (const row of stored) {
+      if (swept.has(row.puuid) || this.apexPuuids.has(row.puuid)) continue;
+      if (row.seenAt.getTime() <= now - this.opts.diamondKeepMs) continue;
+      missing.add(row.puuid);
+      candidates.push({
+        puuid: row.puuid,
+        division: row.division,
+        leaguePoints: row.leaguePoints,
+        wins: 0,
+        losses: 0,
+        seenAt: row.seenAt.getTime(),
+      });
+    }
+    // After a restart: as many Diamond I players as were tracked beyond the first group.
+    this.diamond.extra ??= stored.filter((r) => !seenWithMaster.has(r.puuid)).length;
+    const selection = selectDiamondPlayers(candidates, seenWithMaster, cap, this.diamond.extra);
+    const tracked = [...selection.withMaster, ...selection.diamondOne];
+
+    const result = await upsertDiamondLadder(
+      this.db,
+      this.platform,
+      tracked.filter((e) => !missing.has(e.puuid)).map(toDiamondLadderEntry),
+      { keep: tracked.filter((e) => missing.has(e.puuid)).map((e) => e.puuid), now: new Date(now) },
+    );
+    this.diamond.tracked = tracked.sort(byDivisionThenLp);
+    this.diamond.seen = seen;
+    this.diamond.withMaster = selection.withMaster.length;
+    this.diamond.diamondOne = selection.diamondOne.length;
+    this.diamond.extra = selection.diamondOne.length;
+    this.diamond.reserve = selection.reserve.filter((e) => !missing.has(e.puuid));
+    this.applyLadderOrder();
+    for (const p of result.played) this.played.add(p);
+    await this.loadPendingListings();
+    this.log.info('diamond sweep applied', {
+      seen,
+      tracked: tracked.length,
+      withMaster: selection.withMaster.length,
+      diamondOne: selection.diamondOne.length,
+      cap,
+      notSeenKept: missing.size,
+      played: result.played.length,
+      added: result.added.length,
+      removed: result.removed,
+      toList: this.played.size,
+    });
+    return result.played.length;
+  }
+
+  /**
+   * Reads the four Diamond divisions, side by side: the entries `keep` holds for, and how many
+   * each division has. Throws as soon as one page fails.
+   */
+  private async sweepDiamond(
+    keep: (e: DiamondEntry) => boolean,
+    signal?: AbortSignal,
+  ): Promise<{ entries: DiamondEntry[]; seen: [number, number, number, number] }> {
+    const stop = new AbortController();
+    const linked = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
+    const entries: DiamondEntry[] = [];
+    const results = await Promise.allSettled(
+      DIVISIONS.map(async (division, i) => {
+        try {
+          return await this.sweepDivision(division, i + 1, keep, entries, linked);
+        } catch (err) {
+          // The sweep is lost: the other divisions stop asking.
+          stop.abort();
+          throw err;
+        }
+      }),
+    );
+    const failures = results.filter((r) => r.status === 'rejected').map((r) => r.reason);
+    if (failures.length > 0) {
+      if (signal?.aborted) throw abortError();
+      // The failure that stopped the sweep, not the aborts it caused.
+      throw failures.find((reason) => !isAbortError(reason)) ?? failures[0];
+    }
+    const seen = results.map((r) => (r.status === 'fulfilled' ? r.value : 0));
+    return { entries, seen: [seen[0] ?? 0, seen[1] ?? 0, seen[2] ?? 0, seen[3] ?? 0] };
+  }
+
+  /**
+   * The pages of one division, from 1 until an empty one: adds the entries `keep` holds for to
+   * `out`, returns how many entries the division has.
+   */
+  private async sweepDivision(
+    division: Division,
+    number: number,
+    keep: (e: DiamondEntry) => boolean,
+    out: DiamondEntry[],
+    signal: AbortSignal,
+  ): Promise<number> {
+    let seen = 0;
+    for (let page = 1; page <= MAX_DIAMOND_PAGES; page++) {
+      if (signal.aborted) throw abortError();
+      const entries = await this.riot.getDiamondEntries(this.platform, division, page, signal);
+      if (entries.length === 0) return seen;
+      for (const e of toDiamondEntries(entries, number, this.clock.now())) {
+        seen++;
+        if (keep(e)) out.push(e);
+      }
+    }
+    throw new Error(`Diamond ${division} did not end after ${MAX_DIAMOND_PAGES} pages`);
+  }
+
+  /**
+   * Whether to track `diamondStep` more Diamond I players now ("with remaining budget"): the last
+   * sweep has some left under the cap, every Master player of Riot's list is tracked, the queues
+   * are nearly empty (as for `canTrackMoreMasters`) and no untracked player is due for a listing.
+   */
+  async canTrackMoreDiamonds(): Promise<boolean> {
+    const cap = this.opts.diamondMaxTracked;
+    if (cap <= 0 || this.diamond.reserve.length === 0) return false;
+    if (this.diamond.tracked.length >= cap) return false;
+    if (this.masterTotal === 0 || this.masterTracked < this.masterTotal) return false;
+    if (!(await this.caughtUp())) return false;
+    return !(await this.extraListingDue());
+  }
+
+  /** Whether an untracked player is due for a listing (level 6) and could be listed now. */
+  private async extraListingDue(): Promise<boolean> {
+    if (this.opts.concurrency.extraListing <= 0) return false;
+    const now = this.clock.now();
+    const coolingDown = (p: string) => (this.extraCooldown.get(p) ?? 0) > now;
+    const rows = await extraListingCandidates(this.db, this.platform, {
+      minTier: this.opts.extraMinTier,
+      syncedBefore: new Date(now - this.opts.extraListingIntervalMs),
+      limit: 1 + [...this.extraCooldown.keys()].filter(coolingDown).length,
+    });
+    return rows.some((p) => !coolingDown(p));
+  }
+
+  /**
+   * Tracks the next `diamondStep` Diamond I players by LP of the last sweep (as that sweep saw
+   * them; the next one refreshes them).
+   */
+  async trackMoreDiamonds(): Promise<void> {
+    const room = this.opts.diamondMaxTracked - this.diamond.tracked.length;
+    const next = this.diamond.reserve.slice(0, Math.max(0, Math.min(this.opts.diamondStep, room)));
+    if (next.length === 0) return;
+    const result = await upsertDiamondLadder(
+      this.db,
+      this.platform,
+      next.map(toDiamondLadderEntry),
+      { keep: 'all', now: new Date(this.clock.now()) },
+    );
+    this.diamond.reserve = this.diamond.reserve.slice(next.length);
+    const from = this.diamond.diamondOne ?? 0;
+    this.diamond.diamondOne = from + next.length;
+    this.diamond.extra = (this.diamond.extra ?? 0) + next.length;
+    this.diamond.tracked = [...this.diamond.tracked, ...next].sort(byDivisionThenLp);
+    this.applyLadderOrder();
+    for (const p of result.played) this.played.add(p);
+    this.log.info('tracking more Diamond I players', {
+      from,
+      to: this.diamond.diamondOne,
+      tracked: this.diamond.tracked.length,
+      cap: this.opts.diamondMaxTracked,
     });
   }
 
@@ -1226,12 +1618,23 @@ export class PlatformWorker {
       enrichmentQueue: await countEnrichmentQueue(this.db, this.platform),
       latestPatchLive: this.latestLive,
       ...this.counters,
+      diamond:
+        this.opts.diamondMaxTracked > 0
+          ? {
+              seen: this.diamond.seen,
+              tracked: this.diamond.tracked.length,
+              trackedWithMaster: this.diamond.withMaster,
+              trackedDiamondOne: this.diamond.diamondOne,
+              cap: this.opts.diamondMaxTracked,
+            }
+          : null,
     };
   }
 
   /**
-   * Refreshes the ladder every `ladderIntervalMs` (5 min after a failure) and, in between, checks
-   * every `expansionCheckMs` whether to track more Master players.
+   * Refreshes the ladder every `ladderIntervalMs` (5 min after a failure), then sweeps the Diamond
+   * divisions when they are tracked, and in between checks every `expansionCheckMs` whether to
+   * track more Master players, then more Diamond I players.
    */
   private async ladderLoop(signal: AbortSignal): Promise<void> {
     let first = true;
@@ -1244,8 +1647,11 @@ export class PlatformWorker {
           first = false;
           refreshAt = this.clock.now() + this.opts.ladderIntervalMs;
           await this.refreshLadder(signal);
+          await this.refreshDiamondsOfCycle(signal);
         } else if (await this.canTrackMoreMasters()) {
           await this.trackMoreMasters(signal);
+        } else if (await this.canTrackMoreDiamonds()) {
+          await this.trackMoreDiamonds();
         }
       } catch (err) {
         if (isAbortError(err)) break;
@@ -1254,6 +1660,20 @@ export class PlatformWorker {
       }
       const wait = Math.max(0, Math.min(this.opts.expansionCheckMs, refreshAt - this.clock.now()));
       if (!(await this.sleep(wait, signal))) break;
+    }
+  }
+
+  /**
+   * The Diamond sweep of a ladder cycle. A failed one changes nothing and is not retried before
+   * the next cycle (a sweep is hundreds of requests): the tracked Diamond players stay as they are.
+   */
+  private async refreshDiamondsOfCycle(signal: AbortSignal): Promise<void> {
+    if (this.opts.diamondMaxTracked <= 0) return;
+    try {
+      await this.refreshDiamonds(signal);
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      this.recordError('diamond sweep', err);
     }
   }
 
@@ -1370,6 +1790,7 @@ export class PlatformWorker {
       });
     return {
       getLeague: (...a) => ok(riot.getLeague(...a)),
+      getDiamondEntries: (...a) => ok(riot.getDiamondEntries(...a)),
       getMatchIds: (...a) => ok(riot.getMatchIds(...a)),
       getMatch: (...a) => ok(riot.getMatch(...a)),
       getTimeline: (...a) => ok(riot.getTimeline(...a)),
