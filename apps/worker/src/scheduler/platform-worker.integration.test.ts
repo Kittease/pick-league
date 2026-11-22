@@ -9,7 +9,6 @@ import {
   upsertPatchStaticData,
 } from '@pick-league/db';
 import {
-  type AccountDto,
   type ChampionMasteryDto,
   comparePatches,
   type LadderTier,
@@ -116,10 +115,6 @@ class FakeRiot implements RiotApi {
     this.calls.push(`timeline:${id}`);
     this.maybeThrow(`timeline:${id}`);
     return this.matches.get(id)?.timeline ?? null;
-  }
-  async getAccount(_p: Platform, puuid: string, priority: Priority): Promise<AccountDto | null> {
-    this.calls.push(`account:${puuid}:${priority}`);
-    return { puuid, gameName: 'Fake Name', tagLine: 'FAKE' };
   }
   async getMasteries(
     _p: Platform,
@@ -992,12 +987,12 @@ d('PlatformWorker (Postgres)', () => {
   test('daily refresh and enrichment use their priorities and store the data', async () => {
     riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
     await worker.refreshLadder();
-    await worker.dailyRefresh({ puuid: ladderPuuid(0), needsAccount: true, needsMastery: true });
+    await worker.dailyRefresh({ puuid: ladderPuuid(0) });
     const [p] =
-      await db`SELECT game_name, masteries_refreshed_at FROM players WHERE puuid = ${ladderPuuid(0)}`;
-    expect(p?.game_name).toBe('Fake Name');
+      await db`SELECT masteries_refreshed_at FROM players WHERE puuid = ${ladderPuuid(0)}`;
     expect(p?.masteries_refreshed_at).not.toBeNull();
-    expect(riot.calls).toContain(`account:${ladderPuuid(0)}:2`);
+    expect(riot.calls).toContain(`mastery:${ladderPuuid(0)}:2`);
+    expect(riot.calls.some((c) => c.startsWith('account:'))).toBe(false);
 
     riot.matches.set('EUW1_7000000500', makeMatch('EUW1_7000000500', '15.22.715.1234'));
     await worker.processMatch({ matchId: 'EUW1_7000000500', platform: 'EUW1', attempts: 0 });

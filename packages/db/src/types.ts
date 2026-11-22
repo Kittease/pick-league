@@ -205,12 +205,9 @@ export interface QueuedEnrichment {
   attempts: number;
 }
 
+/** A tracked player whose masteries are due (champion-mastery-v4). */
 export interface DailyRefreshCandidate {
   puuid: string;
-  /** Riot ID older than the threshold (or never fetched) → account-v1. */
-  needsAccount: boolean;
-  /** Masteries older than the threshold (or never fetched) → champion-mastery-v4. */
-  needsMastery: boolean;
 }
 
 export interface WorkerRunStats {

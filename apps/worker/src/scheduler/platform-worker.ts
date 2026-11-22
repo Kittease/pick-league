@@ -54,7 +54,6 @@ import {
   touchWorkerStatus,
   trackedPlayersNeverListed,
   updatePlayerRank,
-  updatePlayerRiotId,
   upsertLadder,
 } from '@pick-league/db';
 import {
@@ -860,36 +859,18 @@ export class PlatformWorker {
   // -------------------------------------------------------------------------
 
   async dailyRefresh(c: DailyRefreshCandidate, signal?: AbortSignal): Promise<void> {
-    const now = () => new Date(this.clock.now());
-    if (c.needsAccount) {
-      const account = await this.riot.getAccount(
-        this.platform,
-        c.puuid,
-        PRIORITY.DAILY_REFRESH,
-        signal,
-      );
-      if (account) {
-        await updatePlayerRiotId(
-          this.db,
-          c.puuid,
-          account.gameName ?? null,
-          account.tagLine ?? null,
-          now(),
-        );
-      } else {
-        // Unknown account: keep the name we have, try again tomorrow.
-        this.dailyCooldown.set(c.puuid, this.clock.now() + DAY);
-      }
-    }
-    if (c.needsMastery) {
-      const masteries = await this.riot.getMasteries(
-        this.platform,
-        c.puuid,
-        PRIORITY.DAILY_REFRESH,
-        signal,
-      );
-      await replaceMasteries(this.db, c.puuid, toMasteries(masteries ?? []), now());
-    }
+    const masteries = await this.riot.getMasteries(
+      this.platform,
+      c.puuid,
+      PRIORITY.DAILY_REFRESH,
+      signal,
+    );
+    await replaceMasteries(
+      this.db,
+      c.puuid,
+      toMasteries(masteries ?? []),
+      new Date(this.clock.now()),
+    );
     this.counters.dailyRefreshed++;
   }
 
@@ -1176,7 +1157,6 @@ export class PlatformWorker {
       getMatchIds: (...a) => ok(riot.getMatchIds(...a)),
       getMatch: (...a) => ok(riot.getMatch(...a)),
       getTimeline: (...a) => ok(riot.getTimeline(...a)),
-      getAccount: (...a) => ok(riot.getAccount(...a)),
       getMasteries: (...a) => ok(riot.getMasteries(...a)),
       getLeagueEntries: (...a) => ok(riot.getLeagueEntries(...a)),
     };

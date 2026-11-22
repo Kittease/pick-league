@@ -36,7 +36,6 @@ import {
   startWorkerRun,
   touchWorkerStatus,
   updatePlayerRank,
-  updatePlayerRiotId,
   upsertLadder,
   upsertPatchStaticData,
 } from './index.ts';
@@ -445,9 +444,8 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
         { puuid: tracked, tier: 'GRANDMASTER', leaguePoints: 1, wins: 1, losses: 1 },
       ]);
       const due = await playersNeedingDailyRefresh(db, 'EUW1', 10);
-      // name came from the match payload (2026-11-01), masteries never fetched
-      expect(due).toEqual([{ puuid: tracked, needsAccount: true, needsMastery: true }]);
-      await updatePlayerRiotId(db, tracked, 'Fake Renamed', 'TEST');
+      // masteries never fetched
+      expect(due).toEqual([{ puuid: tracked }]);
       await replaceMasteries(db, tracked, []);
       expect(await playersNeedingDailyRefresh(db, 'EUW1', 10)).toEqual([]);
     });

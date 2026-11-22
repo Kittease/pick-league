@@ -9,8 +9,6 @@ import {
   sortPatchesDesc,
 } from './patch.ts';
 import {
-  ACCOUNT_CLUSTER,
-  accountBaseUrl,
   MATCH_CLUSTER,
   matchBaseUrl,
   parsePlatformList,
@@ -22,11 +20,6 @@ import { isTimelineEvent, type TimelineEventDto } from './riot-dto.ts';
 describe('platform routing', () => {
   test('match clusters', () => {
     expect(MATCH_CLUSTER).toEqual({ KR: 'asia', EUW1: 'europe', NA1: 'americas', VN2: 'sea' });
-  });
-
-  test('account-v1 is not served on sea: VN2 uses asia', () => {
-    expect(ACCOUNT_CLUSTER.VN2).toBe('asia');
-    expect(accountBaseUrl('VN2')).toBe('https://asia.api.riotgames.com');
   });
 
   test('hosts', () => {

@@ -13,8 +13,6 @@
  * here, so whatever logs or stores a Riot error downstream never sees one.
  */
 import {
-  type AccountDto,
-  accountBaseUrl,
   type ChampionMasteryDto,
   type LadderTier,
   type LeagueEntryDto,
@@ -112,12 +110,6 @@ export interface RiotApi {
     matchId: string,
     signal?: AbortSignal,
   ): Promise<TimelineDto | null>;
-  getAccount(
-    platform: Platform,
-    puuid: string,
-    priority: Priority,
-    signal?: AbortSignal,
-  ): Promise<AccountDto | null>;
   getMasteries(
     platform: Platform,
     puuid: string,
@@ -220,18 +212,6 @@ export class RiotClient implements RiotApi {
       `/lol/match/v5/matches/${encodeURIComponent(matchId)}/timeline`,
       PRIORITY.MATCH,
       signal,
-    );
-  }
-
-  getAccount(platform: Platform, puuid: string, priority: Priority, signal?: AbortSignal) {
-    return this.request<AccountDto>(
-      platform,
-      accountBaseUrl(platform),
-      'account-v1.by-puuid',
-      `/riot/account/v1/accounts/by-puuid/${encodeURIComponent(puuid)}`,
-      priority,
-      signal,
-      puuid,
     );
   }
 

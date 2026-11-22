@@ -9,7 +9,7 @@ PostgreSQL 17, single database, run by Docker Compose next to the worker and the
 - **Two patches only.** `patches` lists the patches we keep. When a new patch is detected, every match of the patch before the previous one is deleted (`ON DELETE CASCADE` cleans every child table). Postgres reuses the freed space for the new patch, so disk usage stays flat at ~2 patches.
 - **Static data is per patch.** Champions, items, runes and summoner spells come from Data Dragon and are stored per patch, so an old match is always read with the item/rune data that existed when it was played.
 - **All 10 players are identified.** Every `puuid` met in a match gets a `players` row. Riot IDs come for free in the match payload. Extra info (mastery, solo queue rank) is fetched with a priority scheme so it never slows match collection:
-  1. ladder refresh (Challenger, Grandmaster and the top Master players, more of them each time the queues empty) → 2. match ids of players who played → 3. matches + timelines → 4. daily refresh of tracked ladder players (account + mastery) → 5. **lowest priority:** mastery + rank of non-ladder players, only with leftover budget. Fetched once, refreshed only if the player shows up again and the data is older than 7 days.
+  1. ladder refresh (Challenger, Grandmaster and the top Master players, more of them each time the queues empty) → 2. match ids of players who played → 3. matches + timelines → 4. daily refresh of tracked ladder players (mastery) → 5. **lowest priority:** mastery + rank of non-ladder players, only with leftover budget. Fetched once, refreshed only if the player shows up again and the data is older than 7 days.
 - Riot timestamps are converted to `timestamptz`; in-game times are kept as milliseconds since game start (`int`).
 
 ## Overview
@@ -134,7 +134,7 @@ CREATE TABLE summoner_spells (
 CREATE TABLE players (
   puuid                 text PRIMARY KEY,
   platform              platform NOT NULL,
-  game_name             text,                -- Riot ID: from the match payload, or account-v1 (daily) for tracked players
+  game_name             text,                -- Riot ID, from the match payload only (as of the player's last stored match)
   tag_line              text,
   name_updated_at       timestamptz,
   -- solo queue rank: ladder players get it from ladder_entries;

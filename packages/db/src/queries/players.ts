@@ -189,19 +189,6 @@ export async function extraListingCandidates(
   return rows.map((r) => r.puuid);
 }
 
-/** Stores the Riot ID from account-v1. */
-export async function updatePlayerRiotId(
-  q: Queryable,
-  puuid: string,
-  gameName: string | null,
-  tagLine: string | null,
-  now: Date = new Date(),
-): Promise<void> {
-  await q`
-    UPDATE players SET game_name = ${gameName}, tag_line = ${tagLine}, name_updated_at = ${now}
-    WHERE puuid = ${puuid}`;
-}
-
 /** Stores the solo-queue rank from league-v4 entries/by-puuid (null = unranked in solo queue). */
 export async function updatePlayerRank(
   q: Queryable,
@@ -248,8 +235,8 @@ export async function replaceMasteries(
 }
 
 /**
- * Tracked (ladder) players of a platform whose Riot ID or masteries are older than
- * `olderThanHours` (default 24) or were never fetched. Oldest first.
+ * Tracked (ladder) players of a platform whose masteries are older than `olderThanHours`
+ * (default 24) or were never fetched. Oldest first.
  */
 export async function playersNeedingDailyRefresh(
   q: Queryable,
@@ -259,23 +246,14 @@ export async function playersNeedingDailyRefresh(
   now: Date = new Date(),
 ): Promise<DailyRefreshCandidate[]> {
   const cutoff = new Date(now.getTime() - olderThanHours * 3_600_000);
-  const rows = await q<{ puuid: string; needs_account: boolean; needs_mastery: boolean }[]>`
-    SELECT p.puuid,
-           (p.name_updated_at IS NULL OR p.name_updated_at < ${cutoff}) AS needs_account,
-           (p.masteries_refreshed_at IS NULL OR p.masteries_refreshed_at < ${cutoff}) AS needs_mastery
+  return await q<DailyRefreshCandidate[]>`
+    SELECT p.puuid
     FROM ladder_entries le
     JOIN players p USING (puuid)
     WHERE le.platform = ${platform}
-      AND (p.name_updated_at IS NULL OR p.name_updated_at < ${cutoff}
-           OR p.masteries_refreshed_at IS NULL OR p.masteries_refreshed_at < ${cutoff})
-    ORDER BY LEAST(COALESCE(p.name_updated_at, '-infinity'), COALESCE(p.masteries_refreshed_at, '-infinity')),
-             p.puuid
+      AND (p.masteries_refreshed_at IS NULL OR p.masteries_refreshed_at < ${cutoff})
+    ORDER BY COALESCE(p.masteries_refreshed_at, '-infinity'), p.puuid
     LIMIT ${limit}`;
-  return rows.map((r) => ({
-    puuid: r.puuid,
-    needsAccount: r.needs_account,
-    needsMastery: r.needs_mastery,
-  }));
 }
 
 /**

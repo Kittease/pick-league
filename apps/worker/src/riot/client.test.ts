@@ -43,7 +43,7 @@ describe('RiotClient', () => {
     const { client, calls } = setup(() => json({ entries: [] }));
     await client.getLeague('EUW1', 'CHALLENGER');
     await client.getMatchIds('EUW1', 'fake-puuid', { startTime: 1700000000 });
-    await client.getAccount('VN2', 'fake-puuid', PRIORITY.DAILY_REFRESH);
+    await client.getMasteries('VN2', 'fake-puuid', PRIORITY.DAILY_REFRESH);
     await client.getMatch('VN2', 'VN2_123');
     const urls = calls.map((c) => c.url);
     expect(urls[0]).toBe(
@@ -55,7 +55,7 @@ describe('RiotClient', () => {
     expect(urls[1]).toContain('queue=420');
     expect(urls[1]).toContain('type=ranked');
     expect(urls[1]).toContain('startTime=1700000000');
-    expect(urls[2]).toStartWith('https://asia.api.riotgames.com/riot/account/v1/');
+    expect(urls[2]).toStartWith('https://vn2.api.riotgames.com/lol/champion-mastery/v4/');
     expect(urls[3]).toStartWith('https://sea.api.riotgames.com/lol/match/v5/matches/VN2_123');
     for (const c of calls) {
       expect(c.url).not.toContain(KEY);
@@ -87,10 +87,10 @@ describe('RiotClient', () => {
       await done;
     };
     await call(400, (c) => c.getMatchIds('EUW1', puuid, {}));
-    await call(400, (c) => c.getAccount('EUW1', puuid, PRIORITY.DAILY_REFRESH));
+    await call(400, (c) => c.getMasteries('EUW1', puuid, PRIORITY.DAILY_REFRESH));
     await call(503, (c) => c.getMasteries('EUW1', puuid, PRIORITY.DAILY_REFRESH));
     await call(403, (c) => c.getLeagueEntries('EUW1', puuid, PRIORITY.ENRICHMENT));
-    await call('network', (c) => c.getAccount('EUW1', puuid, PRIORITY.DAILY_REFRESH));
+    await call('network', (c) => c.getMasteries('EUW1', puuid, PRIORITY.DAILY_REFRESH));
     expect(errors).toHaveLength(5);
     expect(errors[0]).toBeInstanceOf(RiotHttpError);
     expect((errors[0] as RiotHttpError).path).toStartWith(
@@ -98,7 +98,9 @@ describe('RiotClient', () => {
     );
     expect(errors[0]?.message).toContain('by-puuid/<puuid>/ids');
     expect(errors[4]).toBeInstanceOf(RiotNetworkError);
-    expect(errors[4]?.message).toContain('/riot/account/v1/accounts/by-puuid/<puuid>');
+    expect(errors[4]?.message).toContain(
+      '/lol/champion-mastery/v4/champion-masteries/by-puuid/<puuid>',
+    );
     expect(lines.length).toBeGreaterThan(0);
     for (const text of [
       ...errors.map((e) => `${e.message} ${(e as RiotHttpError).path}`),

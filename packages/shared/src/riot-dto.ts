@@ -72,18 +72,6 @@ export interface ChampionMasteryDto {
 }
 
 // ---------------------------------------------------------------------------
-// account-v1
-// ---------------------------------------------------------------------------
-
-/** `GET /riot/account/v1/accounts/by-puuid/{puuid}` */
-export interface AccountDto {
-  puuid: string;
-  /** Absent if the account has no Riot ID. */
-  gameName?: string;
-  tagLine?: string;
-}
-
-// ---------------------------------------------------------------------------
 // match-v5: match
 // ---------------------------------------------------------------------------
 

@@ -3,7 +3,6 @@
  *
  * - Platform host (league-v4, champion-mastery-v4): `https://{host}.api.riotgames.com`
  * - Match cluster (match-v5): KR→asia, EUW1→europe, NA1→americas, VN2→sea
- * - Account cluster (account-v1): same as match cluster, except VN2→asia (account-v1 is not served on sea)
  */
 
 export const PLATFORMS = ['KR', 'EUW1', 'NA1', 'VN2'] as const;
@@ -25,13 +24,6 @@ export const MATCH_CLUSTER: Record<Platform, RegionalCluster> = {
   EUW1: 'europe',
   NA1: 'americas',
   VN2: 'sea',
-};
-
-export const ACCOUNT_CLUSTER: Record<Platform, RegionalCluster> = {
-  KR: 'asia',
-  EUW1: 'europe',
-  NA1: 'americas',
-  VN2: 'asia',
 };
 
 export function isPlatform(value: string): value is Platform {
@@ -66,11 +58,6 @@ export function platformBaseUrl(platform: Platform): string {
 /** `https://europe.api.riotgames.com` (match-v5) */
 export function matchBaseUrl(platform: Platform): string {
   return `https://${MATCH_CLUSTER[platform]}.api.riotgames.com`;
-}
-
-/** `https://asia.api.riotgames.com` for VN2 (account-v1) */
-export function accountBaseUrl(platform: Platform): string {
-  return `https://${ACCOUNT_CLUSTER[platform]}.api.riotgames.com`;
 }
 
 /** Platform of a match id such as `EUW1_7234567890`. Returns null for platforms we don't crawl. */
