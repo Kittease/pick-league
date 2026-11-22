@@ -3,6 +3,7 @@
 import {
   type BuildResponse,
   type CoreBuild,
+  type LateSwap,
   type Reason,
   type RecommendedItem,
   STAT_SHARD_ROWS,
@@ -20,6 +21,7 @@ import { Tabs, TabsList, TabsTrigger } from '@pick-league/ui/components/ui/tabs'
 import {
   compact,
   confidenceLabel,
+  lateSwapText,
   patchesText,
   percent,
   SKILL_KEY,
@@ -189,6 +191,56 @@ function CoreBuilds({
         </TabsList>
       </Tabs>
       <ItemList items={current.items} lookup={lookup} ordered />
+    </div>
+  );
+}
+
+/**
+ * Completed items players of the champion sell once their build is full, each with the completed
+ * item they buy in its place. Explains, never scores: no win rate (only players in long games
+ * they are winning can afford a swap). Nothing is shown without swaps (an API predating them
+ * sends none).
+ */
+function LateSwaps({
+  swaps,
+  lookup,
+}: {
+  swaps: LateSwap[] | undefined;
+  lookup: StaticLookup | null;
+}) {
+  if (!swaps || swaps.length === 0) return null;
+  return (
+    <div className="min-w-0">
+      <SectionTitle>Late-game swaps</SectionTitle>
+      <p className="mb-1 text-[10px] text-muted-foreground">
+        Sold for another item once the build is full.
+      </p>
+      <ul className="flex flex-col gap-1">
+        {swaps.map((swap) => {
+          const sold = lookup?.item(swap.sellItemId);
+          const bought = lookup?.item(swap.buyItemId);
+          const soldName = sold?.name ?? `Item ${swap.sellItemId}`;
+          const boughtName = bought?.name ?? `Item ${swap.buyItemId}`;
+          return (
+            <li
+              key={`${swap.sellItemId}-${swap.buyItemId}`}
+              className="flex items-center gap-1.5 bg-card p-1.5"
+              title={`${soldName} sold, ${boughtName} bought in its place: ${swap.games.toLocaleString('en-US')} games, around minute ${Math.round(swap.minute)} on average`}
+            >
+              <GameIcon src={sold?.iconUrl} alt={soldName} size={28} />
+              <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground" />
+              <GameIcon src={bought?.iconUrl} alt={boughtName} size={28} />
+              <span className="ml-0.5 flex min-w-0 flex-col gap-0.5 leading-tight">
+                <span className="truncate text-xs font-medium">{boughtName}</span>
+                <span className="truncate text-[10px] text-muted-foreground">
+                  instead of {soldName}
+                </span>
+                <span className="num text-[10px] text-muted-foreground">{lateSwapText(swap)}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
@@ -497,16 +549,19 @@ export function BuildDetails({
           onSelect={(index) => setPicked({ key, index })}
           lookup={lookup}
         />
-        <div className="min-w-0">
-          <SectionTitle>Situational</SectionTitle>
-          <div className="flex flex-col gap-1">
-            {build.items.situational.length === 0 && (
-              <p className="text-xs text-muted-foreground">No adaptation needed.</p>
-            )}
-            {build.items.situational.map((rec) => (
-              <ItemTile key={rec.itemId} rec={rec} lookup={lookup} variant="situational" />
-            ))}
+        <div className="flex min-w-0 flex-col gap-4">
+          <div className="min-w-0">
+            <SectionTitle>Situational</SectionTitle>
+            <div className="flex flex-col gap-1">
+              {build.items.situational.length === 0 && (
+                <p className="text-xs text-muted-foreground">No adaptation needed.</p>
+              )}
+              {build.items.situational.map((rec) => (
+                <ItemTile key={rec.itemId} rec={rec} lookup={lookup} variant="situational" />
+              ))}
+            </div>
           </div>
+          <LateSwaps swaps={build.items.lateSwaps} lookup={lookup} />
         </div>
       </section>
       {current && current.reasons.length > 0 && (

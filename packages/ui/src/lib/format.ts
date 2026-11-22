@@ -1,4 +1,4 @@
-import type { LanePhaseDiff, Position, ReasonKind } from '@pick-league/shared';
+import type { LanePhaseDiff, LateSwap, Position, ReasonKind } from '@pick-league/shared';
 import { type ConfidenceLevel, confidenceLevel } from './confidence';
 
 export const ROLE_LABEL: Record<Position, string> = {
@@ -94,6 +94,11 @@ export function laneGoldShort(lane: LanePhaseDiff): string {
 export function laneTitle(lane: LanePhaseDiff): string {
   const where = lane.duo ? 'bot lane 2v2, with the duo partners' : '1v1';
   return `Lane at ${lane.minute} min (${where}): ${signedNumber(lane.gold)} gold, ${csText(lane.cs)} CS, ${signedNumber(lane.xp)} XP, average over ${intFormat.format(lane.games)} matchups (shrunk by sample size)`;
+}
+
+/** How often a late-game swap was seen and when on average: "42 games · ~38 min". */
+export function lateSwapText(swap: Pick<LateSwap, 'games' | 'minute'>): string {
+  return `${compact(swap.games)} games · ~${Math.round(swap.minute)} min`;
 }
 
 /** Sample-size confidence used to fade thin evidence: 0 games → 0.25, ≥ 1000 → 1. */

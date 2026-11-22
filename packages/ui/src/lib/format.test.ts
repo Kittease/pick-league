@@ -6,6 +6,7 @@ import {
   laneGoldShort,
   lanePhaseText,
   laneTitle,
+  lateSwapText,
   signedNumber,
   timeAgo,
 } from './format';
@@ -51,4 +52,9 @@ test('lane phase texts', () => {
     'Lane at 10 min (bot lane 2v2, with the duo partners): −420 gold, −8 CS, −310 XP, average over 1,312 matchups (shrunk by sample size)',
   );
   expect(laneTitle({ ...lane, duo: false })).toContain('(1v1)');
+});
+
+test('late-game swap: games and the rounded minute', () => {
+  expect(lateSwapText({ games: 42, minute: 37.6 })).toBe('42 games · ~38 min');
+  expect(lateSwapText({ games: 1240, minute: 31.2 })).toBe('1.2k games · ~31 min');
 });
