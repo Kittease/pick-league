@@ -168,6 +168,7 @@ export async function build(q: Queryable, req: BuildRequest): Promise<BuildRespo
     vs,
     withRows,
     lanePhase,
+    itemSwaps,
     items,
     names,
   ] = await Promise.all([
@@ -180,6 +181,8 @@ export async function build(q: Queryable, req: BuildRequest): Promise<BuildRespo
     repo.loadVsForChampion(q, weights, req.championId, req.role, opponentIds),
     repo.loadWithForChampion(q, weights, req.championId, req.role, partnerIds),
     repo.loadLanePhaseOfChampion(q, patches, req.role, req.championId, opponentIds),
+    // Both kept patches summed as they are (thin samples), whatever the build's patch weighting.
+    repo.loadItemSwaps(q, ctx.patches, req.role, req.championId),
     repo.loadItems(q, ctx.current),
     repo.loadNames(q, ctx.patches),
   ]);
@@ -202,6 +205,7 @@ export async function build(q: Queryable, req: BuildRequest): Promise<BuildRespo
     thresholds,
     items,
     lanePhase,
+    itemSwaps,
     names,
   });
   if (!result)

@@ -897,4 +897,24 @@ describe('recommendBuild', () => {
       recommendBuild(req({ ...LEONA, enemies: [{ championId: 412, role: 'UTILITY' }] }), data()),
     ).not.toHaveProperty('lanePhase');
   });
+
+  test('late-game swaps: both patches summed whatever the build weighting, empty without rows', () => {
+    expect(recommendBuild(req(LEONA), data())?.items.lateSwaps).toEqual([]);
+    const itemSwaps = [
+      { patch: CUR, soldItemId: 3047, boughtItemId: 3111, games: 6, minuteSum: 6 * 30 },
+      { patch: '15.21', soldItemId: 3047, boughtItemId: 3111, games: 6, minuteSum: 6 * 33 },
+      { patch: CUR, soldItemId: 3190, boughtItemId: 3065, games: 9, minuteSum: 9 * 35 },
+    ];
+    // The build itself only uses the current patch here (`previousWeight` 0).
+    const b = recommendBuild(req(LEONA), data({ itemSwaps }));
+    expect(b?.items.lateSwaps).toEqual([
+      { sellItemId: 3047, buyItemId: 3111, games: 12, minute: 31.5 },
+    ]);
+    // Nothing else of the build moves.
+    const { lateSwaps: _, ...rest } = b?.items ?? { lateSwaps: [] };
+    const { lateSwaps: __, ...plain } = recommendBuild(req(LEONA), data())?.items ?? {
+      lateSwaps: [],
+    };
+    expect(rest).toEqual(plain);
+  });
 });

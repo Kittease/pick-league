@@ -254,6 +254,19 @@ export const ENGINE_CONFIG = {
   },
 
   /**
+   * Late-game swaps of the build (stats_item_swaps): the completed item a champion + role sells
+   * once its build is full and the one it buys in its place. Explains and never scores (no win
+   * rate: only players in long games they are winning can afford one). The current and previous
+   * patches are summed.
+   */
+  lateSwaps: {
+    /** A pair is shown from this many games (participants who made it). */
+    minGames: 10,
+    /** Pairs shown at most, most frequent first. */
+    maxShown: 3,
+  },
+
+  /**
    * Draft evaluation (POST /recommendations/draft): the picks engine's deltas summed per team,
    * with weight 1. With the `k` above the summed score is calibrated as it is (held-out slope
    * 0.98 ± 0.04 on ~60k matches of 16.22), so no extra scaling.

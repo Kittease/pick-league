@@ -28,7 +28,7 @@ function buildFor(req: BuildRequestInput): BuildResponse {
     patchesUsed: ['15.22'],
     games: 500,
     confidence: 0.8,
-    items: { starting: [], early: [], core: [], coreBuilds: [], situational: [] },
+    items: { starting: [], early: [], core: [], coreBuilds: [], situational: [], lateSwaps: [] },
     runes: {
       primaryTreeId: 8200,
       secondaryTreeId: 8400,

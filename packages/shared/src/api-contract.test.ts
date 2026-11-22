@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  type BuildResponse,
+  type ItemsRecommendation,
+  type LateSwap,
   MAX_MASTERIES,
   picksRequestSchema,
   tierListQuerySchema,
@@ -74,5 +77,27 @@ describe('picks request masteries', () => {
     expect(
       picksRequestSchema.safeParse({ ...base, masteries: many(MAX_MASTERIES + 1) }).success,
     ).toBe(false);
+  });
+});
+
+describe('build response late-game swaps', () => {
+  test('part of the items, always a list; a swap has nothing to score with', () => {
+    const swap: LateSwap = { sellItemId: 3026, buyItemId: 3072, games: 42, minute: 37.6 };
+    const items: ItemsRecommendation = {
+      starting: [],
+      early: [],
+      core: [],
+      coreBuilds: [],
+      situational: [],
+      lateSwaps: [swap],
+    };
+    const fromBuild: BuildResponse['items']['lateSwaps'] = items.lateSwaps;
+    expect(fromBuild).toEqual([swap]);
+    // No win rate, no delta, no reasons: the swap explains and never scores.
+    const scoring: Extract<keyof LateSwap, 'winRate' | 'delta' | 'reasons' | 'wins'> extends never
+      ? true
+      : false = true;
+    expect(scoring).toBe(true);
+    expect(Object.keys(swap).sort()).toEqual(['buyItemId', 'games', 'minute', 'sellItemId']);
   });
 });

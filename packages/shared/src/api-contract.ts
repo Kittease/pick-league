@@ -484,6 +484,21 @@ export interface CoreBuild {
   reasons: Reason[];
 }
 
+/**
+ * A late-game swap: a completed item players of the champion + role sell once their build is
+ * full (6 completed items bought, boots included) and the completed item they buy in its place.
+ * Explains, never scores: no win rate (only players in long games they are winning can afford
+ * one).
+ */
+export interface LateSwap {
+  sellItemId: number;
+  buyItemId: number;
+  /** Games (participants) where the pair was sold then bought, on the two kept patches. */
+  games: number;
+  /** Average game minute of the sale, one decimal. */
+  minute: number;
+}
+
 export interface ItemsRecommendation {
   /** Starting purchase, e.g. [World Atlas, Health Potion x2] → item ids, duplicates allowed. */
   starting: RecommendedItem[];
@@ -502,6 +517,11 @@ export interface ItemsRecommendation {
   coreBuilds: CoreBuild[];
   /** Adaptations to this game's enemies/allies. */
   situational: RecommendedItem[];
+  /**
+   * Late-game swaps of the champion + role whatever the draft, most frequent first (at most 3,
+   * each seen in at least 10 games). Empty for most rarely played champions.
+   */
+  lateSwaps: LateSwap[];
   /**
    * Supports: upgrade to pick when the support item's quest completes (e.g. Celestial
    * Opposition), adapted to the lane opponent and enemy composition. Absent for other roles.

@@ -22,7 +22,12 @@ import { silentLogger } from '../logger.ts';
 import { refreshStats } from '../stats/refresh.ts';
 import * as repo from '../stats/repository.ts';
 import { API_TEST_DATABASE_URL, resetApiTestDb, seedSyntheticPatch } from '../testing/seed.ts';
-import { type GenerateOptions, generateMatches, PLANTED } from '../testing/synthetic.ts';
+import {
+  type GenerateOptions,
+  generateMatches,
+  PLANTED,
+  syntheticStaticData,
+} from '../testing/synthetic.ts';
 import { createApp } from './app.ts';
 import { TtlCache } from './cache.ts';
 import { TokenBucketLimiter } from './rate-limit.ts';
@@ -170,6 +175,68 @@ function expectedGameLength(position: Position) {
     });
   }
   return out;
+}
+
+/**
+ * Late-game swaps replayed in TypeScript from the generated item events (independent of the SQL
+ * view and of the engine module): per `position|championId`, per `sold|bought`, the participants
+ * who made the swap and the sum of the times (ms) of their first one.
+ */
+function expectedSwaps(patches: readonly string[]) {
+  const completed = new Set(
+    syntheticStaticData(CUR)
+      .items.filter((i) => i.isCompleted)
+      .map((i) => i.id),
+  );
+  const out = new Map<string, Map<string, { games: number; atMs: number }>>();
+  let undoneSales = 0;
+  for (const patch of patches) {
+    for (const m of generateMatches(SEEDS[patch] as GenerateOptions)) {
+      if (m.match.isRemake) continue;
+      for (const p of m.participants) {
+        if (p.position === null) continue;
+        const events = m.itemEvents
+          .filter((e) => e.participantId === p.participantId)
+          .sort((x, y) => x.seq - y.seq);
+        const bought = new Set<number>();
+        const counted = new Set<string>();
+        events.forEach((e, i) => {
+          if (e.type === 'PURCHASED' && completed.has(e.itemId)) bought.add(e.itemId);
+          if (e.type !== 'SOLD' || !completed.has(e.itemId) || bought.size < 6) return;
+          const next = events[i + 1];
+          const after = events[i + 2];
+          if (next?.type === 'UNDO') undoneSales++;
+          if (next?.type !== 'PURCHASED' || !completed.has(next.itemId)) return;
+          if (next.itemId === e.itemId || next.atMs - e.atMs > 60_000) return;
+          if (after?.type === 'UNDO' && after.itemId === next.itemId) return;
+          const pair = `${e.itemId}|${next.itemId}`;
+          if (counted.has(pair)) return;
+          counted.add(pair);
+          const key = `${p.position}|${p.championId}`;
+          const pairs = out.get(key) ?? new Map<string, { games: number; atMs: number }>();
+          out.set(key, pairs);
+          const acc = pairs.get(pair) ?? { games: 0, atMs: 0 };
+          pairs.set(pair, acc);
+          acc.games++;
+          acc.atMs += e.atMs;
+        });
+      }
+    }
+  }
+  return { byChampion: out, undoneSales };
+}
+
+/** The swaps of a champion + role as the build shows them (thresholds of `ENGINE_CONFIG`). */
+function shownSwaps(patches: readonly string[], championId: number, position: Position) {
+  const pairs = expectedSwaps(patches).byChampion.get(`${position}|${championId}`) ?? new Map();
+  return [...pairs]
+    .map(([pair, acc]) => {
+      const [sellItemId = 0, buyItemId = 0] = pair.split('|').map(Number);
+      return { sellItemId, buyItemId, games: acc.games, minute: acc.atMs / acc.games / 60_000 };
+    })
+    .filter((x) => x.games >= ENGINE_CONFIG.lateSwaps.minGames)
+    .sort((x, y) => y.games - x.games || x.sellItemId - y.sellItemId || x.buyItemId - y.buyItemId)
+    .slice(0, ENGINE_CONFIG.lateSwaps.maxShown);
 }
 
 describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
@@ -1086,6 +1153,84 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     const support = expectedGameLength('UTILITY').get(allies[0]?.championId as number);
     const bottom = expectedGameLength('BOTTOM').get(222);
     expect(g?.allies.early as number).toBeCloseTo((support?.early ?? 0) + (bottom?.early ?? 0), 4);
+  });
+
+  test('item swaps view: the swaps replayed from the generated events, per patch', async () => {
+    for (const patch of [CUR, PREV]) {
+      const { byChampion, undoneSales } = expectedSwaps([patch]);
+      // Not vacuous: sales taken back exist and are not swaps.
+      expect(undoneSales).toBeGreaterThan(50);
+      const want = [...byChampion]
+        .flatMap(([key, pairs]) =>
+          [...pairs].map(([pair, acc]) => `${key}|${pair}|${acc.games}|${acc.atMs}`),
+        )
+        .sort();
+      expect(want.length).toBeGreaterThan(20);
+      const rows = await db<
+        {
+          position: string;
+          champion_id: number;
+          sold_item_id: number;
+          bought_item_id: number;
+          games: number;
+          minute_sum: number;
+        }[]
+      >`SELECT * FROM stats_item_swaps WHERE patch = ${patch}`;
+      const got = rows
+        .map(
+          (r) =>
+            `${r.position}|${r.champion_id}|${r.sold_item_id}|${r.bought_item_id}|${r.games}|${Math.round(r.minute_sum * 60_000)}`,
+        )
+        .sort();
+      expect(got).toEqual(want);
+    }
+  });
+
+  test('build: late-game swaps of the champion, both patches summed, most frequent first', async () => {
+    const championId = PLANTED.runeMatchup.championId;
+    const want = shownSwaps([CUR, PREV], championId, 'UTILITY');
+    // Not vacuous: Leona's supports swap their boots both ways, and the previous patch counts.
+    expect(want.length).toBeGreaterThanOrEqual(2);
+    expect(want[0]?.games).toBeGreaterThan(shownSwaps([CUR], championId, 'UTILITY')[0]?.games ?? 0);
+    const body = { championId, role: 'UTILITY', allies: [], enemies: [] };
+    const b = (await (await post('/recommendations/build', body)).json()) as BuildResponse;
+    expect(b.items.lateSwaps.map(({ minute: _, ...x }) => x)).toEqual(
+      want.map(({ minute: _, ...x }) => x),
+    );
+    for (const [i, swap] of b.items.lateSwaps.entries()) {
+      // The contract: the pair, its games and its minute, nothing to score with.
+      expect(Object.keys(swap).sort()).toEqual(['buyItemId', 'games', 'minute', 'sellItemId']);
+      expect(swap.minute).toBeCloseTo(want[i]?.minute ?? Number.NaN, 1);
+      expect(swap.minute).toBe(Math.round(swap.minute * 10) / 10);
+    }
+    // The draft changes nothing; a forced patch reads that patch only.
+    const drafted = (await (
+      await post('/recommendations/build', {
+        ...body,
+        enemies: [{ championId: PLANTED.runeMatchup.opponentId, role: 'UTILITY' }],
+      })
+    ).json()) as BuildResponse;
+    expect(drafted.items.lateSwaps).toEqual(b.items.lateSwaps);
+    const forced = (await (
+      await post('/recommendations/build', { ...body, patch: PREV })
+    ).json()) as BuildResponse;
+    expect(forced.items.lateSwaps.map((x) => [x.sellItemId, x.buyItemId, x.games])).toEqual(
+      shownSwaps([PREV], championId, 'UTILITY').map((x) => [x.sellItemId, x.buyItemId, x.games]),
+    );
+  });
+
+  test('build: no late-game swaps for a champion with too few of them', async () => {
+    const championId = PLANTED.rareOnCurrent;
+    expect(shownSwaps([CUR], championId, 'UTILITY')).toEqual([]);
+    const res = await post('/recommendations/build', {
+      championId,
+      role: 'UTILITY',
+      allies: [],
+      enemies: [],
+      patch: CUR,
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as BuildResponse).items.lateSwaps).toEqual([]);
   });
 
   test("mastery view: games by the player's mastery of the champion", async () => {

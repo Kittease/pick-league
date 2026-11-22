@@ -23,6 +23,7 @@ export {
   lanePhaseReason,
   lanePhaseRowsOf,
 } from './lane-phase.ts';
+export { lateSwaps } from './late-swaps.ts';
 export {
   buildMasteryModel,
   formatPoints,

@@ -30,6 +30,7 @@ import {
   TRAIT_LABELS,
 } from './config.ts';
 import { lanePhaseDiff, lanePhaseReason, lanePhaseRowsOf } from './lane-phase.ts';
+import { lateSwaps } from './late-swaps.ts';
 import {
   formatDelta,
   formatGames,
@@ -56,6 +57,7 @@ import type {
   CompTraitRow,
   GamesWins,
   ItemInfo,
+  ItemSwapRow,
   LanePhaseRow,
   NameLookup,
   RoleStatRow,
@@ -97,6 +99,11 @@ export interface BuildData {
    * (optional: no `lanePhase` without it).
    */
   lanePhase?: readonly LanePhaseRow[];
+  /**
+   * stats_item_swaps of champion + role on the current and previous patches, per patch (summed
+   * unweighted, whatever the build's patch weighting; optional: no late swaps without it).
+   */
+  itemSwaps?: readonly ItemSwapRow[];
   names: NameLookup;
 }
 
@@ -380,7 +387,7 @@ export function recommendBuild(req: BuildRequest, data: BuildData): BuildRespons
     patchesUsed: data.patch.patches,
     games: baseline.games,
     confidence: round(sampleConfidence(baseline.games, B.confidenceK), 3),
-    items,
+    items: { ...items, lateSwaps: lateSwaps(data.itemSwaps ?? [], data.items) },
     runes,
     summonerSpells,
     skillOrder,
@@ -752,7 +759,8 @@ function itemMatchesRule(id: number, info: ItemInfo | undefined, rule: TagRule):
   );
 }
 
-function recommendItems(input: ItemsInput): ItemsRecommendation {
+/** Everything but the late-game swaps, which are not a recommendation (see `late-swaps.ts`). */
+function recommendItems(input: ItemsInput): Omit<ItemsRecommendation, 'lateSwaps'> {
   const { byKind, baseline, baseWr, primaryMatchup, traitContexts, allyContexts } = input;
   const { data, damage, fallback } = input;
   const names = data.names;
