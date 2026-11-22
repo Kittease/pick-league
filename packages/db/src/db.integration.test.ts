@@ -109,7 +109,8 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       await db.unsafe('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
       const before = await mkdtemp(join(tmpdir(), 'pickleague-migrations-'));
       try {
-        for (const f of await listMigrationFiles()) {
+        const files = await listMigrationFiles();
+        for (const f of files) {
           if (f.version < '0024') await copyFile(f.path, join(before, f.name));
         }
         await migrate(db, { dir: before });
@@ -121,7 +122,9 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
           INSERT INTO ladder_entries (puuid, platform, tier, league_points, wins, losses, updated_at)
           VALUES (${fakePuuid(2)}, 'KR', 'MASTER', 10, 4, 3, ${seenAt})`;
 
-        expect((await migrate(db)).applied).toEqual(['0024_listing_skip_and_diamond.sql']);
+        expect((await migrate(db)).applied).toEqual(
+          files.filter((f) => f.version >= '0024').map((f) => f.name),
+        );
         const rows = await db`
           SELECT puuid, last_seen_with_master_at FROM players ORDER BY puuid`;
         expect([...rows]).toEqual([
@@ -604,8 +607,17 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       expect(await count('match_bans')).toBe(10);
       expect(await count('participants')).toBe(10);
       expect(await count('players')).toBe(10);
-      expect(await count('item_events')).toBe(2);
-      expect(await count('skill_events')).toBe(1);
+      // Events: one row for the only participant with events, as arrays in timeline order.
+      expect([...(await db`SELECT * FROM participant_events`)]).toEqual([
+        {
+          match_id: 'EUW1_100',
+          participant_id: 1,
+          item_types: ['P', 'U'],
+          item_ids: [1055, 1055],
+          item_at_ms: [1000, 1500],
+          skill_slots: [1],
+        },
+      ]);
 
       const [p] = await db`
         SELECT runes, stat_shards, final_items, gold_by_minute, position_x_by_minute, position
@@ -729,7 +741,7 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
     test('rolls back everything when a child insert fails', async () => {
       await upsertPatchStaticData(db, staticPatch('15.22'));
       const bad = parsedMatch('EUW1_3', '15.22', TEN);
-      bad.skillEvents.push({ ...(bad.skillEvents[0] as (typeof bad.skillEvents)[number]) }); // duplicate PK
+      (bad.participants[0] as (typeof bad.participants)[number]).participantId = 2; // duplicate PK
       await expect(insertParsedMatch(db, bad)).rejects.toThrow();
       expect((await db`SELECT 1 FROM matches`).length).toBe(0);
       expect((await db`SELECT 1 FROM players`).length).toBe(0);
@@ -828,7 +840,9 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       expect(res.purgedQueueRows).toBe(1);
       expect((await listPatches(db)).map((p) => p.id)).toEqual(['15.22', '15.21']);
       expect((await db`SELECT id FROM matches`).map((r) => r.id)).toEqual(['EUW1_NEW']);
-      expect((await db`SELECT 1 FROM item_events WHERE match_id = 'EUW1_OLD'`).length).toBe(0);
+      expect([...(await db`SELECT match_id FROM participant_events`)]).toEqual([
+        { match_id: 'EUW1_NEW' },
+      ]);
       expect(await deleteOldPatches(db, 2)).toEqual({ deletedPatches: [], purgedQueueRows: 0 });
 
       expect(await purgeOrphanPlayers(db, { batchSize: 4 })).toBe(9);

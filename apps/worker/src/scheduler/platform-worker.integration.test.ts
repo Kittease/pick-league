@@ -416,14 +416,15 @@ d('PlatformWorker (Postgres)', () => {
     ).toBe('added');
     const counts = await db<{ t: string; n: number }[]>`
       SELECT 'participants' AS t, count(*)::int AS n FROM participants
-      UNION ALL SELECT 'item_events', count(*)::int FROM item_events
-      UNION ALL SELECT 'skill_events', count(*)::int FROM skill_events
+      UNION ALL SELECT 'item_events', sum(cardinality(item_ids))::int FROM participant_events
+      UNION ALL SELECT 'skill_points', sum(cardinality(skill_slots))::int FROM participant_events
       UNION ALL SELECT 'match_bans', count(*)::int FROM match_bans
       UNION ALL SELECT 'enrichment', count(*)::int FROM player_enrichment_queue`;
     expect(Object.fromEntries(counts.map((c) => [c.t, c.n]))).toEqual({
       participants: 10,
       item_events: 7,
-      skill_events: 4,
+      // The fixture has 4 SKILL_LEVEL_UP events, one of them an evolution (not kept).
+      skill_points: 3,
       match_bans: 10,
       enrichment: 10,
     });

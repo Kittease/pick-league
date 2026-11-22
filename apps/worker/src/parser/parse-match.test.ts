@@ -250,7 +250,6 @@ describe('parseMatch: timeline events', () => {
         type: 'PURCHASED',
         itemId: 1055,
         undoAfterItemId: null,
-        undoGoldGain: null,
       },
       {
         participantId: 1,
@@ -259,7 +258,6 @@ describe('parseMatch: timeline events', () => {
         type: 'PURCHASED',
         itemId: 2003,
         undoAfterItemId: null,
-        undoGoldGain: null,
       },
       {
         participantId: 1,
@@ -268,7 +266,6 @@ describe('parseMatch: timeline events', () => {
         type: 'UNDO',
         itemId: 2003,
         undoAfterItemId: 0,
-        undoGoldGain: 50,
       },
       {
         participantId: 1,
@@ -277,7 +274,6 @@ describe('parseMatch: timeline events', () => {
         type: 'PURCHASED',
         itemId: 3340,
         undoAfterItemId: null,
-        undoGoldGain: null,
       },
       {
         participantId: 1,
@@ -286,7 +282,6 @@ describe('parseMatch: timeline events', () => {
         type: 'SOLD',
         itemId: 1055,
         undoAfterItemId: null,
-        undoGoldGain: null,
       },
       {
         participantId: 1,
@@ -295,7 +290,6 @@ describe('parseMatch: timeline events', () => {
         type: 'UNDO',
         itemId: 0,
         undoAfterItemId: 1055,
-        undoGoldGain: -140,
       },
     ]);
     // ITEM_DESTROYED events (participant 3 used a biscuit) are not kept.
@@ -304,13 +298,12 @@ describe('parseMatch: timeline events', () => {
     expect(itemEvents.some((e) => e.participantId === 0)).toBe(false);
   });
 
-  test('skill events with evolve flag; invalid slots dropped', () => {
+  test('skill points in order per participant; evolutions and invalid slots dropped', () => {
     const { skillEvents } = parse();
     expect(skillEvents).toEqual([
-      { participantId: 1, seq: 1, atMs: 61000, skillSlot: 1, isEvolve: false },
-      { participantId: 6, seq: 1, atMs: 61500, skillSlot: 3, isEvolve: false },
-      { participantId: 1, seq: 2, atMs: 63100, skillSlot: 3, isEvolve: false },
-      { participantId: 8, seq: 1, atMs: 113000, skillSlot: 4, isEvolve: true },
+      { participantId: 1, seq: 1, skillSlot: 1 },
+      { participantId: 6, seq: 1, skillSlot: 3 },
+      { participantId: 1, seq: 2, skillSlot: 3 },
     ]);
   });
 

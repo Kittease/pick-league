@@ -60,7 +60,7 @@ function build(core: readonly number[] = CORE): Step[] {
   ];
 }
 
-/** Events of one participant; `seqStep` > 1 leaves gaps like deleted DESTROYED rows do. */
+/** Events of one participant; `seqStep` > 1 leaves gaps in `seq` (only its order counts). */
 function eventsOf(participantId: number, steps: Step[], seqStep = 1): ParsedItemEvent[] {
   return steps.map((s, i) => ({
     participantId,
@@ -69,7 +69,6 @@ function eventsOf(participantId: number, steps: Step[], seqStep = 1): ParsedItem
     type: s.type,
     itemId: s.itemId,
     undoAfterItemId: s.type === 'UNDO' ? (s.saleOf ?? 0) : null,
-    undoGoldGain: s.type === 'UNDO' ? 100 : null,
   }));
 }
 
@@ -183,7 +182,7 @@ const SECOND: Scenario[] = [
     swaps: [],
   },
   {
-    what: 'gaps in seq and a leftover DESTROYED row between the sale and the purchase',
+    what: 'gaps in seq between the sale and the purchase',
     steps: [...build(), sell(STEELCAPS, T), buy(MERCS, T + 1200)],
     seqStep: 3,
     swaps: [[STEELCAPS, MERCS, 30]],
@@ -293,11 +292,6 @@ describe.skipIf(!URL_)('stats_item_swaps (Postgres)', () => {
       match.itemEvents = scenarios.flatMap((s, i) => eventsOf(i + 1, s.steps, s.seqStep));
       await insertParsedMatch(db, match, { enqueueEnrichment: false, markQueueDone: false });
     }
-    // A row the worker stored before 0021 and that was not deleted yet: between the sale (seq 22)
-    // and the purchase (seq 25) of the second match's participant 4.
-    await db`
-      INSERT INTO item_events (match_id, participant_id, seq, at_ms, type, item_id)
-      VALUES (${second.match.id}, 4, 23, ${T + 600}, 'DESTROYED', ${BOOTS_COMPONENT})`;
     await refreshStats(db, { force: true });
   }, 120_000);
 

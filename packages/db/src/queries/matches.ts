@@ -1,6 +1,6 @@
 import type { PatchId, Platform } from '@pick-league/shared';
-import { byPuuid, chunks, inTransaction, type Queryable } from '../client.ts';
-import type { ParsedMatch } from '../types.ts';
+import { byPuuid, inTransaction, type Queryable } from '../client.ts';
+import type { ParsedItemEvent, ParsedMatch } from '../types.ts';
 import { enqueueEnrichment } from './queues.ts';
 
 export interface InsertMatchOptions {
@@ -23,11 +23,37 @@ const emptyToNull = (s: string | null | undefined): string | null =>
   s === undefined || s === null || s.trim() === '' ? null : s;
 
 /**
+ * An item event as stored in `participant_events` (`item_types[i]`, `item_ids[i]`): one byte and
+ * one id. 'P' purchase and 'S' sale of the item; 'U' undo of a purchase, with the item taken back
+ * (Riot `beforeId`); 'u' undo of a sale, with the item given back (Riot `afterId`, its `beforeId`
+ * being 0). An undo with both ids (never seen: Riot's undo takes back one purchase or one sale)
+ * is stored as 'U' with its `beforeId`.
+ */
+export type StoredItemEventType = 'P' | 'S' | 'U' | 'u';
+
+export function encodeItemEvent(e: Pick<ParsedItemEvent, 'type' | 'itemId' | 'undoAfterItemId'>): {
+  type: StoredItemEventType;
+  itemId: number;
+} {
+  if (e.type === 'PURCHASED') return { type: 'P', itemId: e.itemId };
+  if (e.type === 'SOLD') return { type: 'S', itemId: e.itemId };
+  const after = e.undoAfterItemId ?? 0;
+  return e.itemId === 0 && after !== 0
+    ? { type: 'u', itemId: after }
+    : { type: 'U', itemId: e.itemId };
+}
+
+/** Postgres type OIDs of the array elements bound below. */
+const OID = { char: 18, int2: 21, int4: 23 } as const;
+
+/**
  * Stores a parsed match in one transaction:
  * 1. `players` rows for all 10 participants (Riot ID from the payload; the name is only
  *    overwritten by a payload at least as recent as the stored one; `last_seen_in_match_at` bumped,
  *    and `last_seen_with_master_at` too when one of the 10 is known as Master or above),
- * 2. `matches`, `match_teams`, `match_bans`, `participants`, `item_events`, `skill_events`,
+ * 2. `matches`, `match_teams`, `match_bans`, `participants`, and `participant_events` (the item and
+ *    skill events of each participant as arrays, in `seq` order; no row for a participant without
+ *    any; events of a participant id that is not in `participants` are ignored),
  * 3. optionally: enrichment enqueue + queue row marked DONE.
  *
  * Idempotent: if the match id already exists, nothing is written and `inserted` is false.
@@ -154,9 +180,9 @@ export async function insertParsedMatch(
           summoner_spell_2: p.summonerSpell2,
           rune_primary_tree: p.runePrimaryTree,
           rune_secondary_tree: p.runeSecondaryTree,
-          runes: tx.array(p.runes, 21),
-          stat_shards: tx.array(p.statShards, 21),
-          final_items: tx.array(p.finalItems, 23),
+          runes: tx.array(p.runes, OID.int2),
+          stat_shards: tx.array(p.statShards, OID.int2),
+          final_items: tx.array(p.finalItems, OID.int4),
           champ_level: p.champLevel,
           kills: p.kills,
           deaths: p.deaths,
@@ -181,41 +207,50 @@ export async function insertParsedMatch(
           wards_placed: p.wardsPlaced,
           wards_killed: p.wardsKilled,
           control_wards_bought: p.controlWardsBought,
-          gold_by_minute: tx.array(p.goldByMinute, 23),
-          xp_by_minute: tx.array(p.xpByMinute, 23),
-          cs_by_minute: tx.array(p.csByMinute, 21),
-          level_by_minute: tx.array(p.levelByMinute, 21),
-          damage_to_champions_by_minute: tx.array(p.damageToChampionsByMinute, 23),
-          position_x_by_minute: tx.array(p.positionXByMinute, 21),
-          position_y_by_minute: tx.array(p.positionYByMinute, 21),
+          gold_by_minute: tx.array(p.goldByMinute, OID.int4),
+          xp_by_minute: tx.array(p.xpByMinute, OID.int4),
+          cs_by_minute: tx.array(p.csByMinute, OID.int2),
+          level_by_minute: tx.array(p.levelByMinute, OID.int2),
+          damage_to_champions_by_minute: tx.array(p.damageToChampionsByMinute, OID.int4),
+          position_x_by_minute: tx.array(p.positionXByMinute, OID.int2),
+          position_y_by_minute: tx.array(p.positionYByMinute, OID.int2),
         })),
       )}`;
     }
 
-    // Large child tables: chunk to stay far below the 65535 bind-parameter limit.
-    for (const chunk of chunks(parsed.itemEvents, 2000)) {
-      await tx`INSERT INTO item_events ${tx(
-        chunk.map((e) => ({
+    // One row per participant with events: its events as parallel arrays, in `seq` order.
+    const bySeq = (a: { seq: number }, b: { seq: number }) => a.seq - b.seq;
+    const eventRows = parsed.participants
+      .map((p) => ({
+        participantId: p.participantId,
+        items: parsed.itemEvents
+          .filter((e) => e.participantId === p.participantId)
+          .sort(bySeq)
+          .map((e) => ({ ...encodeItemEvent(e), atMs: e.atMs })),
+        skills: parsed.skillEvents.filter((e) => e.participantId === p.participantId).sort(bySeq),
+      }))
+      .filter((row) => row.items.length > 0 || row.skills.length > 0);
+    if (eventRows.length > 0) {
+      await tx`INSERT INTO participant_events ${tx(
+        eventRows.map((row) => ({
           match_id: m.id,
-          participant_id: e.participantId,
-          seq: e.seq,
-          at_ms: e.atMs,
-          type: e.type,
-          item_id: e.itemId,
-          undo_after_item_id: e.undoAfterItemId,
-          undo_gold_gain: e.undoGoldGain,
-        })),
-      )}`;
-    }
-    for (const chunk of chunks(parsed.skillEvents, 2000)) {
-      await tx`INSERT INTO skill_events ${tx(
-        chunk.map((e) => ({
-          match_id: m.id,
-          participant_id: e.participantId,
-          seq: e.seq,
-          at_ms: e.atMs,
-          skill_slot: e.skillSlot,
-          is_evolve: e.isEvolve,
+          participant_id: row.participantId,
+          item_types: tx.array(
+            row.items.map((e) => e.type),
+            OID.char,
+          ),
+          item_ids: tx.array(
+            row.items.map((e) => e.itemId),
+            OID.int4,
+          ),
+          item_at_ms: tx.array(
+            row.items.map((e) => e.atMs),
+            OID.int4,
+          ),
+          skill_slots: tx.array(
+            row.skills.map((e) => e.skillSlot),
+            OID.int2,
+          ),
         })),
       )}`;
     }

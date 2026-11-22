@@ -1018,7 +1018,6 @@ function itemEvents(
   durationS: number,
 ): ParsedItemEvent[] {
   const events: ParsedItemEvent[] = [];
-  const goldOf = (itemId: number) => ITEMS_BY_ID.get(itemId)?.gold ?? 0;
   /** `undoneSaleOf`: an UNDO of the sale of that item (Riot: item 0 before, the item after). */
   const push = (
     atMs: number,
@@ -1033,13 +1032,6 @@ function itemEvents(
       type,
       itemId,
       undoAfterItemId: type === 'UNDO' ? (undoneSaleOf ?? 0) : null,
-      // A purchase taken back refunds the item, a sale taken back costs its sell price again.
-      undoGoldGain:
-        type !== 'UNDO'
-          ? null
-          : undoneSaleOf === undefined
-            ? goldOf(itemId)
-            : -Math.round(goldOf(undoneSaleOf) * 0.7),
     });
   push(2000, 'PURCHASED', 3340);
   // Sometimes buy the wrong starter and undo it.
@@ -1103,13 +1095,7 @@ function skillEvents(participantId: number, champ: SynthChampion, rng: Rng): Par
     counts[slot] = (counts[slot] ?? 0) + 1;
     seq.push(slot);
   }
-  return seq.slice(0, 16).map((skillSlot, i) => ({
-    participantId,
-    seq: i + 1,
-    atMs: 60_000 * (i + 1),
-    skillSlot,
-    isEvolve: false,
-  }));
+  return seq.slice(0, 16).map((skillSlot, i) => ({ participantId, seq: i + 1, skillSlot }));
 }
 
 /** Generates `count` matches; deterministic for a given seed. */

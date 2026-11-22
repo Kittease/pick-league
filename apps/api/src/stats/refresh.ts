@@ -8,25 +8,22 @@ import type { Db, Queryable } from '@pick-league/db';
 import type { StatsStatusResponse } from '@pick-league/shared';
 import { readCollectionStatus } from './collection.ts';
 
-/**
- * Refresh order (dependencies first). `concurrent` = read by requests. `noNestedLoops` = refreshed
- * with `enable_nestloop = off`.
- */
+/** Refresh order (dependencies first). `concurrent` = read by requests. */
 export const STATS_REFRESH_ORDER: readonly {
   view: string;
   concurrent: boolean;
   analyze?: boolean;
-  noNestedLoops?: boolean;
 }[] = [
   { view: 'stats_champion_traits', concurrent: true },
   { view: 'stats_team_comp', concurrent: false, analyze: true },
   { view: 'stats_comp_thresholds', concurrent: true },
-  // The planner expects 1 row from the purchases without their undone ones (an anti join on three
-  // columns), where there are ~100 million. A nested loop and a hash join then cost the same to
-  // it, and the day it picked the nested loop between two of these sets the refresh never ended
-  // (33 h on 2026-11-21, stats frozen, every lock on the view waiting behind it). Every join here
-  // is an equality between large sets: none of them should ever be a nested loop.
-  { view: 'stats_participants', concurrent: false, analyze: true, noNestedLoops: true },
+  // Each participant's build is computed from its own participant_events row
+  // (0026_stats_on_participant_events.sql): a nested loop per participant, by design. The joins
+  // left around it are between base tables and views on their keys, which the planner estimates
+  // well; the sets it got wrong by a factor of 100 million when the events were rows (the day it
+  // picked a nested loop between two of them the refresh ran 33 h, hence the `enable_nestloop =
+  // off` this view was refreshed with until then) no longer exist.
+  { view: 'stats_participants', concurrent: false, analyze: true },
   // Support quest upgrades (0007_support_quest_items.sql), read by stats_participant_choices.
   { view: 'stats_quest_items', concurrent: false, analyze: true },
   { view: 'stats_champion_roles', concurrent: true },
@@ -53,8 +50,8 @@ export const STATS_REFRESH_ORDER: readonly {
   { view: 'stats_tierlist_participants', concurrent: false, analyze: true },
   // Results by game length, for the early / late profile (0019_game_length.sql).
   { view: 'stats_champion_game_length', concurrent: true },
-  // Late-game item swaps of the build (0022_item_swaps.sql): replays the item events of the
-  // participants who sold a completed item; stats_tierlist_participants says who they are.
+  // Late-game item swaps of the build (0022_item_swaps.sql): looks into the item events of the
+  // participants who sold an item; stats_tierlist_participants says who they are.
   { view: 'stats_item_swaps', concurrent: true },
   { view: 'stats_tierlist_roles', concurrent: true },
   { view: 'stats_tierlist_vs', concurrent: true },
@@ -221,17 +218,12 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
           `SET statement_timeout = '${(options.statementTimeout ?? '2h').replace(/'/g, '')}'`,
         );
         // Fresh planner statistics: the views join large tables whose size changes a lot.
-        await conn.unsafe('ANALYZE matches, participants, item_events, skill_events');
+        await conn.unsafe('ANALYZE matches, participants, participant_events');
         for (const step of options.views ?? STATS_REFRESH_ORDER) {
           const t = performance.now();
-          if (step.noNestedLoops) await conn.unsafe('SET enable_nestloop = off');
-          try {
-            await conn.unsafe(
-              `REFRESH MATERIALIZED VIEW ${step.concurrent ? 'CONCURRENTLY ' : ''}${step.view}`,
-            );
-          } finally {
-            if (step.noNestedLoops) await conn.unsafe('RESET enable_nestloop');
-          }
+          await conn.unsafe(
+            `REFRESH MATERIALIZED VIEW ${step.concurrent ? 'CONCURRENTLY ' : ''}${step.view}`,
+          );
           if (step.analyze) await conn.unsafe(`ANALYZE ${step.view}`);
           views[step.view] = Math.round(performance.now() - t);
         }

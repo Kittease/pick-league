@@ -66,7 +66,7 @@ export const RANKED_SOLO_QUEUE_ID = 420;
 export const TEAM_IDS = [100, 200] as const;
 export type TeamId = (typeof TEAM_IDS)[number];
 
-/** Skill slots used in `skill_events` and champion spells: 1=Q 2=W 3=E 4=R. */
+/** Skill slots used in `participant_events.skill_slots` and champion spells: 1=Q 2=W 3=E 4=R. */
 export const SKILL_SLOTS = [1, 2, 3, 4] as const;
 export type SkillSlot = (typeof SKILL_SLOTS)[number];
 export const SKILL_KEYS: Record<SkillSlot, 'Q' | 'W' | 'E' | 'R'> = {
@@ -76,7 +76,7 @@ export const SKILL_KEYS: Record<SkillSlot, 'Q' | 'W' | 'E' | 'R'> = {
   4: 'R',
 };
 
-/** Item events the worker stores. The database enum also has 'DESTROYED', no longer stored. */
+/** Item events the worker keeps (stored as one byte each in `participant_events.item_types`). */
 export const ITEM_EVENT_TYPES = ['PURCHASED', 'SOLD', 'UNDO'] as const;
 export type ItemEventType = (typeof ITEM_EVENT_TYPES)[number];
 

@@ -115,28 +115,26 @@ export interface ParsedParticipant {
   positionYByMinute: number[];
 }
 
+/** A purchase, a sale or an undo of a participant. */
 export interface ParsedItemEvent {
   participantId: number;
-  /** Order within the participant's events, starting at 1. */
+  /** Order within the participant's item events, starting at 1. */
   seq: number;
   atMs: number;
   type: ItemEventType;
-  /** For UNDO: the item that was undone (beforeId). */
+  /** For UNDO: the item of the purchase taken back (Riot `beforeId`; 0 when a sale is undone). */
   itemId: number;
-  /** UNDO only (afterId), else null. */
+  /** UNDO only: the item a sale taken back gives back (Riot `afterId`, else 0); null otherwise. */
   undoAfterItemId: number | null;
-  /** UNDO only, else null. */
-  undoGoldGain: number | null;
 }
 
+/** A skill point of a participant (evolutions are not kept). */
 export interface ParsedSkillEvent {
   participantId: number;
   /** 1 = first skill point. */
   seq: number;
-  atMs: number;
   /** 1=Q 2=W 3=E 4=R */
   skillSlot: number;
-  isEvolve: boolean;
 }
 
 /** A match + timeline reduced to the schema's fields, ready for `insertParsedMatch`. */

@@ -273,7 +273,6 @@ function parseItemEvents(events: TimelineEventDto[], ids: Set<number>): ParsedIt
         type,
         itemId: num(ev.beforeId),
         undoAfterItemId: num(ev.afterId),
-        undoGoldGain: num(ev.goldGain),
       });
     } else {
       out.push({
@@ -283,30 +282,26 @@ function parseItemEvents(events: TimelineEventDto[], ids: Set<number>): ParsedIt
         type,
         itemId: num(ev.itemId),
         undoAfterItemId: null,
-        undoGoldGain: null,
       });
     }
   }
   return out;
 }
 
+// Skill points only: evolutions (Kha'Zix, Kai'Sa, Viktor: `levelUpType` EVOLVE) are not skill
+// points, and nothing reads them.
 function parseSkillEvents(events: TimelineEventDto[], ids: Set<number>): ParsedSkillEvent[] {
   const seq = new Map<number, number>();
   const out: ParsedSkillEvent[] = [];
   for (const e of events) {
     if (!isTimelineEvent(e, 'SKILL_LEVEL_UP')) continue;
     if (!ids.has(e.participantId)) continue;
+    if (e.levelUpType === 'EVOLVE') continue;
     const slot = num(e.skillSlot);
     if (slot < 1 || slot > 4) continue;
     const n = (seq.get(e.participantId) ?? 0) + 1;
     seq.set(e.participantId, n);
-    out.push({
-      participantId: e.participantId,
-      seq: n,
-      atMs: num(e.timestamp),
-      skillSlot: slot,
-      isEvolve: e.levelUpType === 'EVOLVE',
-    });
+    out.push({ participantId: e.participantId, seq: n, skillSlot: slot });
   }
   return out;
 }

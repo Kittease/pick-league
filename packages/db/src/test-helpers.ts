@@ -172,7 +172,6 @@ export function parsedMatch(
         type: 'PURCHASED',
         itemId: 1055,
         undoAfterItemId: null,
-        undoGoldGain: null,
       },
       {
         participantId: 1,
@@ -181,9 +180,8 @@ export function parsedMatch(
         type: 'UNDO',
         itemId: 1055,
         undoAfterItemId: 0,
-        undoGoldGain: 450,
       },
     ],
-    skillEvents: [{ participantId: 1, seq: 1, atMs: 60000, skillSlot: 1, isEvolve: false }],
+    skillEvents: [{ participantId: 1, seq: 1, skillSlot: 1 }],
   };
 }
