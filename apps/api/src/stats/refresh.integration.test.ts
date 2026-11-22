@@ -207,6 +207,17 @@ describe.skipIf(!URL_)('stats refresh (Postgres)', () => {
     expect((await refresher.tick(true))?.reason).toBe('refreshed');
   }, 120_000);
 
+  test('an interval of 0 switches the refresh off', async () => {
+    await addMatches(5);
+    const refresher = new StatsRefresher(db, { intervalMs: 0 });
+    refresher.start();
+    await refresher.idle();
+    const status = await refresher.status();
+    expect(status.refreshing).toBe(false);
+    expect(status.pendingMatches).toBe(5);
+    await refresher.stop();
+  }, 60_000);
+
   test('there is no manual refresh endpoint', async () => {
     const { app } = setup();
     expect((await app.request('/stats/refresh', { method: 'POST' })).status).toBe(404);

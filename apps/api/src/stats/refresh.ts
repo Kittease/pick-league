@@ -257,7 +257,7 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
 }
 
 export interface StatsRefresherOptions extends RefreshOptions {
-  /** Timer period; the timer only refreshes when the matches changed. */
+  /** Timer period; the timer only refreshes when the matches changed. 0 = no refresh at all. */
   intervalMs: number;
   /** Pool for the cheap status queries (default: the refresh pool). */
   statusDb?: Queryable;
@@ -282,7 +282,9 @@ export class StatsRefresher {
     private readonly options: StatsRefresherOptions,
   ) {}
 
+  /** Refreshes now, then on the timer. An `intervalMs` of 0 switches both off (nothing runs). */
   start(): void {
+    if (this.options.intervalMs <= 0) return;
     void this.tick();
     this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
   }

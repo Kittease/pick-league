@@ -242,7 +242,7 @@ to keep is the one with a weight of ~1).
 
 Settings (env): `DATABASE_URL`, `PORT`, `LOG_LEVEL`, `CACHE_TTL_SECONDS` (600),
 `RATE_LIMIT_PER_MINUTE` (120 per IP, 0 = off), `RATE_LIMIT_BURST` (30), `TRUST_PROXY` (use
-`X-Forwarded-For`), `STATS_REFRESH_MINUTES` (60), `API_TOKEN` (unset = no auth; when set, every
+`X-Forwarded-For`), `STATS_REFRESH_MINUTES` (60; 0 switches the refresh off), `API_TOKEN` (unset = no auth; when set, every
 route but `GET /health` needs `Authorization: Bearer <API_TOKEN>`, else `401 UNAUTHORIZED`, and
 the per-IP rate limit uses the visitor IP the gateway sends in `X-Client-IP`). No CORS: browsers
 never call the API directly.
