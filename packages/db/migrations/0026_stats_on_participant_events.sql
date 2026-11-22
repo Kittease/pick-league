@@ -31,6 +31,20 @@ EXCEPTION WHEN insufficient_privilege THEN
 END
 $$;
 
+-- The event tables are dropped below, and 0025 copied what they held when it ran. A worker of the
+-- previous version started in between would have stored matches with their events in the old
+-- tables only: refuse to go on rather than lose them.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM matches
+    WHERE fetched_at > (SELECT applied_at FROM schema_migrations WHERE version = '0025')
+  ) THEN
+    RAISE EXCEPTION 'matches were stored after migration 0025 copied the item and skill events: stop every worker, run "DROP TABLE participant_events; DELETE FROM schema_migrations WHERE version = ''0025'';" and start the new worker again (0025 then copies the events again)';
+  END IF;
+END
+$$;
+
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------

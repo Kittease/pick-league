@@ -465,6 +465,42 @@ describe.skipIf(!TEST_DATABASE_URL)('storage migrations on a populated database'
     ]);
   }, 60_000);
 
+  test('0026 refuses to drop the event tables when a match was stored after 0025', async () => {
+    await populateOldLayout(db);
+    const files = await listMigrationFiles();
+    const upTo0025 = await mkdtemp(join(tmpdir(), 'pickleague-migrations-'));
+    try {
+      for (const f of files) {
+        if (f.version < '0026') await copyFile(f.path, join(upTo0025, f.name));
+      }
+      expect((await migrate(db, { dir: upTo0025 })).applied).toEqual([
+        '0025_participant_events.sql',
+      ]);
+    } finally {
+      await rm(upTo0025, { recursive: true, force: true });
+    }
+    // A worker of the previous version stores a match: its events only go to the old tables.
+    await db`
+      INSERT INTO matches (id, platform, patch, game_version, queue_id, started_at, duration_s,
+                           is_remake, is_early_surrender, winning_team)
+      VALUES ('KR_7000000003', 'KR', ${PATCH}, ${`${PATCH}.1.1`}, 420, now(), 1800, false, false, 100)`;
+
+    await expect(migrate(db)).rejects.toThrow(/stored after migration 0025/);
+    const [state] = await db`
+      SELECT to_regclass('item_events') IS NOT NULL AS item_events,
+             (SELECT max(version) FROM schema_migrations) AS last`;
+    expect(state).toEqual({ item_events: true, last: '0025' });
+
+    // The way out the error gives: copy the events again.
+    await db.unsafe(
+      "DROP TABLE participant_events; DELETE FROM schema_migrations WHERE version = '0025'",
+    );
+    expect((await migrate(db)).applied).toEqual(
+      files.filter((f) => f.version >= '0025').map((f) => f.name),
+    );
+    expect((await db`SELECT 1 FROM participant_events`).length).toBe(4);
+  }, 60_000);
+
   test('a populated database and an empty one end with the same schema', async () => {
     await populateOldLayout(db);
     await migrate(db);
