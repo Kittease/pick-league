@@ -590,7 +590,7 @@ d('PlatformWorker (Postgres)', () => {
       UNION ALL SELECT 'enrichment', count(*)::int FROM player_enrichment_queue`;
     expect(Object.fromEntries(counts.map((c) => [c.t, c.n]))).toEqual({
       participants: 10,
-      item_events: 8,
+      item_events: 7,
       skill_events: 4,
       match_bans: 10,
       enrichment: 10,

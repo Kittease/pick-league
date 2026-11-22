@@ -1032,7 +1032,6 @@ function itemEvents(
       t += 1000;
     }
     t += step / 2;
-    for (const comp of def?.from ?? []) push(t, 'DESTROYED', comp);
     push(t, 'PURCHASED', itemId);
     if (rng() < 0.3) push(t, 'PURCHASED', 2003);
     t += step / 2;
@@ -1042,7 +1041,6 @@ function itemEvents(
   push(t + 100, 'PURCHASED', 2055);
   t += 1000;
   buy(l.core[0] as number);
-  push(t, 'DESTROYED', 1001);
   push(t, 'PURCHASED', l.boots);
   t += 1000;
   for (const id of l.core.slice(1)) {

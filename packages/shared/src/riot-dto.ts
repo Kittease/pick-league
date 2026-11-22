@@ -291,12 +291,6 @@ export interface ItemSoldEventDto extends EventBase {
   itemId: number;
 }
 
-export interface ItemDestroyedEventDto extends EventBase {
-  type: 'ITEM_DESTROYED';
-  participantId: number;
-  itemId: number;
-}
-
 export interface ItemUndoEventDto extends EventBase {
   type: 'ITEM_UNDO';
   participantId: number;
@@ -316,7 +310,7 @@ export interface SkillLevelUpEventDto extends EventBase {
   levelUpType: string;
 }
 
-/** Any other event (CHAMPION_KILL, BUILDING_KILL, WARD_PLACED, LEVEL_UP, GAME_END, ...): kept loosely typed. */
+/** Any other event (ITEM_DESTROYED, CHAMPION_KILL, BUILDING_KILL, WARD_PLACED, LEVEL_UP, GAME_END, ...): kept loosely typed. */
 export interface OtherTimelineEventDto extends EventBase {
   type: string;
   [key: string]: unknown;
@@ -325,7 +319,6 @@ export interface OtherTimelineEventDto extends EventBase {
 export type KnownTimelineEventDto =
   | ItemPurchasedEventDto
   | ItemSoldEventDto
-  | ItemDestroyedEventDto
   | ItemUndoEventDto
   | SkillLevelUpEventDto;
 

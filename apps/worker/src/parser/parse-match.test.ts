@@ -298,11 +298,8 @@ describe('parseMatch: timeline events', () => {
         undoGoldGain: -140,
       },
     ]);
-    expect(itemEvents.find((e) => e.participantId === 3)).toMatchObject({
-      type: 'DESTROYED',
-      itemId: 2010,
-      seq: 1,
-    });
+    // ITEM_DESTROYED events (participant 3 used a biscuit) are not kept.
+    expect(itemEvents.some((e) => e.participantId === 3)).toBe(false);
     // participantId 0 events are dropped.
     expect(itemEvents.some((e) => e.participantId === 0)).toBe(false);
   });

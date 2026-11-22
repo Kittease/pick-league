@@ -246,10 +246,11 @@ function participantFrames(participantId: number, frames: TimelineDto['info']['f
   return out;
 }
 
+// ITEM_DESTROYED (components combined, consumables used, items transforming) is not stored:
+// nothing reads it, and it was nearly half of all item events.
 const ITEM_EVENT_TYPES: Record<string, ItemEventType> = {
   ITEM_PURCHASED: 'PURCHASED',
   ITEM_SOLD: 'SOLD',
-  ITEM_DESTROYED: 'DESTROYED',
   ITEM_UNDO: 'UNDO',
 };
 

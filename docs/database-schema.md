@@ -42,7 +42,7 @@ CREATE TYPE ladder_tier AS ENUM ('CHALLENGER', 'GRANDMASTER', 'MASTER');  -- MAS
 
 CREATE TYPE position AS ENUM ('TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY');
 
-CREATE TYPE item_event_type AS ENUM ('PURCHASED', 'SOLD', 'DESTROYED', 'UNDO');
+CREATE TYPE item_event_type AS ENUM ('PURCHASED', 'SOLD', 'DESTROYED', 'UNDO');  -- 'DESTROYED' is no longer stored (0021)
 
 CREATE TYPE fetch_status AS ENUM ('PENDING', 'DONE', 'SKIPPED_OLD_PATCH', 'FAILED');
 
@@ -286,9 +286,9 @@ CREATE TABLE participants (
 CREATE INDEX ON participants (champion_id, position);
 CREATE INDEX ON participants (puuid);
 
--- Every item event from the timeline, in order.
--- The build order shown in the helper is derived by replaying PURCHASED / UNDO
--- and ignoring consumables, trinkets and components later DESTROYED into a completed item.
+-- Purchases, sales and undos from the timeline, in order (ITEM_DESTROYED is not stored).
+-- The build order shown in the helper is derived by replaying PURCHASED / UNDO; consumables,
+-- trinkets and components are recognised from the item data (items), not from events.
 CREATE TABLE item_events (
   match_id       text     NOT NULL,
   participant_id smallint NOT NULL,
@@ -470,10 +470,10 @@ banned matches / matches when every participant of a server is counted.
 
 ## Size estimate
 
-Measured on 16.22 (Nov 2026: 305k matches, 39 GB in all), per match with indexes: item events (~460 rows) ~49 KB, skill events (~145 rows) ~16 KB, participants ~12 KB, bans ~1 KB, plus ~9 KB of stats views → **~85 KB/match**.
+Measured on 16.22 (Nov 2026: 305k matches, 39 GB in all), per match with indexes: item events (~240 rows since `DESTROYED` is no longer stored, was ~460) ~26 KB, skill events (~145 rows) ~16 KB, participants ~12 KB, bans ~1 KB, plus ~9 KB of stats views → **~62 KB/match**.
 
-A full patch is ~300k matches (every Master+ player of the four servers over two weeks) → ~26 GB. `champion_masteries` adds ~8 GB whatever the number of patches (28M rows: one set per player, ladder or not).
+A full patch is ~300k matches (every Master+ player of the four servers over two weeks) → ~19 GB. `champion_masteries` adds ~8 GB whatever the number of patches (28M rows: one set per player, ladder or not).
 
-Two full patches, at the end of a patch and before the older one is deleted → **~60 GB**. The stats refresh also needs temporary space while it runs (over 13 GB at 430k matches). The disk must hold both. There is no backup.
+Two full patches, at the end of a patch and before the older one is deleted → **~46 GB**. The stats refresh also needs temporary space while it runs (over 13 GB at 430k matches). The disk must hold both. There is no backup.
 
 Low-priority enrichment volume: roughly 6–8 non-ladder players per match → tens of thousands of new players per region per patch, 2 requests each (mastery + rank). At leftover budget this takes a few days to catch up after the first run, then keeps pace.

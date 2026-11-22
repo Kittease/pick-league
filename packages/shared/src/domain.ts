@@ -65,7 +65,8 @@ export const SKILL_KEYS: Record<SkillSlot, 'Q' | 'W' | 'E' | 'R'> = {
   4: 'R',
 };
 
-export const ITEM_EVENT_TYPES = ['PURCHASED', 'SOLD', 'DESTROYED', 'UNDO'] as const;
+/** Item events the worker stores. The database enum also has 'DESTROYED', no longer stored. */
+export const ITEM_EVENT_TYPES = ['PURCHASED', 'SOLD', 'UNDO'] as const;
 export type ItemEventType = (typeof ITEM_EVENT_TYPES)[number];
 
 export const FETCH_STATUSES = ['PENDING', 'DONE', 'SKIPPED_OLD_PATCH', 'FAILED'] as const;
