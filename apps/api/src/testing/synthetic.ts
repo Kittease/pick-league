@@ -1264,8 +1264,6 @@ export function generateMatches(options: GenerateOptions): ParsedMatch[] {
       participants,
       itemEvents: itemEv,
       skillEvents: skillEv,
-      killEvents: [],
-      objectiveEvents: [],
     });
   }
   return out;

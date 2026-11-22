@@ -5,7 +5,6 @@
 import type {
   ItemEventType,
   LadderTier,
-  ObjectiveType,
   PatchId,
   Platform,
   Position,
@@ -140,35 +139,6 @@ export interface ParsedSkillEvent {
   isEvolve: boolean;
 }
 
-export interface ParsedKillEvent {
-  /** Order within the match, starting at 1. */
-  seq: number;
-  atMs: number;
-  /** 0 = executed. */
-  killerParticipantId: number;
-  victimParticipantId: number;
-  assistParticipantIds: number[];
-  positionX: number;
-  positionY: number;
-  bounty: number;
-  shutdownBounty: number;
-}
-
-export interface ParsedObjectiveEvent {
-  /** Order within the match, starting at 1. */
-  seq: number;
-  atMs: number;
-  type: ObjectiveType;
-  /** Dragon: 'FIRE_DRAGON'…; tower: 'OUTER_TURRET'… */
-  subtype: string | null;
-  /** Towers/plates/inhibitors: 'TOP_LANE'… */
-  lane: string | null;
-  /** Team that took it. */
-  teamId: 100 | 200;
-  /** null/0 when minions took it. */
-  killerParticipantId: number | null;
-}
-
 /** A match + timeline reduced to the schema's fields, ready for `insertParsedMatch`. */
 export interface ParsedMatch {
   match: ParsedMatchRow;
@@ -178,8 +148,6 @@ export interface ParsedMatch {
   participants: ParsedParticipant[];
   itemEvents: ParsedItemEvent[];
   skillEvents: ParsedSkillEvent[];
-  killEvents: ParsedKillEvent[];
-  objectiveEvents: ParsedObjectiveEvent[];
 }
 
 // ---------------------------------------------------------------------------

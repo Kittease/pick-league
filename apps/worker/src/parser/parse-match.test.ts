@@ -317,61 +317,6 @@ describe('parseMatch: timeline events', () => {
     ]);
   });
 
-  test('kills with assists, position, bounties; executions have killer 0', () => {
-    const { killEvents } = parse();
-    expect(killEvents).toEqual([
-      {
-        seq: 1,
-        atMs: 100000,
-        killerParticipantId: 1,
-        victimParticipantId: 6,
-        assistParticipantIds: [2, 3],
-        positionX: 2500,
-        positionY: 11000,
-        bounty: 300,
-        shutdownBounty: 150,
-      },
-      {
-        seq: 2,
-        atMs: 110000,
-        killerParticipantId: 0,
-        victimParticipantId: 4,
-        assistParticipantIds: [],
-        positionX: 13000,
-        positionY: 2000,
-        bounty: 0,
-        shutdownBounty: 0,
-      },
-    ]);
-  });
-
-  test('objectives: monsters, towers, plates, inhibitors with the taking team', () => {
-    const { objectiveEvents } = parse();
-    expect(
-      objectiveEvents.map((e) => [
-        e.seq,
-        e.type,
-        e.subtype,
-        e.lane,
-        e.teamId,
-        e.killerParticipantId,
-      ]),
-    ).toEqual([
-      [1, 'VOIDGRUB', null, null, 100, 2],
-      [2, 'DRAGON', 'FIRE_DRAGON', null, 200, 7],
-      [3, 'TURRET_PLATE', null, 'BOT_LANE', 100, null],
-      [4, 'TURRET_PLATE', null, 'BOT_LANE', 100, 4],
-      [5, 'RIFT_HERALD', null, null, 100, 2],
-      [6, 'TOWER', 'OUTER_TURRET', 'MID_LANE', 100, 3],
-      [7, 'TOWER', 'OUTER_TURRET', 'TOP_LANE', 200, null],
-      [8, 'ATAKHAN', 'ATAKHAN_RUINOUS', null, 100, 2],
-      [9, 'BARON', null, null, 100, 2],
-      [10, 'INHIBITOR', null, 'MID_LANE', 100, 4],
-      [11, 'ELDER_DRAGON', 'ELDER_DRAGON', null, 200, 9],
-    ]);
-    expect(objectiveEvents[0]?.atMs).toBe(114000);
-  });
-
   test('unknown event types are ignored', () => {
     const before = parse();
     const after = parse((_, t) => {

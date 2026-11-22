@@ -27,7 +27,6 @@ const emptyToNull = (s: string | null | undefined): string | null =>
  * 1. `players` rows for all 10 participants (Riot ID from the payload; the name is only
  *    overwritten by a payload at least as recent as the stored one; `last_seen_in_match_at` bumped),
  * 2. `matches`, `match_teams`, `match_bans`, `participants`, `item_events`, `skill_events`,
- *    `kill_events`, `objective_events`,
  * 3. optionally: enrichment enqueue + queue row marked DONE.
  *
  * Idempotent: if the match id already exists, nothing is written and `inserted` is false.
@@ -202,36 +201,6 @@ export async function insertParsedMatch(
           at_ms: e.atMs,
           skill_slot: e.skillSlot,
           is_evolve: e.isEvolve,
-        })),
-      )}`;
-    }
-    for (const chunk of chunks(parsed.killEvents, 2000)) {
-      await tx`INSERT INTO kill_events ${tx(
-        chunk.map((e) => ({
-          match_id: m.id,
-          seq: e.seq,
-          at_ms: e.atMs,
-          killer_participant_id: e.killerParticipantId,
-          victim_participant_id: e.victimParticipantId,
-          assist_participant_ids: tx.array(e.assistParticipantIds, 21),
-          position_x: e.positionX,
-          position_y: e.positionY,
-          bounty: e.bounty,
-          shutdown_bounty: e.shutdownBounty,
-        })),
-      )}`;
-    }
-    for (const chunk of chunks(parsed.objectiveEvents, 2000)) {
-      await tx`INSERT INTO objective_events ${tx(
-        chunk.map((e) => ({
-          match_id: m.id,
-          seq: e.seq,
-          at_ms: e.atMs,
-          type: e.type,
-          subtype: e.subtype,
-          lane: e.lane,
-          team_id: e.teamId,
-          killer_participant_id: e.killerParticipantId,
         })),
       )}`;
     }

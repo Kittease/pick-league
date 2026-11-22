@@ -591,16 +591,12 @@ d('PlatformWorker (Postgres)', () => {
       SELECT 'participants' AS t, count(*)::int AS n FROM participants
       UNION ALL SELECT 'item_events', count(*)::int FROM item_events
       UNION ALL SELECT 'skill_events', count(*)::int FROM skill_events
-      UNION ALL SELECT 'kill_events', count(*)::int FROM kill_events
-      UNION ALL SELECT 'objective_events', count(*)::int FROM objective_events
       UNION ALL SELECT 'match_bans', count(*)::int FROM match_bans
       UNION ALL SELECT 'enrichment', count(*)::int FROM player_enrichment_queue`;
     expect(Object.fromEntries(counts.map((c) => [c.t, c.n]))).toEqual({
       participants: 10,
       item_events: 8,
       skill_events: 4,
-      kill_events: 2,
-      objective_events: 11,
       match_bans: 10,
       enrichment: 10,
     });

@@ -185,29 +185,5 @@ export function parsedMatch(
       },
     ],
     skillEvents: [{ participantId: 1, seq: 1, atMs: 60000, skillSlot: 1, isEvolve: false }],
-    killEvents: [
-      {
-        seq: 1,
-        atMs: 300000,
-        killerParticipantId: 1,
-        victimParticipantId: 6,
-        assistParticipantIds: [2, 3],
-        positionX: 7000,
-        positionY: 7000,
-        bounty: 300,
-        shutdownBounty: 0,
-      },
-    ],
-    objectiveEvents: [
-      {
-        seq: 1,
-        atMs: 600000,
-        type: 'DRAGON',
-        subtype: 'FIRE_DRAGON',
-        lane: null,
-        teamId: 200,
-        killerParticipantId: 7,
-      },
-    ],
   };
 }

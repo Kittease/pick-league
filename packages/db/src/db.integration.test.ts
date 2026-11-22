@@ -306,8 +306,6 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       expect(await count('players')).toBe(10);
       expect(await count('item_events')).toBe(2);
       expect(await count('skill_events')).toBe(1);
-      expect(await count('kill_events')).toBe(1);
-      expect(await count('objective_events')).toBe(1);
 
       const [p] = await db`
         SELECT runes, stat_shards, final_items, gold_by_minute, position_x_by_minute, position
@@ -316,8 +314,6 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       expect(p?.final_items).toEqual([3006, 0, 0, 0, 0, 0, 3340]);
       expect(p?.gold_by_minute).toEqual([500, 900, 1400]);
       expect(p?.position).toBe('TOP');
-      const [k] = await db`SELECT assist_participant_ids FROM kill_events`;
-      expect(k?.assist_participant_ids).toEqual([2, 3]);
       const [player] =
         await db`SELECT game_name, tag_line FROM players WHERE puuid = ${TEN[4] as string}`;
       expect(player).toEqual({ game_name: 'Fake Player 5', tag_line: 'TEST' });

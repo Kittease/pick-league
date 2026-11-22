@@ -328,59 +328,7 @@ export interface SkillLevelUpEventDto extends EventBase {
   levelUpType: string;
 }
 
-export interface ChampionKillEventDto extends EventBase {
-  type: 'CHAMPION_KILL';
-  /** 0 = executed (tower/minion/monster). */
-  killerId: number;
-  victimId: number;
-  assistingParticipantIds?: number[];
-  position: PositionDto;
-  bounty: number;
-  shutdownBounty: number;
-  killStreakLength?: number;
-}
-
-export interface EliteMonsterKillEventDto extends EventBase {
-  type: 'ELITE_MONSTER_KILL';
-  killerId: number;
-  /** Team that took the monster. */
-  killerTeamId: number;
-  /** 'DRAGON' | 'BARON_NASHOR' | 'RIFTHERALD' | 'HORDE' | 'ATAKHAN' */
-  monsterType: string;
-  /** Dragons: 'FIRE_DRAGON' | 'WATER_DRAGON' | 'EARTH_DRAGON' | 'AIR_DRAGON' | 'HEXTECH_DRAGON' | 'CHEMTECH_DRAGON' | 'ELDER_DRAGON'; Atakhan variants. */
-  monsterSubType?: string;
-  position: PositionDto;
-  assistingParticipantIds?: number[];
-  bounty?: number;
-}
-
-export interface BuildingKillEventDto extends EventBase {
-  type: 'BUILDING_KILL';
-  /** 'TOWER_BUILDING' | 'INHIBITOR_BUILDING' */
-  buildingType: string;
-  /** 0 when minions took it. */
-  killerId: number;
-  /** Team that OWNED the building (the destroyer is the other team). */
-  teamId: number;
-  /** 'TOP_LANE' | 'MID_LANE' | 'BOT_LANE' */
-  laneType: string;
-  /** 'OUTER_TURRET' | 'INNER_TURRET' | 'BASE_TURRET' | 'NEXUS_TURRET' (towers only). */
-  towerType?: string;
-  position: PositionDto;
-  assistingParticipantIds?: number[];
-  bounty?: number;
-}
-
-export interface TurretPlateDestroyedEventDto extends EventBase {
-  type: 'TURRET_PLATE_DESTROYED';
-  killerId: number;
-  /** Team that OWNED the plate. */
-  teamId: number;
-  laneType: string;
-  position: PositionDto;
-}
-
-/** Any other event (WARD_PLACED, LEVEL_UP, GAME_END, ...): kept loosely typed. */
+/** Any other event (CHAMPION_KILL, BUILDING_KILL, WARD_PLACED, LEVEL_UP, GAME_END, ...): kept loosely typed. */
 export interface OtherTimelineEventDto extends EventBase {
   type: string;
   [key: string]: unknown;
@@ -391,11 +339,7 @@ export type KnownTimelineEventDto =
   | ItemSoldEventDto
   | ItemDestroyedEventDto
   | ItemUndoEventDto
-  | SkillLevelUpEventDto
-  | ChampionKillEventDto
-  | EliteMonsterKillEventDto
-  | BuildingKillEventDto
-  | TurretPlateDestroyedEventDto;
+  | SkillLevelUpEventDto;
 
 export type TimelineEventDto = KnownTimelineEventDto | OtherTimelineEventDto;
 

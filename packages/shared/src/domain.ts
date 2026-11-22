@@ -68,18 +68,5 @@ export const SKILL_KEYS: Record<SkillSlot, 'Q' | 'W' | 'E' | 'R'> = {
 export const ITEM_EVENT_TYPES = ['PURCHASED', 'SOLD', 'DESTROYED', 'UNDO'] as const;
 export type ItemEventType = (typeof ITEM_EVENT_TYPES)[number];
 
-export const OBJECTIVE_TYPES = [
-  'DRAGON',
-  'ELDER_DRAGON',
-  'BARON',
-  'RIFT_HERALD',
-  'VOIDGRUB',
-  'ATAKHAN',
-  'TOWER',
-  'TURRET_PLATE',
-  'INHIBITOR',
-] as const;
-export type ObjectiveType = (typeof OBJECTIVE_TYPES)[number];
-
 export const FETCH_STATUSES = ['PENDING', 'DONE', 'SKIPPED_OLD_PATCH', 'FAILED'] as const;
 export type FetchStatus = (typeof FETCH_STATUSES)[number];

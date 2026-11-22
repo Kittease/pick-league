@@ -4,8 +4,8 @@ PostgreSQL 17, single database, run by Docker Compose next to the worker and the
 
 ## Principles
 
-- **Store match facts, not aggregates.** Every table below holds what happened in a game (participants, every item event, every skill level-up, kills, objectives, per-minute stats). Recommendations are computed from these tables; materialized views can be added later for speed without changing the source data.
-- **No raw payloads.** Match and timeline JSON are parsed and thrown away. Fields that don't serve picks, builds or plausible later analysis are dropped (e.g. the ~130 `challenges` fields, ward events — Riot gives them no map position).
+- **Store match facts, not aggregates.** Every table below holds what happened in a game (participants, every item event, every skill level-up, per-minute stats). Recommendations are computed from these tables; materialized views can be added later for speed without changing the source data.
+- **No raw payloads.** Match and timeline JSON are parsed and thrown away. Fields that don't serve picks, builds or plausible later analysis are dropped (e.g. the ~130 `challenges` fields, ward events — Riot gives them no map position; kill and objective events, stored until `0020_drop_kill_and_objective_events.sql` and never read).
 - **Two patches only.** `patches` lists the patches we keep. When a new patch is detected, every match of the patch before the previous one is deleted (`ON DELETE CASCADE` cleans every child table). Postgres reuses the freed space for the new patch, so disk usage stays flat at ~2 patches.
 - **Static data is per patch.** Champions, items, runes and summoner spells come from Data Dragon and are stored per patch, so an old match is always read with the item/rune data that existed when it was played.
 - **All 10 players are identified.** Every `puuid` met in a match gets a `players` row. Riot IDs come for free in the match payload. Extra info (mastery, solo queue rank) is fetched with a priority scheme so it never slows match collection:
@@ -18,10 +18,8 @@ PostgreSQL 17, single database, run by Docker Compose next to the worker and the
 patches ─┬─< champions / champion_spells / items / rune_trees / runes / summoner_spells   (Data Dragon, per patch)
          └─< matches ─┬─< match_teams
                       ├─< match_bans
-                      ├─< participants ─┬─< item_events
-                      │                 └─< skill_events
-                      ├─< kill_events
-                      └─< objective_events
+                      └─< participants ─┬─< item_events
+                                        └─< skill_events
 
 players ─┬── ladder_entries          (tracked set: current Challenger/GM/top Master state, used to detect who played)
          ├─< champion_masteries      (daily for tracked players, low priority for the others)
@@ -45,11 +43,6 @@ CREATE TYPE ladder_tier AS ENUM ('CHALLENGER', 'GRANDMASTER', 'MASTER');  -- MAS
 CREATE TYPE position AS ENUM ('TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY');
 
 CREATE TYPE item_event_type AS ENUM ('PURCHASED', 'SOLD', 'DESTROYED', 'UNDO');
-
-CREATE TYPE objective_type AS ENUM (
-  'DRAGON', 'ELDER_DRAGON', 'BARON', 'RIFT_HERALD', 'VOIDGRUB', 'ATAKHAN',
-  'TOWER', 'TURRET_PLATE', 'INHIBITOR'
-);
 
 CREATE TYPE fetch_status AS ENUM ('PENDING', 'DONE', 'SKIPPED_OLD_PATCH', 'FAILED');
 
@@ -320,33 +313,6 @@ CREATE TABLE skill_events (
   PRIMARY KEY (match_id, participant_id, seq),
   FOREIGN KEY (match_id, participant_id) REFERENCES participants ON DELETE CASCADE
 );
-
-CREATE TABLE kill_events (
-  match_id       text     NOT NULL REFERENCES matches ON DELETE CASCADE,
-  seq            smallint NOT NULL,
-  at_ms          integer  NOT NULL,
-  killer_participant_id smallint NOT NULL,   -- 0 = executed (tower/minion/monster)
-  victim_participant_id smallint NOT NULL,
-  assist_participant_ids smallint[] NOT NULL DEFAULT '{}',
-  position_x     smallint NOT NULL,
-  position_y     smallint NOT NULL,
-  bounty         smallint NOT NULL,
-  shutdown_bounty smallint NOT NULL,
-  PRIMARY KEY (match_id, seq)
-);
-
-CREATE TABLE objective_events (
-  match_id       text     NOT NULL REFERENCES matches ON DELETE CASCADE,
-  seq            smallint NOT NULL,
-  at_ms          integer  NOT NULL,
-  type           objective_type NOT NULL,
-  subtype        text,                       -- dragon: 'FIRE_DRAGON'...; tower: 'OUTER_TURRET'...
-  lane           text,                       -- towers/plates/inhibitors: 'TOP_LANE'...
-  team_id        smallint NOT NULL,          -- team that took it
-  killer_participant_id smallint,            -- NULL/0 when minions took it
-  PRIMARY KEY (match_id, seq)
-);
-
 ```
 
 ## Worker state
@@ -504,10 +470,10 @@ banned matches / matches when every participant of a server is counted.
 
 ## Size estimate
 
-Measured on 16.22 (Nov 2026: 305k matches, 39 GB in all), per match with indexes: item events (~460 rows) ~49 KB, skill events (~145 rows) ~16 KB, participants ~12 KB, objective events ~9 KB, kill events ~8 KB, bans ~1 KB, plus ~9 KB of stats views → **~100 KB/match**.
+Measured on 16.22 (Nov 2026: 305k matches, 39 GB in all), per match with indexes: item events (~460 rows) ~49 KB, skill events (~145 rows) ~16 KB, participants ~12 KB, bans ~1 KB, plus ~9 KB of stats views → **~85 KB/match**.
 
-A full patch is ~300k matches (every Master+ player of the four servers over two weeks) → ~31 GB. `champion_masteries` adds ~8 GB whatever the number of patches (28M rows: one set per player, ladder or not).
+A full patch is ~300k matches (every Master+ player of the four servers over two weeks) → ~26 GB. `champion_masteries` adds ~8 GB whatever the number of patches (28M rows: one set per player, ladder or not).
 
-Two full patches, at the end of a patch and before the older one is deleted → **~70 GB**, plus the nightly dumps (3 kept, ~2.4 GB each for one patch of data, about twice that for two). The disk must hold both.
+Two full patches, at the end of a patch and before the older one is deleted → **~60 GB**. The stats refresh also needs temporary space while it runs (over 13 GB at 430k matches). The disk must hold both. There is no backup.
 
 Low-priority enrichment volume: roughly 6–8 non-ladder players per match → tens of thousands of new players per region per patch, 2 requests each (mastery + rank). At leftover budget this takes a few days to catch up after the first run, then keeps pace.

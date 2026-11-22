@@ -7,9 +7,7 @@
 import type {
   ParsedBan,
   ParsedItemEvent,
-  ParsedKillEvent,
   ParsedMatch,
-  ParsedObjectiveEvent,
   ParsedParticipant,
   ParsedSkillEvent,
   ParsedTeam,
@@ -21,7 +19,6 @@ import {
   type MatchDto,
   type MatchParticipantDto,
   type MatchTeamDto,
-  type ObjectiveType,
   type ParticipantFrameDto,
   type Platform,
   parsePosition,
@@ -44,7 +41,6 @@ type TeamId = 100 | 200;
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const asTeamId = (v: unknown): TeamId | null => (v === 100 || v === 200 ? v : null);
-const otherTeam = (t: TeamId): TeamId => (t === 100 ? 200 : 100);
 
 /** `gameDuration` is in seconds when `gameEndTimestamp` is present (since 11.20), else in ms. */
 export function durationSeconds(info: MatchDto['info']): number {
@@ -101,7 +97,6 @@ export function parseMatch(match: MatchDto, timeline: TimelineDto): ParsedMatch 
   if (ids.size !== 10) throw new MatchParseError(`${matchId} has duplicate participant ids`);
 
   const events = frames.flatMap((f) => f.events ?? []);
-  const teamOf = new Map(participants.map((p) => [p.participantId, p.teamId]));
 
   return {
     match: {
@@ -121,8 +116,6 @@ export function parseMatch(match: MatchDto, timeline: TimelineDto): ParsedMatch 
     participants,
     itemEvents: parseItemEvents(events, ids),
     skillEvents: parseSkillEvents(events, ids),
-    killEvents: parseKillEvents(events),
-    objectiveEvents: parseObjectiveEvents(events, teamOf),
   };
 }
 
@@ -313,90 +306,6 @@ function parseSkillEvents(events: TimelineEventDto[], ids: Set<number>): ParsedS
       skillSlot: slot,
       isEvolve: e.levelUpType === 'EVOLVE',
     });
-  }
-  return out;
-}
-
-function parseKillEvents(events: TimelineEventDto[]): ParsedKillEvent[] {
-  const out: ParsedKillEvent[] = [];
-  for (const e of events) {
-    if (!isTimelineEvent(e, 'CHAMPION_KILL')) continue;
-    out.push({
-      seq: out.length + 1,
-      atMs: num(e.timestamp),
-      killerParticipantId: num(e.killerId),
-      victimParticipantId: num(e.victimId),
-      assistParticipantIds: (e.assistingParticipantIds ?? []).map(num),
-      positionX: num(e.position?.x),
-      positionY: num(e.position?.y),
-      bounty: num(e.bounty),
-      shutdownBounty: num(e.shutdownBounty),
-    });
-  }
-  return out;
-}
-
-const MONSTER_TYPES: Record<string, ObjectiveType> = {
-  DRAGON: 'DRAGON',
-  BARON_NASHOR: 'BARON',
-  RIFTHERALD: 'RIFT_HERALD',
-  HORDE: 'VOIDGRUB',
-  ATAKHAN: 'ATAKHAN',
-};
-
-function parseObjectiveEvents(
-  events: TimelineEventDto[],
-  teamOf: Map<number, TeamId>,
-): ParsedObjectiveEvent[] {
-  const out: ParsedObjectiveEvent[] = [];
-  const push = (e: Omit<ParsedObjectiveEvent, 'seq'>) => out.push({ seq: out.length + 1, ...e });
-  const killer = (id: unknown) => (num(id) > 0 ? num(id) : null);
-
-  for (const e of events) {
-    if (isTimelineEvent(e, 'ELITE_MONSTER_KILL')) {
-      let type = MONSTER_TYPES[e.monsterType];
-      if (!type) continue;
-      const subtype = e.monsterSubType || null;
-      if (type === 'DRAGON' && subtype === 'ELDER_DRAGON') type = 'ELDER_DRAGON';
-      const teamId = asTeamId(e.killerTeamId) ?? teamOf.get(num(e.killerId)) ?? null;
-      if (teamId === null) continue;
-      push({
-        atMs: num(e.timestamp),
-        type,
-        subtype,
-        lane: null,
-        teamId,
-        killerParticipantId: killer(e.killerId),
-      });
-    } else if (isTimelineEvent(e, 'BUILDING_KILL')) {
-      const type: ObjectiveType | null =
-        e.buildingType === 'TOWER_BUILDING'
-          ? 'TOWER'
-          : e.buildingType === 'INHIBITOR_BUILDING'
-            ? 'INHIBITOR'
-            : null;
-      const owner = asTeamId(e.teamId);
-      if (!type || owner === null) continue;
-      push({
-        atMs: num(e.timestamp),
-        type,
-        subtype: type === 'TOWER' ? e.towerType || null : null,
-        lane: e.laneType || null,
-        teamId: otherTeam(owner),
-        killerParticipantId: killer(e.killerId),
-      });
-    } else if (isTimelineEvent(e, 'TURRET_PLATE_DESTROYED')) {
-      const owner = asTeamId(e.teamId);
-      if (owner === null) continue;
-      push({
-        atMs: num(e.timestamp),
-        type: 'TURRET_PLATE',
-        subtype: null,
-        lane: e.laneType || null,
-        teamId: otherTeam(owner),
-        killerParticipantId: killer(e.killerId),
-      });
-    }
   }
   return out;
 }
