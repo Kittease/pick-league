@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Db } from './client.ts';
 import { listMigrationFiles, migrate } from './index.ts';
-import { TEST_DATABASE_URL, testDb } from './test-helpers.ts';
+import { fakePuuid, TEST_DATABASE_URL, testDb } from './test-helpers.ts';
 
 const PATCH = '15.22';
 const MATCH = 'KR_7000000001';
@@ -154,6 +154,21 @@ async function populateOldLayout(db: Db): Promise<void> {
   // The remake has events too: they are moved like the others (and read by no view).
   await db`INSERT INTO item_events (match_id, participant_id, seq, at_ms, type, item_id)
            VALUES (${REMAKE}, 1, 1, 2000, 'PURCHASED', 1055)`;
+  // Masteries as the worker stored them: every champion of a mastery answer. Player n played
+  // champion n; player 3 was never fetched, player 11 is in no stored match.
+  await db`INSERT INTO players (puuid, platform) VALUES (${fakePuuid(11)}, 'KR')`;
+  for (const [player, championId, points] of [
+    [1, 1, 250_000],
+    [1, 2, 9_000],
+    [1, 60018, 1_429],
+    [2, 2, 40_000],
+    [2, 1, 100],
+    [11, 5, 77_000],
+  ] as const) {
+    await db`
+      INSERT INTO champion_masteries (puuid, champion_id, level, points, last_played_at)
+      VALUES (${fakePuuid(player)}, ${championId}, 5, ${points}, '2026-11-01T00:00:00Z')`;
+  }
 }
 
 /** Everything in the public schema, as text, to compare two databases. */
@@ -197,7 +212,7 @@ async function schemaOf(db: Db) {
   };
 }
 
-/** The stats views the storage migrations rewrite, read whole. */
+/** The stats views the storage migrations rewrite or change the source of, read whole. */
 async function rewrittenViews(db: Db) {
   return {
     participants: [
@@ -206,6 +221,7 @@ async function rewrittenViews(db: Db) {
     questItems: [...(await db`SELECT * FROM stats_quest_items ORDER BY match_id, participant_id`)],
     swaps: [...(await db`SELECT * FROM stats_item_swaps ORDER BY 1, 2, 3, 4, 5`)],
     choices: [...(await db`SELECT * FROM stats_choices ORDER BY 1, 2, 3, 4, 5`)],
+    mastery: [...(await db`SELECT * FROM stats_champion_mastery ORDER BY 1, 2, 3, 4`)],
   };
 }
 
@@ -230,7 +246,7 @@ describe.skipIf(!TEST_DATABASE_URL)('storage migrations on a populated database'
     await rm(before, { recursive: true, force: true });
   });
 
-  test('events become arrays per participant, and the stats views keep their rows', async () => {
+  test('events become arrays per participant, unread masteries go, and the stats keep their rows', async () => {
     await populateOldLayout(db);
     // The stats as the previous version computed them (the views the rewritten ones read first).
     for (const view of [
@@ -242,6 +258,7 @@ describe.skipIf(!TEST_DATABASE_URL)('storage migrations on a populated database'
       'stats_tierlist_participants',
       'stats_item_swaps',
       'stats_choices',
+      'stats_champion_mastery',
     ]) {
       await db.unsafe(`REFRESH MATERIALIZED VIEW ${view}`);
     }
@@ -349,10 +366,36 @@ describe.skipIf(!TEST_DATABASE_URL)('storage migrations on a populated database'
     for (const view of ['stats_participants', 'stats_quest_items']) {
       await db.unsafe(`REFRESH MATERIALIZED VIEW ${view}`);
     }
-    for (const view of ['stats_choices', 'stats_item_swaps']) {
+    for (const view of ['stats_choices', 'stats_item_swaps', 'stats_champion_mastery']) {
       await db.unsafe(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${view}`);
     }
     expect(await rewrittenViews(db)).toEqual(old);
+    expect(now.mastery).toEqual([
+      { patch: PATCH, position: 'TOP', champion_id: 1, bucket: 5, games: 1, wins: 1 },
+      { patch: PATCH, position: 'JUNGLE', champion_id: 2, bucket: 2, games: 1, wins: 1 },
+    ]);
+
+    // Masteries: only the rows of champions the player has a stored game on are left, as they were.
+    expect([
+      ...(await db`
+        SELECT puuid, champion_id, level, points, last_played_at FROM champion_masteries
+        ORDER BY puuid, champion_id`),
+    ]).toEqual([
+      {
+        puuid: fakePuuid(1),
+        champion_id: 1,
+        level: 5,
+        points: 250_000,
+        last_played_at: new Date('2026-11-01T00:00:00Z'),
+      },
+      {
+        puuid: fakePuuid(2),
+        champion_id: 2,
+        level: 5,
+        points: 40_000,
+        last_played_at: new Date('2026-11-01T00:00:00Z'),
+      },
+    ]);
 
     // The old tables are gone, and deleting a match still takes its events with it.
     const [gone] = await db`

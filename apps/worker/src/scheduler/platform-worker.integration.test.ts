@@ -6,6 +6,7 @@ import {
   getMatchesSyncedUntil,
   listWorkerStatus,
   migrate,
+  playersNeedingDailyRefresh,
   upsertPatchStaticData,
 } from '@pick-league/db';
 import type { LeagueListDto } from '@pick-league/shared';
@@ -835,6 +836,55 @@ d('PlatformWorker (Postgres)', () => {
       await db`SELECT solo_tier, solo_division, solo_lp FROM players WHERE puuid = ${e?.puuid as string}`;
     expect(r).toEqual({ solo_tier: 'DIAMOND', solo_division: 2, solo_lp: 42 });
     expect(riot.calls).toContain(`entries:${e?.puuid}:1`);
+  });
+
+  test('masteries are kept for champions with a stored game, and fetched again for a first game', async () => {
+    const masteries = async (puuid: string) =>
+      (
+        await db<{ champion_id: number }[]>`
+          SELECT champion_id FROM champion_masteries WHERE puuid = ${puuid} ORDER BY 1`
+      ).map((r) => r.champion_id);
+    const due = async () =>
+      (await playersNeedingDailyRefresh(db, 'EUW1', 10, 24, new Date(NOW))).map((d) => d.puuid);
+    const queued = async () =>
+      (await db<{ puuid: string }[]>`SELECT puuid FROM player_enrichment_queue`).map(
+        (r) => r.puuid,
+      );
+    const tracked = ladderPuuid(0);
+    riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
+    await worker.refreshLadder();
+    // No stored game yet: nothing of the answer is kept.
+    riot.masteryChampionIds = [266, 412, 64];
+    await worker.dailyRefresh({ puuid: tracked });
+    expect(await masteries(tracked)).toEqual([]);
+    expect(await due()).toEqual([]);
+
+    // The tracked player's first stored game, on champion 266: due again at once, then kept.
+    const m = makeMatch('EUW1_7000000500', '15.22.715.1234', tracked);
+    riot.matches.set('EUW1_7000000500', m);
+    await worker.processMatch({ matchId: 'EUW1_7000000500', platform: 'EUW1', attempts: 0 });
+    expect(await due()).toEqual([tracked]);
+    await worker.dailyRefresh({ puuid: tracked });
+    expect(await masteries(tracked)).toEqual([266]);
+    expect(await due()).toEqual([]);
+
+    // The others are enriched: participant 2 played champion 64, participant 3 champion 103,
+    // which Riot does not return. Both leave the queue, and nothing asks for them again.
+    const puuidOf = (participantId: number) =>
+      m.match.info.participants.find((p) => p.participantId === participantId)?.puuid as string;
+    const [second, third] = [puuidOf(2), puuidOf(3)];
+    for (const puuid of [second, third]) {
+      await worker.enrich({ puuid, platform: 'EUW1', attempts: 0 });
+    }
+    expect(await masteries(second)).toEqual([64]);
+    expect(await masteries(third)).toEqual([]);
+    expect(await queued()).not.toContain(second);
+    expect(await queued()).not.toContain(third);
+    expect(
+      await worker.processMatch({ matchId: 'EUW1_7000000500', platform: 'EUW1', attempts: 0 }),
+    ).toBe('exists');
+    expect(await queued()).not.toContain(third);
+    expect(await due()).toEqual([]);
   });
 
   test('worker_status: heartbeat, a rejected key is flagged until Riot answers again', async () => {

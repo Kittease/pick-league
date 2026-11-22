@@ -4,7 +4,10 @@ import type { ParsedItemEvent, ParsedMatch } from '../types.ts';
 import { enqueueEnrichment } from './queues.ts';
 
 export interface InsertMatchOptions {
-  /** Enqueue non-ladder participants for mastery/rank enrichment (default true). */
+  /**
+   * Enqueue non-ladder participants for mastery/rank enrichment (default true): those whose data
+   * is stale, and those without a mastery row for the champion they played in this match.
+   */
   enqueueEnrichment?: boolean;
   /** Freshness window of the enrichment rule (default 7 days). */
   enrichmentStaleAfterDays?: number;
@@ -54,7 +57,9 @@ const OID = { char: 18, int2: 21, int4: 23 } as const;
  * 2. `matches`, `match_teams`, `match_bans`, `participants`, and `participant_events` (the item and
  *    skill events of each participant as arrays, in `seq` order; no row for a participant without
  *    any; events of a participant id that is not in `participants` are ignored),
- * 3. optionally: enrichment enqueue + queue row marked DONE.
+ * 3. tracked players without a mastery row for the champion they played: `masteries_refreshed_at`
+ *    cleared (the daily refresh takes them first),
+ * 4. optionally: enrichment enqueue + queue row marked DONE.
  *
  * Idempotent: if the match id already exists, nothing is written and `inserted` is false.
  * The match's patch must exist in `patches`.
@@ -255,13 +260,35 @@ export async function insertParsedMatch(
       )}`;
     }
 
+    // Masteries are only kept for champions with a stored game (`replaceMasteries`): a player
+    // without a mastery row for the champion they played here gets their masteries fetched again
+    // soon. Asked once, when the match is stored: a fetch that comes back without that champion
+    // sets `masteries_refreshed_at` like any other, and nothing asks again because of this match.
+    const missing = (
+      await tx<{ puuid: string }[]>`
+        SELECT DISTINCT p.puuid FROM participants p
+        WHERE p.match_id = ${m.id}
+          AND NOT EXISTS (SELECT 1 FROM champion_masteries cm
+                          WHERE cm.puuid = p.puuid AND cm.champion_id = p.champion_id)`
+    ).map((r) => r.puuid);
+    if (missing.length > 0) {
+      // Tracked players: first in line for the daily refresh (`playersNeedingDailyRefresh`).
+      await tx`
+        UPDATE players SET masteries_refreshed_at = NULL
+        WHERE puuid = ANY(${missing}::text[]) AND masteries_refreshed_at IS NOT NULL
+          AND EXISTS (SELECT 1 FROM ladder_entries le WHERE le.puuid = players.puuid)`;
+    }
+
     let enrichmentEnqueued = 0;
     if (options.enqueueEnrichment !== false) {
+      // The others: queued, those missing a mastery whatever the age of their data.
       enrichmentEnqueued = await enqueueEnrichment(
         tx,
         m.platform,
         players.map((p) => p.puuid),
         options.enrichmentStaleAfterDays,
+        undefined,
+        missing,
       );
     }
     if (options.markQueueDone !== false) {

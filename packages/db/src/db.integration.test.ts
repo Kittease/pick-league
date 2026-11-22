@@ -759,22 +759,13 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       expect(await enqueueEnrichment(db, 'EUW1', [p])).toBe(0);
       expect((await claimEnrichment(db, 'EUW1', 5)).map((e) => e.puuid)).toEqual([p]);
 
+      // p played champion 2 in the stored match: of a mastery answer only that row is kept.
       await replaceMasteries(db, p, [
-        {
-          championId: 12,
-          level: 7,
-          points: 250000,
-          lastPlayedAt: new Date('2026-11-01T00:00:00Z'),
-        },
+        { championId: 2, level: 7, points: 250000, lastPlayedAt: new Date('2026-11-01T00:00:00Z') },
         { championId: 40, level: 5, points: 40000, lastPlayedAt: new Date('2026-10-01T00:00:00Z') },
       ]);
       await replaceMasteries(db, p, [
-        {
-          championId: 12,
-          level: 8,
-          points: 260000,
-          lastPlayedAt: new Date('2026-11-02T00:00:00Z'),
-        },
+        { championId: 2, level: 8, points: 260000, lastPlayedAt: new Date('2026-11-02T00:00:00Z') },
         // Real payloads hold ids beyond Data Dragon and the smallint range (seen on KR).
         {
           championId: 60018,
@@ -784,11 +775,8 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
         },
       ]);
       const masteries =
-        await db`SELECT champion_id, level FROM champion_masteries WHERE puuid = ${p} ORDER BY champion_id`;
-      expect(masteries.map((m) => [m.champion_id, m.level])).toEqual([
-        [12, 8],
-        [60018, 1],
-      ]);
+        await db`SELECT champion_id, level, points FROM champion_masteries WHERE puuid = ${p}`;
+      expect([...masteries]).toEqual([{ champion_id: 2, level: 8, points: 260000 }]);
 
       await updatePlayerRank(db, p, {
         tier: 'MASTER',
@@ -818,6 +806,138 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       expect(due).toEqual([{ puuid: tracked }]);
       await replaceMasteries(db, tracked, []);
       expect(await playersNeedingDailyRefresh(db, 'EUW1', 10)).toEqual([]);
+    });
+  });
+
+  describe('masteries of champions with a stored game', () => {
+    const mastery = (championId: number) => ({
+      championId,
+      level: 5,
+      points: 1000 * championId,
+      lastPlayedAt: new Date('2026-11-01T00:00:00Z'),
+    });
+    const masteryRows = async () =>
+      (
+        await db<{ puuid: string; champion_id: number }[]>`
+          SELECT puuid, champion_id FROM champion_masteries ORDER BY puuid, champion_id`
+      ).map((r) => [r.puuid, r.champion_id]);
+    const queued = async () =>
+      (await db<{ puuid: string }[]>`SELECT puuid FROM player_enrichment_queue ORDER BY puuid`).map(
+        (r) => r.puuid,
+      );
+    const due = async () => (await playersNeedingDailyRefresh(db, 'EUW1', 20)).map((d) => d.puuid);
+    const [tracked, other, third] = TEN as [string, string, string];
+
+    /**
+     * EUW1_1 stored (participant n plays champion n), the first of the ten tracked, and everyone's
+     * masteries and rank fetched since: Riot returned their champion and champions 50 and 99.
+     */
+    async function firstMatchEnriched() {
+      await upsertPatchStaticData(db, staticPatch('15.22'));
+      await upsertLadder(db, 'EUW1', [
+        { puuid: tracked, tier: 'CHALLENGER', leaguePoints: 1, wins: 1, losses: 0 },
+      ]);
+      expect(await insertParsedMatch(db, parsedMatch('EUW1_1', '15.22', TEN))).toEqual({
+        inserted: true,
+        enrichmentEnqueued: 9,
+      });
+      for (const [i, puuid] of TEN.entries()) {
+        await replaceMasteries(db, puuid, [mastery(i + 1), mastery(50), mastery(99)]);
+        if (puuid === tracked) continue;
+        await updatePlayerRank(db, puuid, null);
+        await completeEnrichment(db, puuid);
+      }
+    }
+
+    /** A second match of the ten where the tracked player plays champion 50 and `other` 99. */
+    function secondMatch(id: string) {
+      const m = parsedMatch(id, '15.22', TEN, new Date('2026-11-02T12:00:00Z'));
+      (m.participants[0] as (typeof m.participants)[number]).championId = 50;
+      (m.participants[1] as (typeof m.participants)[number]).championId = 99;
+      return m;
+    }
+
+    test('only the champions of stored games are kept from a mastery answer', async () => {
+      await firstMatchEnriched();
+      expect(await masteryRows()).toEqual(TEN.map((puuid, i) => [puuid, i + 1]));
+      expect(await queued()).toEqual([]);
+      expect(await due()).toEqual([]);
+    });
+
+    test('a first game on a champion asks for the masteries again, whatever their age', async () => {
+      await firstMatchEnriched();
+      // Fetched a moment ago, but two players have no row for the champion they just played.
+      expect(await insertParsedMatch(db, secondMatch('EUW1_2'))).toEqual({
+        inserted: true,
+        enrichmentEnqueued: 1,
+      });
+      expect(await queued()).toEqual([other]);
+      expect(await due()).toEqual([tracked]);
+      // The others played a champion they have a row for: the 7-day rule applies to them.
+      expect(await enqueueEnrichment(db, 'EUW1', [third])).toBe(0);
+
+      // This time the answer has a stored game for champions 50 and 99.
+      await replaceMasteries(db, tracked, [mastery(1), mastery(50), mastery(99)]);
+      await replaceMasteries(db, other, [mastery(2), mastery(50), mastery(99)]);
+      const rows = await masteryRows();
+      expect(rows.filter(([puuid]) => puuid === tracked)).toEqual([
+        [tracked, 1],
+        [tracked, 50],
+      ]);
+      expect(rows.filter(([puuid]) => puuid === other)).toEqual([
+        [other, 2],
+        [other, 99],
+      ]);
+    });
+
+    test('a fetch that brings no row for the champion is not asked again because of that match', async () => {
+      await firstMatchEnriched();
+      await insertParsedMatch(db, secondMatch('EUW1_2'));
+      // Riot returns nothing for champions 50 and 99.
+      await replaceMasteries(db, tracked, [mastery(1)]);
+      await replaceMasteries(db, other, [mastery(2)]);
+      await updatePlayerRank(db, other, null);
+      await completeEnrichment(db, other);
+      expect(await masteryRows()).toEqual(TEN.map((puuid, i) => [puuid, i + 1]));
+
+      expect(await due()).toEqual([]);
+      expect(await enqueueEnrichment(db, 'EUW1', TEN)).toBe(0);
+      expect(await insertParsedMatch(db, secondMatch('EUW1_2'))).toEqual({
+        inserted: false,
+        enrichmentEnqueued: 0,
+      });
+      expect(await queued()).toEqual([]);
+      expect(await due()).toEqual([]);
+      // Another stored game on those champions asks once more.
+      expect((await insertParsedMatch(db, secondMatch('EUW1_3'))).enrichmentEnqueued).toBe(1);
+      expect(await due()).toEqual([tracked]);
+    });
+
+    test('a mastery answer waits for a match insert of the player in flight and sees its game', async () => {
+      await firstMatchEnriched();
+      let release = () => {};
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      let inserted = () => {};
+      const insertedYet = new Promise<void>((r) => {
+        inserted = r;
+      });
+      const insert = db.begin(async (tx) => {
+        await insertParsedMatch(tx, secondMatch('EUW1_2'));
+        inserted();
+        await gate;
+      });
+      await insertedYet;
+      // The answer has champion 99, on which `other`'s first game is not committed yet.
+      const replaced = replaceMasteries(db, other, [mastery(2), mastery(99)]);
+      await Bun.sleep(100);
+      release();
+      await Promise.all([insert, replaced]);
+      expect((await masteryRows()).filter(([puuid]) => puuid === other)).toEqual([
+        [other, 2],
+        [other, 99],
+      ]);
     });
   });
 

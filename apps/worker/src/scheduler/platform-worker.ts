@@ -49,6 +49,7 @@ import {
   getMatchesSyncedUntil,
   hasPendingMatchBefore,
   insertParsedMatch,
+  inTransaction,
   type LadderEntryInput,
   type ListingSkipState,
   ladderOrder,
@@ -1509,9 +1510,13 @@ export class PlatformWorker {
         signal,
       );
       const now = new Date(this.clock.now());
-      await replaceMasteries(this.db, e.puuid, toMasteries(masteries ?? []), now);
-      await updatePlayerRank(this.db, e.puuid, toSoloRank(entries ?? []), now);
-      await completeEnrichment(this.db, e.puuid);
+      // One transaction: a match of this player stored meanwhile waits for it (the player's row)
+      // and, if it brings a champion without a mastery row, queues the player again.
+      await inTransaction(this.db, async (tx) => {
+        await replaceMasteries(tx, e.puuid, toMasteries(masteries ?? []), now);
+        await updatePlayerRank(tx, e.puuid, toSoloRank(entries ?? []), now);
+        await completeEnrichment(tx, e.puuid);
+      });
       this.counters.enriched++;
     } catch (err) {
       if (isAbortError(err) || err instanceof RiotAuthError) throw err;

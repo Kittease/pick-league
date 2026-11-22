@@ -255,7 +255,9 @@ export async function countPendingMatches(q: Queryable, platform: Platform): Pro
 /**
  * Enqueues players for mastery + rank enrichment, skipping tracked ladder players, players
  * already queued, and players whose masteries AND rank were refreshed less than
- * `staleAfterDays` (default 7) ago. Players must exist. Returns how many were enqueued.
+ * `staleAfterDays` (default 7) ago, unless they are in `whateverTheAge` (players whose masteries
+ * miss a champion they now have a stored game on). Players must exist. Returns how many were
+ * enqueued.
  */
 export async function enqueueEnrichment(
   q: Queryable,
@@ -263,8 +265,9 @@ export async function enqueueEnrichment(
   puuids: readonly string[],
   staleAfterDays = 7,
   now: Date = new Date(),
+  whateverTheAge: readonly string[] = [],
 ): Promise<number> {
-  const unique = [...new Set(puuids)];
+  const unique = [...new Set([...puuids, ...whateverTheAge])];
   if (unique.length === 0) return 0;
   const cutoff = new Date(now.getTime() - staleAfterDays * 86_400_000);
   const res = await q`
@@ -274,7 +277,8 @@ export async function enqueueEnrichment(
     WHERE p.puuid = ANY(${unique}::text[])
       AND NOT EXISTS (SELECT 1 FROM ladder_entries le WHERE le.puuid = p.puuid)
       AND (p.masteries_refreshed_at IS NULL OR p.masteries_refreshed_at < ${cutoff}
-           OR p.rank_refreshed_at IS NULL OR p.rank_refreshed_at < ${cutoff})
+           OR p.rank_refreshed_at IS NULL OR p.rank_refreshed_at < ${cutoff}
+           OR p.puuid = ANY(${[...new Set(whateverTheAge)]}::text[]))
     ORDER BY p.puuid
     ON CONFLICT (puuid) DO NOTHING`;
   return res.count;

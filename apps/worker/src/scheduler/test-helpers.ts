@@ -154,23 +154,24 @@ export class FakeRiot implements RiotApi {
     this.maybeThrow(`timeline:${id}`);
     return this.matches.get(id)?.timeline ?? null;
   }
+  /** Champions of every mastery answer. */
+  masteryChampionIds: number[] = [412];
+
   async getMasteries(
     _p: Platform,
     puuid: string,
     priority: Priority,
   ): Promise<ChampionMasteryDto[]> {
     this.calls.push(`mastery:${puuid}:${priority}`);
-    return [
-      {
-        puuid,
-        championId: 412,
-        championLevel: 30,
-        championPoints: 400000,
-        lastPlayTime: NOW - DAY,
-        championPointsSinceLastLevel: 0,
-        championPointsUntilNextLevel: 0,
-      },
-    ];
+    return this.masteryChampionIds.map((championId) => ({
+      puuid,
+      championId,
+      championLevel: 30,
+      championPoints: 400000,
+      lastPlayTime: NOW - DAY,
+      championPointsSinceLastLevel: 0,
+      championPointsUntilNextLevel: 0,
+    }));
   }
   async getLeagueEntries(
     _p: Platform,

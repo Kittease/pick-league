@@ -418,7 +418,10 @@ export async function updatePlayerRank(
 }
 
 /**
- * Replaces all masteries of a player and sets `masteries_refreshed_at`. The player row must exist.
+ * Replaces the masteries of a player and sets `masteries_refreshed_at`. Of `masteries` (a whole
+ * champion-mastery-v4 answer) only the rows for champions the player has a stored game on (a
+ * `participants` row) are kept: the stats read nothing else. A first game on another champion,
+ * stored later, asks for the masteries again (`insertParsedMatch`). The player row must exist.
  */
 export async function replaceMasteries(
   q: Queryable,
@@ -427,11 +430,22 @@ export async function replaceMasteries(
   now: Date = new Date(),
 ): Promise<void> {
   await inTransaction(q, async (tx) => {
+    // First, so that this waits for a match insert of this player in flight (it holds the player's
+    // row until it commits) and the statements below see its participant rows.
+    await tx`UPDATE players SET masteries_refreshed_at = ${now} WHERE puuid = ${puuid}`;
     await tx`DELETE FROM champion_masteries WHERE puuid = ${puuid}`;
-    const unique = [...new Map(masteries.map((m) => [m.championId, m])).values()];
-    if (unique.length > 0) {
+    const played = new Set(
+      (
+        await tx<{ champion_id: number }[]>`
+          SELECT DISTINCT champion_id FROM participants WHERE puuid = ${puuid}`
+      ).map((r) => r.champion_id),
+    );
+    const kept = [...new Map(masteries.map((m) => [m.championId, m])).values()].filter((m) =>
+      played.has(m.championId),
+    );
+    if (kept.length > 0) {
       await tx`INSERT INTO champion_masteries ${tx(
-        unique.map((m) => ({
+        kept.map((m) => ({
           puuid,
           champion_id: m.championId,
           level: m.level,
@@ -440,7 +454,6 @@ export async function replaceMasteries(
         })),
       )}`;
     }
-    await tx`UPDATE players SET masteries_refreshed_at = ${now} WHERE puuid = ${puuid}`;
   });
 }
 
