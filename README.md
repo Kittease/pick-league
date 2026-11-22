@@ -88,6 +88,9 @@ bun run dev:desktop      # opens the app; start League whenever you like
 - When you lock in it switches to the build: the lane phase vs your lane opponent (at 10 and
   15 min), items in buy order (starting, early, core, situational, and for supports the quest
   upgrade to pick), runes, summoner spells and skill order, every element with its reasons.
+  Under the situational items, "Late-game swaps" shows which completed item players of the
+  champion sell once their build is full and what they buy instead, with the number of games and
+  the average minute (no win rate: only players already winning a long game can afford one).
 - **Until the game ends** it keeps that champion select on screen, marked "In game": your
   champion and role, both teams and the build as it was when champion select ended (nothing is
   fetched or applied again). It goes back to the tier list once the game is over; a dodged
@@ -210,7 +213,7 @@ These commands read `DATABASE_URL` (and the other settings) from the root `.env`
 | `GET /patches` | kept patches with match counts per platform |
 | `GET /static/:patch` | champions, items, runes, stat shards, summoner spells (`latest` = newest patch) |
 | `POST /recommendations/picks` | ranked champions for a role, with reasons; with a lane opponent, each candidate also gets a `lane_phase` reason (gold / CS / XP difference at 10 min, bot lane 2v2) right after its matchup |
-| `POST /recommendations/build` | items, runes, summoner spells and skill order, with reasons; `lanePhase` (optional): `lane_phase` reasons at 10 and 15 min vs the lane opponent |
+| `POST /recommendations/build` | items, runes, summoner spells and skill order, with reasons; `lanePhase` (optional): `lane_phase` reasons at 10 and 15 min vs the lane opponent; `items.lateSwaps`: up to 3 late-game swaps `{ sellItemId, buyItemId, games, minute }` (completed item sold once the build is full → completed item bought in its place; no win rate), often empty |
 | `GET /stats/status` | `{ refreshing, lastRefreshedAt, lastRefreshDurationMs, matchesIncluded, matchesStored, pendingMatches, collection }`; `collection` = `{ state, platforms }`, `state` one of `collecting`, `key_rejected` (Riot rejects the key), `stalled` (no worker heartbeat for 3 min), `unknown` (no worker status yet); `platforms` = `[{ platform, heartbeatAt, authRejectedSince, lastError, lastErrorAt, lastMatchStoredAt }]` |
 | `GET /tierlist?role=UTILITY&patch=latest&platform=ALL&rank=MASTER` | tier list of a role: tiers, win/pick/ban rates, confidence. Optional filters (echoed as `filters`): `platform` = `ALL` (default), `KR`, `EUW1`, `NA1`, `VN2`; `rank` = `MASTER` (Master+, default: every player), `GRANDMASTER` (Grandmaster+), `CHALLENGER` (Challenger only), on each counted player's current solo rank |
 | `GET /tierlist/champion?role=UTILITY&championId=111&patch=latest` | one champion of the tier list: every lane matchup, duo partner and other ally (synergy) with 5+ matchups, best first, with shrunk win-rate delta, win rate, sample size and confidence; matchups also carry `lane` (gold / XP / CS difference at 10 min) when there are 20+ matchups with timeline frames. Same `platform`/`rank` filters; `synergies` is `null` and `lane` is omitted when filtered |

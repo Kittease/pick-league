@@ -392,7 +392,7 @@ Definitions: `packages/db/migrations/0002_stats_views.sql` (traits, compositions
 baselines, pairwise vs/with, build choices), `0003_stats_bans.sql` (tier list ban rates),
 `0006_tierlist_filters.sql` (tier list server/rank filters), `0007_support_quest_items.sql`,
 `0008_deterministic_comp_traits.sql`, `0010_lane_phase.sql`, `0012_choice_ally_contexts.sql` and
-`0015_items_done.sql`, `0016_side_wins.sql`, `0018_mastery_curve.sql` and `0019_game_length.sql` (all nine below).
+`0015_items_done.sql`, `0016_side_wins.sql`, `0018_mastery_curve.sql`, `0019_game_length.sql` and `0022_item_swaps.sql` (all ten below).
 
 `stats_participant_choices` lists every build/rune/spell/skill choice of a participant as `(kind, choice, pos)`; `stats_choices`, `stats_choice_matchups` and `stats_choice_traits` aggregate it per champion + role, vs a lane opponent and vs an enemy composition trait; `stats_choice_duos` and `stats_choice_ally_traits` (items only) with a duo partner and with an ally composition trait.
 
@@ -401,6 +401,19 @@ baselines, pairwise vs/with, build choices), `0003_stats_bans.sql` (tier list ba
 **Mastery curve** (`0018_mastery_curve.sql`). `stats_champion_mastery (patch, position, champion_id, bucket, games, wins)`, unique `(patch, position, champion_id, bucket)`: games and wins of each champion + role by the player's mastery points on the champion, in buckets 0–6 (`width_bucket` over the edges 5k / 20k / 50k / 100k / 200k / 500k: 0 = under 5k … 6 = 500k and more; mirrored by `ENGINE_CONFIG.mastery.bucketEdges`). Source: non-remake participants with a position joined to `champion_masteries` on puuid + champion — the player's current mastery when their masteries were last fetched, not the mastery at match time; participants without a mastery row are left out. At most 7 rows per champion + role per patch; the mastery term of the picks. Its refresh takes about 3 minutes at 300k matches per patch (index lookups in `champion_masteries`).
 
 **Results by game length** (`0019_game_length.sql`). `stats_champion_game_length (patch, position, champion_id, bucket, games, wins)`, unique `(patch, position, champion_id, bucket)`: games and wins of a champion + role by length of the match (`matches.duration_s`), bucket `0` = under 25 min (< 1500 s), `1` = 25 to under 32 min, `2` = 32 min or more (≥ 1920 s; mirrors `GAME_LENGTH_MINUTES` of the API contract). One pass over `stats_tierlist_participants`, participants without a position excluded. Served (the early / late profile of `GET /tierlist/champion` and `POST /recommendations/draft`); explains, never scores.
+
+**Late-game swaps** (`0022_item_swaps.sql`). The completed item a champion + role sells once its build is full and the completed item it buys in its place:
+
+```sql
+-- Served. games = participants who made the swap (a pair counts once per participant);
+-- minute_sum = sum of the game minutes (at_ms / 60000) of their first such sale.
+stats_item_swaps (patch, position, champion_id, sold_item_id, bought_item_id, games, minute_sum)
+-- unique (patch, position, champion_id, sold_item_id, bought_item_id)  → build
+```
+
+A swap is, for a participant of a non-remake match with a position: a `SOLD` event of a completed item (`items.is_completed` on the match's patch, boots included) whose next event of that participant (by `seq`, among `PURCHASED` / `SOLD` / `UNDO`: a leftover `DESTROYED` row is skipped) is the `PURCHASED` of another completed item at most 60 s later, that purchase not being undone right after (the event after it is not an `UNDO` of the bought item), with at least 6 distinct completed items (boots included) purchased before the sale. A sale followed by an `UNDO` (item 0, `undo_after_item_id` = the item: 27 % of the sales of completed items) is a sale taken back and counts for nothing. On 8,000 matches the gap between the sale and the purchase has a median of 1.2 s and a 99th percentile of 34 s, and 1,200 of the 80,000 participants have a swap; without the 6-item rule most pairs are early boots changes and Mejai's sales. No `wins` column: players who can afford a swap are in long games they are winning, so the build shows the pair, its games and its average minute (`sum(minute_sum) / sum(games)` over the patches) and never a win rate. Unfiltered only.
+
+`item_events` is the largest table and is neither sorted nor hashed by this view: one sequential pass finds the participants with a `SOLD` event of an item that is completed on some patch (a few percent of them), then only their events are read, in `seq` order through the primary key (one small subquery per such participant, with the two following events and the items purchased so far), and the patch, position and champion (from `stats_tierlist_participants`, hence refreshed after it) and the completed items of the patch are only looked up for the sales that pass the other rules. A few rows per champion + role per patch.
 
 **Build stage of items** (`0015_items_done.sql`, kind `items_done`). One choice per participant: the number of completed items (`cardinality(stats_participants.core)`, 0–6, as text), in all five choice views (`stats_choice_duos` and `stats_choice_ally_traits` included). Players who complete more items win far more (≈ 37 % with one, 61 % with five on 16.22), so the build engine compares an item with the players who completed at least as many items as its usual slot (`avg_pos`, interpolated), not with every game. At most 7 rows per champion + role and per context.
 
