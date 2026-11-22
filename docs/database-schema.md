@@ -21,13 +21,14 @@ patches ─┬─< champions / champion_spells / items / rune_trees / runes / su
                       └─< participants ─┬─< item_events
                                         └─< skill_events
 
-players ─┬── ladder_entries          (tracked set: current Challenger/GM/top Master state, used to detect who played)
+players ─┬── ladder_entries          (tracked set: current Challenger/GM/top Master state, plus tracked Diamond players; used to detect who played)
          ├─< champion_masteries      (daily for tracked players, low priority for the others)
          └─< participants            (every player of every match)
 
 player_enrichment_queue               (low-priority mastery/rank fetches for non-ladder players)
 
 match_fetch_queue                     (worker backlog, survives restarts)
+listing_skip_misses                   (LISTING_SKIP=shadow: what a skipped listing would have missed)
 worker_runs                           (monitoring)
 worker_status                         (health of each platform loop)
 ```
@@ -38,7 +39,9 @@ worker_status                         (health of each platform loop)
 CREATE TYPE platform AS ENUM ('KR', 'EUW1', 'NA1', 'VN2');
 -- match-v5 routing cluster is derived in code: KR→asia, EUW1→europe, NA1→americas, VN2→sea
 
-CREATE TYPE ladder_tier AS ENUM ('CHALLENGER', 'GRANDMASTER', 'MASTER');  -- MASTER: the top N by LP, N growing as the worker catches up
+CREATE TYPE ladder_tier AS ENUM ('CHALLENGER', 'GRANDMASTER', 'MASTER', 'DIAMOND');
+-- In ladder order. MASTER: the top N by LP, N growing as the worker catches up.
+-- DIAMOND (0023): only with DIAMOND_MAX_TRACKED, with ladder_entries.division.
 
 CREATE TYPE position AS ENUM ('TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY');
 
@@ -150,8 +153,15 @@ CREATE TABLE players (
   matches_synced_until  timestamptz,         -- listed players (tracked, or untracked Master+ ones): newest match already listed → `startTime` for match ids
   listing_requested_at  timestamptz,         -- tracked players only: "played" (ladder wins+losses changed), match ids not listed yet (0009)
   last_seen_in_match_at timestamptz,         -- used by cleanup and by the low-priority refresh rule
+  last_seen_with_master_at timestamptz,      -- start of the newest stored match shared with a Master+ player (0024)
   created_at            timestamptz NOT NULL DEFAULT now()
 );
+-- last_seen_with_master_at is set for all 10 participants when a match is stored and at least one
+-- of them is known as Master, Grandmaster or Challenger at that moment (an apex row in
+-- ladder_entries, or players.solo_tier); the greatest start is kept. Diamond players with one in
+-- the last 7 days are tracked first (DIAMOND_MAX_TRACKED); a Diamond lobby found through a tracked
+-- Diamond player sets nothing. 0024 backfilled it with last_seen_in_match_at (every match stored
+-- until then was found through a Master+ player).
 -- Cleanup: players that are neither tracked nor present in a kept match are deleted after an old
 -- patch is deleted (in small batches, skipping rows a match insert is writing).
 -- listing_requested_at survives worker restarts; it is cleared when a listing that started after
@@ -161,17 +171,32 @@ CREATE INDEX players_listing_requested_idx ON players (listing_requested_at)
 
 -- Current Challenger/GM/top Master state. One league-v4 call per tier per platform refreshes it;
 -- a change in wins+losses since the previous run means the player played → fetch their match ids.
+-- With DIAMOND_MAX_TRACKED also the tracked Diamond players, refreshed by a sweep of the Diamond
+-- division pages after each apex refresh (each row with the time of its own page).
 CREATE TABLE ladder_entries (
   puuid         text PRIMARY KEY REFERENCES players ON DELETE CASCADE,
   platform      platform    NOT NULL,
   tier          ladder_tier NOT NULL,
+  division      smallint,                -- 1..4 for DIAMOND, NULL for the apex tiers (0024)
   league_points integer     NOT NULL,
   wins          integer     NOT NULL,
   losses        integer     NOT NULL,
-  updated_at    timestamptz NOT NULL
+  updated_at    timestamptz NOT NULL,    -- last refresh that saw the player (DIAMOND: last complete sweep that did)
+  games_changed_at timestamptz,          -- the refresh that produced the current wins + losses (NULL before 0024: read as updated_at)
+  -- Baseline of the listing skip rule (LISTING_SKIP), set by the player's last real match-id
+  -- listing and left alone by the ladder upserts (0024):
+  listed_games       integer,            -- wins + losses the listing was decided on
+  listed_snapshot_at timestamptz,        -- games_changed_at of those counters
+  listed_at          timestamptz         -- when that listing ran
 );
--- Players who drop off the ladder lose their ladder_entries row (no longer tracked);
--- their players row and the matches they appear in are kept.
+-- Players who drop off the ladder lose their ladder_entries row (no longer tracked), and with it
+-- their baseline; their players row and the matches they appear in are kept.
+-- Ladder order (listings, fetch_rank): tier, division NULLS FIRST, league_points DESC.
+-- A tracked Diamond player a complete sweep did not see keeps their row untouched, and loses it
+-- once updated_at is 24 h old; one who shows up on an apex list becomes an apex row.
+-- Skip rule: with expected = wins + losses - listed_games, a player about to be listed is skipped
+-- when expected > 0 and at least that many of their stored non-remake matches ended after
+-- listed_snapshot_at and at or before games_changed_at; never when listed_at is 24 h old.
 
 CREATE TABLE champion_masteries (
   puuid          text     NOT NULL REFERENCES players ON DELETE CASCADE,
@@ -338,6 +363,27 @@ CREATE INDEX match_fetch_queue_pending_idx
 -- Once a match turns out to be from a patch no longer collected (older than the previous one, or
 -- the previous one once the platform has stored a match of the latest), every PENDING row of that
 -- platform with a lower or equal game id is marked SKIPPED_OLD_PATCH in one statement.
+
+-- LISTING_SKIP=shadow (0024): every listing still runs; one row per listing the skip rule would
+-- have skipped that nevertheless added ids to match_fetch_queue. Recorded as is: a game that
+-- started after snapshot_at is legitimately new, so real misses are found afterwards, e.g.
+--   SELECT s.id, m.id, m.started_at FROM listing_skip_misses s
+--   CROSS JOIN LATERAL unnest(s.new_match_ids) AS new_id
+--   JOIN matches m ON m.id = new_id
+--   WHERE NOT m.is_remake AND m.started_at + make_interval(secs => m.duration_s) <= s.snapshot_at;
+-- No foreign key (rows outlive a purged player) and no cleanup: empty it by hand after analysis.
+CREATE TABLE listing_skip_misses (
+  id                 bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  puuid              text        NOT NULL,
+  platform           platform    NOT NULL,
+  checked_at         timestamptz NOT NULL,  -- when the rule was evaluated (just before the listing)
+  listed_snapshot_at timestamptz NOT NULL,  -- start of the window (the baseline's snapshot)
+  snapshot_at        timestamptz NOT NULL,  -- end of the window (the refresh of the current wins + losses)
+  expected           integer     NOT NULL,  -- wins + losses now - at the baseline
+  stored             integer     NOT NULL,  -- stored non-remake matches of the player that ended in the window
+  new_match_ids      text[]      NOT NULL   -- ids the listing added to match_fetch_queue
+);
+CREATE INDEX listing_skip_misses_checked_at_idx ON listing_skip_misses (checked_at);
 
 -- Lowest-priority work: mastery + rank for non-ladder players.
 -- Only consumed when the higher-priority queues leave rate-limit budget unused.

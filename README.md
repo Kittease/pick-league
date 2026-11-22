@@ -47,6 +47,26 @@ caught up with their matches, it adds the next 500 Master players by LP, down to
 Master. Matches of better-placed players are always fetched first. The `masterTracked` and
 `masterTotal` fields of its `progress` log lines show how far down it got.
 
+Worker settings (in `.env`, applied with `docker compose up -d worker`; both are off by default):
+
+- `LISTING_SKIP` = `off` | `shadow` | `on`. A stored match holds about 6 tracked players, and each
+  of them is asked for their match ids only to find that match again. With `on`, a tracked player
+  whose new games (ladder wins + losses) are all stored already is not asked; at least one real
+  listing per player every 24 hours stays. `shadow` runs every listing as before, counts what `on`
+  would have skipped (`listingsSkipped` in the `progress` log) and records in the
+  `listing_skip_misses` table the skipped listings that would have brought new match ids
+  (`listingSkipMisses`): run it first, then read that table. In both modes a player is listed only
+  after the matches brought by better-placed players are stored.
+- `DIAMOND_MAX_TRACKED` = how many Diamond players to track at most per server (0 = none). With
+  each hourly ladder refresh the worker reads the Diamond divisions (a few hundred requests on the
+  server's platform host, which is mostly idle) and tracks, after every Master+ player: first the
+  Diamond players seen in a Master+ game in the last 7 days (by division, then LP), then Diamond I
+  players by LP, 500 more each time it has caught up and has nothing else to list. Their matches
+  are collected like everyone's, so Diamond lobbies enter the statistics, and each newly tracked
+  player first brings their matches of the patch: start with a small number and watch
+  `pendingMatches` and the disk. `diamond` in the `progress` log shows the players seen per
+  division, those tracked and the cap.
+
 ### Operations
 
 - **Deploy**: `git pull && docker compose up -d --build`.
