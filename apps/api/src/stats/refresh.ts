@@ -24,8 +24,8 @@ export const STATS_REFRESH_ORDER: readonly {
   // The planner expects 1 row from the purchases without their undone ones (an anti join on three
   // columns), where there are ~100 million. A nested loop and a hash join then cost the same to
   // it, and the day it picked the nested loop between two of these sets the refresh never ended
-  // (33 h on 2026-11-21, stats frozen, nightly dump waiting on its lock). Every join here is an
-  // equality between large sets: none of them should ever be a nested loop.
+  // (33 h on 2026-11-21, stats frozen, every lock on the view waiting behind it). Every join here
+  // is an equality between large sets: none of them should ever be a nested loop.
   { view: 'stats_participants', concurrent: false, analyze: true, noNestedLoops: true },
   // Support quest upgrades (0007_support_quest_items.sql), read by stats_participant_choices.
   { view: 'stats_quest_items', concurrent: false, analyze: true },

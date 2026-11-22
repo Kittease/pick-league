@@ -1,9 +1,0 @@
-[Unit]
-Description=PickLeague nightly database dump
-After=docker.service
-
-[Service]
-Type=oneshot
-ExecStart=/home/ubuntu/pick-league/deploy/backup.sh
-Nice=10
-IOSchedulingClass=idle

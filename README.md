@@ -34,8 +34,8 @@ Runs on any Linux box with Docker (sized for 6 cores, 12 GB RAM, 100 GB disk; se
    first start**: Postgres only reads it when it creates its volume), `PUBLIC_HOST` (the VPS's
    IPv4, or a domain), and `API_TOKEN` (`openssl rand -hex 32`, the same value as the web app's).
 3. `docker compose up -d --build`.
-4. `sudo deploy/install.sh` installs the systemd timers: nightly backup, watchdog, worker socket
-   sampling (see "Operations").
+4. `sudo deploy/install.sh` installs the systemd timers: watchdog, worker socket sampling (see
+   "Operations").
 5. Firewall: allow only 22, 80 and 443 (`ufw allow 22/tcp 80/tcp 443/tcp && ufw enable`). The API
    is published on `127.0.0.1` only (Docker-published ports bypass ufw); Postgres is never published.
 
@@ -55,10 +55,7 @@ Master. Matches of better-placed players are always fetched first. The `masterTr
   up -d worker`; remove it and run the same command when done.
 - **Logs**: `docker compose logs -f worker` (rotated, 3 × 10 MB per container); timers:
   `journalctl -u 'pickleague-*'`.
-- **Backups**: `deploy/backup.sh` runs nightly at 04:30 UTC and keeps the last 3 dumps
-  (directory format, zstd) in `/var/backups/pickleague`. Restore into an empty database:
-  `pg_restore -d pickleague --jobs=6 --no-owner <dump dir>` (from a `postgres:17` container on the
-  compose network).
+- **Backups**: none. The database is not backed up; a lost volume means collecting again.
 - **Watchdog**: every 2 minutes `deploy/watchdog.sh` restarts a service that is down or unhealthy,
   or the worker when its heartbeat (`worker_status`) is over 5 minutes old.
 - **Sockets**: every 5 minutes `deploy/sockets.sh` logs the worker's open HTTPS connections; they
