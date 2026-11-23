@@ -256,9 +256,12 @@ difference vs the lane opponent from the timeline frames (`stats_champion_lane_p
 toward 0 by sample size, 1v1 for top / jungle / mid and 2v2 for the bot lane (own + duo partner vs
 both enemy bot laners).
 
-The API owns the stats layer: materialized views (`packages/db/migrations/0002_stats_views.sql`)
-refreshed in the background every `STATS_REFRESH_MINUTES` (default 60) when matches changed; a
-Postgres advisory lock keeps several API instances from refreshing at the same time.
+The API owns the stats layer (`docs/database-schema.md`, Stats layer), refreshed in the background
+every `STATS_REFRESH_MINUTES` (default 60) when matches changed: per-participant tables that a
+refresh completes with the matches stored since the last one (builds, quest upgrades, lanes,
+late-game swaps: `packages/db/migrations/0030_incremental_stats.sql`), then materialized views that
+aggregate them, recomputed each time. A Postgres advisory lock keeps several API instances from
+refreshing at the same time.
 Engine weights and thresholds live in `apps/api/src/engine/config.ts`. The calibration script
 prints, per kind of effect, the fitted weight of the engine's shrinkage for a grid of `k` (the `k`
 to keep is the one with a weight of ~1).

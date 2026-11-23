@@ -4,7 +4,7 @@ PostgreSQL 17, single database, run by Docker Compose next to the worker and the
 
 ## Principles
 
-- **Store match facts, not aggregates.** Every table below holds what happened in a game (participants, their purchases / sales / undos, their skill points, per-minute gold / XP / CS). Recommendations are computed from these tables, through materialized views (see Stats views).
+- **Store match facts, not aggregates.** Every table below holds what happened in a game (participants, their purchases / sales / undos, their skill points, per-minute gold / XP / CS). Recommendations are computed from these tables, through the stats layer (see Stats layer): per-participant tables derived once from each match, and materialized views that aggregate them.
 - **Store what something reads.** A column nobody reads costs disk on every match and time in every refresh: the item and skill events are arrays on one row per participant (they were one row per event until 0025), masteries are kept for the champions a player has a stored game on (0027), and the `participants` columns no view, query or application read are gone (0028).
 - **No raw payloads.** Match and timeline JSON are parsed and thrown away. Fields that don't serve picks, builds or plausible later analysis are dropped (e.g. the ~130 `challenges` fields, ward events — Riot gives them no map position; kill and objective events, stored until `0020_drop_kill_and_objective_events.sql` and never read; KDA, gold, vision and the per-minute level / damage / position frames of a participant, see Removed tables and columns).
 - **Two patches only.** `patches` lists the patches we keep. When a new patch is detected, every match of the patch before the previous one is deleted (`ON DELETE CASCADE` cleans every child table). Postgres reuses the freed space for the new patch, so disk usage stays flat at ~2 patches.
@@ -19,7 +19,9 @@ PostgreSQL 17, single database, run by Docker Compose next to the worker and the
 patches ─┬─< champions / champion_spells / items / rune_trees / runes / summoner_spells   (Data Dragon, per patch)
          └─< matches ─┬─< match_teams
                       ├─< match_bans
-                      └─< participants ──< participant_events   (0..1: item and skill events as arrays)
+                      ├─< participants ──< participant_events   (0..1: item and skill events as arrays)
+                      └── stats_matches ──< stats_participants / stats_quest_items / stats_lanes / stats_participant_swaps
+                                                                (0..1: derived by the API's refresh, see Stats layer)
 
 players ─┬── ladder_entries          (tracked set: current Challenger/GM/top Master state, plus tracked Diamond players; used to detect who played)
          ├─< champion_masteries      (champions with a stored game only; daily for tracked players, low priority for the others)
@@ -451,28 +453,225 @@ and the per-minute frames `level_by_minute`, `damage_to_champions_by_minute`,
 column does not rewrite the table: rows stored before keep those bytes until `VACUUM FULL
 participants` (exclusive lock while it rewrites the table) or until their patch is deleted.
 
-## Stats views (owned by apps/api)
+## Stats layer (owned by apps/api)
 
-Materialized views computed from the tables above, refreshed by the API in the order of
-`STATS_REFRESH_ORDER` (`apps/api/src/stats/refresh.ts`): served views have a unique index and are
-refreshed `CONCURRENTLY`, intermediate ones plainly. All are keyed by patch and exclude remakes.
-Each statement of a refresh has a `statement_timeout` (2 h): a view that runs past it fails the
-refresh, tried again at the next tick. `stats_participants` is refreshed with
-`enable_nestloop = off`: its per-participant subqueries stay nested loops (the planner has no other
-way to run them), and the joins around them become hash joins over one pass of each table, a third
-faster than the index lookups per participant the planner otherwise prefers.
+Computed from the tables above by the API's refresh, in the order of `STATS_REFRESH_ORDER`
+(`apps/api/src/stats/refresh.ts`). Everything is keyed by patch and excludes remakes. Two kinds of
+objects:
+
+- **Incremental tables** (`0030_incremental_stats.sql`): what is derived from one match alone, one
+  row per participant, lane or swap. A stored match never changes, so its rows are computed once, by
+  the first refresh that sees it: this part of a refresh costs the matches stored since the last
+  one, whatever the database holds.
+- **Materialized views**: the aggregates the API serves (the `GROUP BY`s) and the few intermediates
+  that depend on a whole patch. Recomputed by every refresh from the incremental tables (and from
+  `participants` / `matches` for the simplest ones): served views have a unique index and are
+  refreshed `CONCURRENTLY`, intermediate ones plainly. This part still grows with the number of
+  matches kept.
+
+Each statement of a refresh has a `statement_timeout` (2 h): a step that runs past it fails the
+refresh, tried again at the next tick.
+
+### Incremental tables
+
+```sql
+-- The bookkeeping: the matches whose rows below are computed (remakes included: they have none).
+-- A match without a row here is computed by the next refresh; deleting a match, or only its row
+-- here, deletes everything computed from it.
+CREATE TABLE stats_matches (
+  match_id text PRIMARY KEY REFERENCES matches ON DELETE CASCADE
+);
+
+-- One row per participant with a position of a non-remake match: loadout, build, skill order
+-- (see Builds from the participant's own row). A materialized view until 0030, with two more
+-- columns (enemy_traits, ally_traits) that now come from stats_participant_traits.
+CREATE TABLE stats_participants (
+  patch          text       NOT NULL,
+  match_id       text       NOT NULL REFERENCES stats_matches ON DELETE CASCADE,
+  participant_id smallint   NOT NULL,
+  team_id        smallint   NOT NULL,
+  champion_id    smallint   NOT NULL,
+  position       "position" NOT NULL,
+  win            boolean    NOT NULL,
+  keystone       integer,                -- runes[1]
+  rune_page      text,                   -- 'primary tree|secondary tree|runes|shards'
+  spells         text,                   -- the two summoner spells, smallest id first
+  starter        text,                   -- purchases of the first 60 s, trinkets excluded, by item id
+  early          integer[],              -- components first bought before the first completed item
+  core           integer[],              -- the first six completed items, in purchase order
+  boots          integer,                -- the first completed boots
+  boots_pos      integer,                -- completed items bought before them
+  skill_first3   text,
+  skill_max      text,                   -- pl_skill_max_order
+  skill_seq      text,                   -- the first 18 skill points, with at least 9
+  PRIMARY KEY (match_id, participant_id)
+);
+
+-- The support quest upgrade of a participant of a non-remake match (see Support quest upgrade).
+CREATE TABLE stats_quest_items (
+  match_id       text     NOT NULL REFERENCES stats_matches ON DELETE CASCADE,
+  participant_id smallint NOT NULL,
+  item_id        integer  NOT NULL,
+  PRIMARY KEY (match_id, participant_id)
+);
+
+-- One row per lane of a non-remake match with both sides complete and their frames at 10 min
+-- (see Lane phase): who was in it, and blue minus red.
+CREATE TABLE stats_lanes (
+  match_id       text         NOT NULL REFERENCES stats_matches ON DELETE CASCADE,
+  lane           text         NOT NULL,   -- 'TOP' | 'JUNGLE' | 'MIDDLE' | 'BOT' (BOTTOM + UTILITY)
+  patch          text         NOT NULL,
+  blue_ids       smallint[]   NOT NULL,   -- champions of team 100, by position then participant id
+  blue_positions "position"[] NOT NULL,   -- their positions, in the same order
+  red_ids        smallint[]   NOT NULL,
+  red_positions  "position"[] NOT NULL,
+  has_15         boolean      NOT NULL,   -- every player has the frame of minute 15
+  gold_10        integer      NOT NULL,   -- total gold of the blue side minus the red side
+  xp_10          integer      NOT NULL,
+  cs_10          integer      NOT NULL,
+  gold_15        integer,                 -- only read when has_15
+  xp_15          integer,
+  cs_15          integer,
+  PRIMARY KEY (match_id, lane)
+);
+
+-- One row per late-game swap of a participant (see Late-game swaps): the first time they sold
+-- that completed item for that one, with what stats_item_swaps groups by.
+CREATE TABLE stats_participant_swaps (
+  match_id       text       NOT NULL REFERENCES stats_matches ON DELETE CASCADE,
+  participant_id smallint   NOT NULL,
+  patch          text       NOT NULL,
+  position       "position" NOT NULL,
+  champion_id    smallint   NOT NULL,
+  sold_item_id   integer    NOT NULL,
+  bought_item_id integer    NOT NULL,
+  at_ms          integer    NOT NULL,
+  PRIMARY KEY (match_id, participant_id, sold_item_id, bought_item_id)
+);
+
+-- What the items of a patch were when its matches were computed: a hash of every item id with
+-- its flags (completed, boots, consumable, trinket, quest upgrade); '' = no item.
+CREATE TABLE stats_patch_items (
+  patch     text PRIMARY KEY REFERENCES patches ON DELETE CASCADE,
+  signature text NOT NULL
+);
+```
+
+**How a refresh fills them.** The first step of a refresh calls `pl_stats_fill(max_matches)` until it
+finds fewer matches than it may take (`batchMatches`, 20,000 per call). One call, one transaction:
+
+1. it reads the item flags of every patch once (`pl_stats_item_flags`: one statement over `items`,
+   into an array indexed by item id) and compares each patch's signature with `stats_patch_items`.
+   A patch whose items changed loses its rows (`DELETE FROM stats_matches` for its matches) and gets
+   the new signature;
+2. it takes matches that have no row in `stats_matches` (an anti-join of `matches` with it: two
+   sequential scans and a hash, 1.5 s at 1.5 million matches, the one step of a call that looks
+   at every match), locks them `FOR KEY SHARE` (a match being deleted is skipped), and records
+   them;
+3. it computes their rows with the four functions `pl_stats_fill_participants`, `…_quest_items`,
+   `…_lanes`, `…_swaps`: the per-participant queries the materialized views had, restricted to the
+   list of those matches (a temporary table, analyzed: the planner knows how many there are and
+   reads `participants` and `participant_events` by match through their primary keys).
+
+The `stats refreshed` log line has one duration per table (`stats_matches`: finding and recording
+the matches; `stats_patch_items`: the item check), then one per materialized view, plus
+`matchesComputed` and `matchesRecomputed` (matches of a patch whose items changed). The function
+runs without parallel workers (parallel hash joins overflowed Postgres's `/dev/shm`) and without
+JIT (half a second of compilation per call, for nothing on a few thousand matches).
+
+Measured on 40,000 synthetic matches (test server, one process, `work_mem` 64 MB), a refresh after
+400 new matches (1 %): 106 s before 0030, 64 s after. What was recomputed per participant took
+48 s (`stats_participants` 35.1 s, `stats_quest_items` 2.6 s, `stats_item_swaps` 7.5 s, the lanes
+of `stats_champion_lane_phase` 3 s of its 5.3 s); adding the 400 matches to the five tables takes
+2.4 s, of which 1.5 s of `ANALYZE` that does not grow: about 2 ms per new match (4.3 s for 2,000).
+Applying the composition traits when the aggregates are computed costs 6 s there
+(`stats_team_traits` 0.9 s, `stats_champion_comp_traits` 1.3 → 4.1 s, `stats_choice_ally_traits`
+3.3 → 5.8 s, `stats_choice_traits` 7.0 → 7.8 s): that part, like every materialized view, still
+follows the number of matches kept. Every stats relation was compared with a database refreshed
+by the code of 0029 after each step of a run on 4,000 to 7,300 matches (the migration, matches
+added in batches, ranks changed, items imported again with other flags and back, a patch deleted,
+a forced rebuild): the same rows throughout.
+
+**Why the tables always hold what a recomputation of everything would** (the acceptance rule of
+0030: on the same data, every stats view holds the rows the materialized views of 0029 would):
+
+- a match is stored in one transaction and never updated afterwards (`insertParsedMatch` is the
+  only writer of `matches`, `participants` and `participant_events`, and does nothing for a match
+  id that exists): the rows of a match depend on its own rows and on the item flags of its patch,
+  nothing else;
+- the item flags are the one input that changes after the fact: the worker replaces the static
+  data of a kept patch when Data Dragon publishes a new version of it (`upsertPatchStaticData`).
+  Every row of a call is computed from the arrays read at its start, and a patch whose stored
+  signature is not the one of those arrays is emptied first, in the same transaction: at each
+  commit, the rows of a patch were computed with the flags of its stored signature. Only the flags
+  count: a new version with the same items recomputes nothing;
+- deletions cascade: `matches` → `stats_matches` → the four tables (patch cleanup deletes the
+  patch, hence its matches). The matches of a call are locked before anything is computed, so a
+  match cannot disappear between its rows and its record;
+- a call that fails leaves nothing (one transaction); what the previous calls did stays, and the
+  next refresh goes on from there. Two API processes cannot run it together (the refresh advisory
+  lock), and if they did, the second would fail on the primary key of `stats_matches`, not
+  compute twice;
+- what does **not** depend on the match alone is not in these rows. The composition traits compare
+  a team with percentiles over every team of the patch, through champion profiles averaged over
+  the patch: both move with every match, so they are applied when the aggregates are computed
+  (`stats_team_traits`, `stats_participant_traits`, below). The tier list rank is the player's
+  current one, which changes without any new match: `stats_tierlist_participants` stays a
+  materialized view, recomputed whole (it is one join of `participants` with `players`; kept as a
+  table it would still have to be re-ranked in full by every refresh).
+
+**Forcing a rebuild.** `refreshStats(db, { rebuild: true })` empties the tables
+(`TRUNCATE stats_matches CASCADE`) and computes every stored match again, 20,000 per transaction,
+then refreshes the views: a quarter longer than a refresh before 0030 (132 s against 106 s on
+40,000 matches: 20,000 matches at a time through index lookups cost more per match than one pass
+over everything). The served views keep their rows until they are refreshed from the rebuilt
+tables. By hand, with the API running:
+
+```sql
+BEGIN;
+SELECT pg_advisory_xact_lock(7316221905);  -- STATS_REFRESH_LOCK_KEY: waits for a refresh in progress
+TRUNCATE stats_matches CASCADE;
+COMMIT;
+```
+
+The next refresh that runs (the next tick after a match was stored) rebuilds everything. Never
+truncate without the lock: a refresh in progress would compute the rest of its views from empty
+tables. Deleting rows of `stats_matches` (one match, one patch) recomputes just those.
+
+**A migration that changes what a row holds** (a new column, another build rule, another flag in
+`pl_stats_item_flags`) must leave no row of the old rule behind. It takes the refresh lock as
+above, replaces the functions, and then either
+
+- empties the tables (`TRUNCATE stats_matches CASCADE`): the next refresh computes every match
+  again (the time of a forced rebuild, once), and the served views keep their old rows until then; or
+- rebuilds next to the old objects and swaps the names at the end, as 0026 and 0030 do, when the
+  views must not serve the old rule a minute longer than the migration.
+
+Changing only an aggregate (a materialized view) needs neither: the tables stay.
+
+### Materialized views
+
+`stats_participant_traits` is the plain view that gives a participant the columns it had as a
+materialized view: every column of `stats_participants`, plus `enemy_traits` (the row of the other
+team of its match in `stats_team_traits`: one row per team with the traits of its own composition
+against the thresholds of its patch, recomputed by every refresh after `stats_comp_thresholds`)
+and `ally_traits` (its own team's sums in `stats_team_comp` minus its own champion, against the
+same thresholds). The aggregates that need a trait read it (`stats_champion_comp_traits`,
+`stats_choice_ally_traits`; `stats_choice_traits` joins `stats_team_traits` itself), the others
+read the table.
+
 Definitions: `packages/db/migrations/0002_stats_views.sql` (traits, compositions, champion+role
 baselines, pairwise vs/with, build choices), `0003_stats_bans.sql` (tier list ban rates),
 `0006_tierlist_filters.sql` (tier list server/rank filters), `0007_support_quest_items.sql`,
 `0008_deterministic_comp_traits.sql`, `0010_lane_phase.sql`, `0012_choice_ally_contexts.sql` and
-`0015_items_done.sql`, `0016_side_wins.sql`, `0018_mastery_curve.sql`, `0019_game_length.sql`, `0022_item_swaps.sql` (all ten below) and `0026_stats_on_participant_events.sql`, which holds the current definition of `stats_participants`, `stats_quest_items`, `stats_item_swaps` and of every view built on `stats_participants` (same columns and rows as before, read from `participant_events`).
+`0015_items_done.sql`, `0016_side_wins.sql`, `0018_mastery_curve.sql`, `0019_game_length.sql`, `0022_item_swaps.sql` (all ten below), `0026_stats_on_participant_events.sql` (the per-participant queries on `participant_events`), `0029_tierlist_master_filter.sql` (the tier list views as they are now) and `0030_incremental_stats.sql`, which holds the current definition of the incremental tables, of the functions that fill them and of every view built on them (`stats_champion_roles`, `_vs`, `_with`, `_comp_traits`, the five `stats_choice*` views, `stats_champion_lane_phase`, `stats_item_swaps`: same names, columns, indexes and rows as before).
 
-**Builds from the participant's own row** (`0026_stats_on_participant_events.sql`). `stats_participants` (intermediate, one row per participant of a non-remake match with a position: loadout, starter, early items, completed items in order, boots and their rank among the completed items, skill order, composition traits of both teams) used to be 31 of the 43 minutes of a refresh at 442k matches: it joined, sorted and hashed the 105 million item events as sets (14 GB of temporary files), and the planner's estimate of those sets was wrong by eight orders of magnitude (one day it chose a nested loop between two of them: 33 hours). It now reads one `participant_events` row per participant and computes the build from that row alone, in two passes over its item arrays:
+**Builds from the participant's own row** (`0026_stats_on_participant_events.sql`). `stats_participants` (one row per participant of a non-remake match with a position: loadout, starter, early items, completed items in order, boots and their rank among the completed items, skill order; an incremental table since 0030, a materialized view recomputed by every refresh before) used to be 31 of the 43 minutes of a refresh at 442k matches: it joined, sorted and hashed the 105 million item events as sets (14 GB of temporary files), and the planner's estimate of those sets was wrong by eight orders of magnitude (one day it chose a nested loop between two of them: 33 hours). It now reads one `participant_events` row per participant and computes the build from that row alone, in two passes over its item arrays:
 
 1. the purchases that were not undone (`pl_undone_purchases`: each undo of a purchase cancels the latest purchase of that item not cancelled yet; only called for a participant with an undo), each with what its item is on the match's patch. That gives the starter (purchases of the first 60 s, trinkets excluded), the positions of the first completed item and of the first completed boots, and the kept purchases sorted by item;
 2. the first purchase of each item, in purchase order: early items (not completed, first bought after 60 s and before the first completed item), completed items (the first six are `core`), and how many of them came before the boots.
 
-What an item is (completed, boots, consumable, trinket) comes from `items` on the match's patch, read once per refresh into an array indexed by item id, so that a lookup is a subscript and not a join. Nothing about the events is sorted, hashed or joined as a whole (the only join is each participant with its own events row, on the primary key), so the time is proportional to the number of participants and the plan no longer depends on estimates of derived sets. `pl_skill_max_order` and `pl_comp_traits` were rewritten at the same time without a query per call (same results): they were about a quarter of the old time.
+What an item is (completed, boots, consumable, trinket) comes from `items` on the match's patch, read once per call of `pl_stats_fill` into an array indexed by item id (`pl_stats_item_flags`), so that a lookup is a subscript and not a join. Nothing about the events is sorted, hashed or joined as a whole (the only join is each participant with its own events row, on the primary key), so the time is proportional to the number of participants and the plan no longer depends on estimates of derived sets. `pl_skill_max_order` and `pl_comp_traits` were rewritten at the same time without a query per call (same results): they were about a quarter of the old time. Since 0030 the same query (`pl_stats_fill_participants`) only runs for the matches that have no row yet.
 
 Measured on synthetic matches with the events of production (24 item events and 15 skill points per participant; test server, one process, `work_mem` 64 MB), the refresh of `stats_participants` and the whole refresh: 21.5 s → 9.1 s and 50 s → 34 s at 8,000 matches; 109 s → 36 s and 210 s → 129 s at 40,000 (about 95 µs per participant, against 280 before on that data and 420 on production at 442k matches, where the old query spilled 14 GB). Every stats view holds the same rows before and after (compared row for row on both sets, with undos, undone sales, swaps, evolutions and unknown items among the events).
 
@@ -495,7 +694,7 @@ stats_item_swaps (patch, position, champion_id, sold_item_id, bought_item_id, ga
 
 A swap is, for a participant of a non-remake match with a position: a sale (`'S'` in `participant_events.item_types`) of a completed item (`items.is_completed` on the match's patch, boots included) whose next event of that participant is the purchase (`'P'`) of another completed item at most 60 s later, that purchase not being undone right after (the event after it is not a `'U'` of the bought item), with at least 6 distinct completed items (boots included) purchased before the sale. A sale followed by its undo (`'u'`: 27 % of the sales of completed items) is a sale taken back and counts for nothing. On 8,000 matches the gap between the sale and the purchase has a median of 1.2 s and a 99th percentile of 34 s, and 1,200 of the 80,000 participants have a swap; without the 6-item rule most pairs are early boots changes and Mejai's sales. No `wins` column: players who can afford a swap are in long games they are winning, so the build shows the pair, its games and its average minute (`sum(minute_sum) / sum(games)` over the patches) and never a win rate. Unfiltered only.
 
-One sequential pass over `participant_events`: only the rows with a sale are looked into, each event with the two that follow it in the arrays, and the patch, position and champion (from `stats_tierlist_participants`, hence refreshed after it), the completed items of the patch and the items purchased before the sale are only looked up for the sales that pass the other rules. A few rows per champion + role per patch.
+The swaps of a participant are found once, when its match is first seen (`pl_stats_fill_swaps` → `stats_participant_swaps`, one row per participant and pair with the time of the first such sale): only the participants with a sale are looked into, each event with the two that follow it in the arrays, and whether the items are completed (a flag of the item array) and the items purchased before the sale are only looked up for the sales that pass the other rules. `stats_item_swaps` counts those rows: a few rows per champion + role per patch.
 
 **Build stage of items** (`0015_items_done.sql`, kind `items_done`). One choice per participant: the number of completed items (`cardinality(stats_participants.core)`, 0–6, as text), in all five choice views (`stats_choice_duos` and `stats_choice_ally_traits` included). Players who complete more items win far more (≈ 37 % with one, 61 % with five on 16.22), so the build engine compares an item with the players who completed at least as many items as its usual slot (`avg_pos`, interpolated), not with every game. At most 7 rows per champion + role and per context.
 
@@ -506,16 +705,16 @@ One sequential pass over `participant_events`: only the rows with a sale are loo
 stats_choice_duos (patch, champion_id, position, partner_position, partner_id,
                    kind, choice, games, wins)          -- kind = 'item' (choice = item id) or 'items_done' (0015)
 -- unique (patch, champion_id, position, partner_id, partner_position, kind, choice)  → build
--- Served. trait: one of stats_participants.ally_traits (the composition of the 4 teammates).
+-- Served. trait: one of stats_participant_traits.ally_traits (the composition of the 4 teammates).
 stats_choice_ally_traits (patch, champion_id, position, trait, kind, choice, games, wins)
 -- unique (patch, champion_id, position, trait, kind, choice)                          → build
 ```
 
 Size: one row per (champion, role, partner, item) and per (champion, role, trait, item). A participant has one duo partner (two for junglers: 1.2 on average, vs 1.4 lane opponents in `stats_choice_matchups`) and ~1.75 ally traits (7 traits, each set for about a quarter of the teams), times ~3 completed items. The duo view is smaller than the item rows of `stats_choice_matchups`; the trait one is bounded by champions × roles × 7 traits × items (a few hundred thousand rows). Kept to kind `item` to keep the refresh short: these are only read by situational items.
 
-**Support quest upgrade** (`0007_support_quest_items.sql`, kind `quest_item`). The support item (World Atlas) is granted for free and upgrades itself through the quest: World Atlas → Runic Compass → Bounty of Worlds → the upgrade the player picks (Celestial Opposition, Dream Maker, Zaz'Zak's Realmspike, Solstice Sleigh, Bloodsong). The timeline only has `ITEM_DESTROYED` events for the first three; the picked upgrade almost never comes as `ITEM_PURCHASED`, and at 400 gold it is not a completed item. `stats_quest_items` (intermediate, one row per participant who had one) reads it from `final_items`, else from its last purchase in `participant_events` (sold before the end; only the rows whose items overlap the patch's upgrades are looked into). Upgrades are recognised from Data Dragon, not by id: non-consumable, non-completed items tagged `GoldPer` that are built from an item and build into nothing.
+**Support quest upgrade** (`0007_support_quest_items.sql`, kind `quest_item`). The support item (World Atlas) is granted for free and upgrades itself through the quest: World Atlas → Runic Compass → Bounty of Worlds → the upgrade the player picks (Celestial Opposition, Dream Maker, Zaz'Zak's Realmspike, Solstice Sleigh, Bloodsong). The timeline only has `ITEM_DESTROYED` events for the first three; the picked upgrade almost never comes as `ITEM_PURCHASED`, and at 400 gold it is not a completed item. `stats_quest_items` (incremental table, one row per participant who had one) reads it from `final_items` (the first upgrade by slot), else from its last purchase in `participant_events` (sold before the end). Upgrades are recognised from Data Dragon, not by id: non-consumable, non-completed items tagged `GoldPer` that are built from an item and build into nothing (one of the item flags of `pl_stats_item_flags`).
 
-**Deterministic composition traits** (`0008_deterministic_comp_traits.sql`). `stats_team_comp` sums the per-champion trait values of a team as `numeric` (exact, cast back to `float8`): float8 sums depended on the order rows reached the aggregate, so a team mean sitting on a `stats_comp_thresholds` percentile could switch traits between two refreshes of the same matches. The views built on it (`stats_comp_thresholds`, `stats_participants` and everything derived from it) are recreated unchanged otherwise. Also adds `stats_champion_with_champion (patch, champion_id, position)`, like `stats_champion_vs_champion`, for one champion's allies (`GET /tierlist/champion`).
+**Deterministic composition traits** (`0008_deterministic_comp_traits.sql`). `stats_team_comp` sums the per-champion trait values of a team as `numeric` (exact, cast back to `float8`): float8 sums depended on the order rows reached the aggregate, so a team mean sitting on a `stats_comp_thresholds` percentile could switch traits between two refreshes of the same matches. The views built on it (`stats_comp_thresholds`, then `stats_participants` and everything derived from it; since 0030 `stats_team_traits` and the trait aggregates) are recreated unchanged otherwise. Also adds `stats_champion_with_champion (patch, champion_id, position)`, like `stats_champion_vs_champion`, for one champion's allies (`GET /tierlist/champion`).
 
 **Lane phase** (`0010_lane_phase.sql`). The first reader of the per-minute frames (`gold_by_minute`, `xp_by_minute`, `cs_by_minute`; index 1 = minute 0, so minute 10 = index 11 and minute 15 = index 16):
 
@@ -530,7 +729,7 @@ stats_champion_lane_phase (patch, position, champion_id, enemy_position, enemy_i
 -- index  (patch, champion_id, position)                            → build, GET /tierlist/champion
 ```
 
-TOP / JUNGLE / MIDDLE compare the two players (1v1). BOTTOM / UTILITY compare the bot lanes as a 2v2 (own + duo partner − enemy BOTTOM − enemy UTILITY): support gold alone says little about how the lane went; the rows vs the enemy ADC and vs the enemy support hold the same difference, each conditioned on that opponent. Remakes and participants without a position are excluded like everywhere; a lane counts only when both sides are complete (1 player, or 2 in the bot lane) and every player in it has the frame of that minute (shorter matches have shorter arrays), hence the separate `games_15`. Averages are exact `numeric` means cast to `float8`; patches are combined as `sum(avg × games) / sum(games)`. Computed in one pass over `participants` (each (match, lane) group holds both teams, then every own × enemy player pair of the lane gets the difference), so it refreshes in about the time of `stats_champion_roles`. Unfiltered only: the tier list server/rank filters do not apply to it.
+TOP / JUNGLE / MIDDLE compare the two players (1v1). BOTTOM / UTILITY compare the bot lanes as a 2v2 (own + duo partner − enemy BOTTOM − enemy UTILITY): support gold alone says little about how the lane went; the rows vs the enemy ADC and vs the enemy support hold the same difference, each conditioned on that opponent. Remakes and participants without a position are excluded like everywhere; a lane counts only when both sides are complete (1 player, or 2 in the bot lane) and every player in it has the frame of that minute (shorter matches have shorter arrays), hence the separate `games_15`. Averages are exact `numeric` means cast to `float8`; patches are combined as `sum(avg × games) / sum(games)`. Each (match, lane) group holds both teams: since 0030 it is a row of `stats_lanes`, computed once when the match is first seen (`pl_stats_fill_lanes` reads the frames of `participants`), and the view only gives every own × enemy player pair of a lane the difference from its side. Unfiltered only: the tier list server/rank filters do not apply to it.
 
 **Tier list filters** (`0006_tierlist_filters.sql`):
 
@@ -540,7 +739,8 @@ TOP / JUNGLE / MIDDLE compare the two players (1v1). BOTTOM / UTILITY compare th
 -- Master in 0). Filter "Master+" = rank_level >= 1, "Grandmaster+" = rank_level >= 2,
 -- "Challenger only" = 3; "Diamond+" (default) and "all servers" read the unfiltered views.
 
--- Intermediate: one row per participant of a non-remake match (position may be NULL).
+-- Intermediate: one row per participant of a non-remake match (position may be NULL). Recomputed
+-- whole by every refresh: the rank is the current one, and changes without any new match.
 stats_tierlist_participants (patch, platform, rank_level, match_id, participant_id,
                              team_id, champion_id, position, win)           -- unique (match_id, participant_id)
 
@@ -571,6 +771,8 @@ banned matches / matches when every participant of a server is counted.
 **The estimate made before the migration**: per match with indexes, from a synthetic database of 8,000 matches in the layout of 0028 (24 item events and 15 skill points per participant, as on production), the stats views excepted: participants ~7 KB, participant events ~4 KB, bans + teams + match ~1.5 KB, masteries ~0.7 KB (about 3 rows per match: one per (player, champion played)), plus ~9 KB of stats views (measured on production on 16.22, unchanged; `stats_participants` alone is ~4 KB) → **~22 KB/match**.
 
 Before 0025–0028 it was ~62 KB/match plus ~8 GB of masteries whatever the number of matches (measured on 16.22, Nov 2026: item events ~26 KB and skill events ~16 KB per match — 46 KB and 16 KB on disk at 442k matches, with the space of the deleted `DESTROYED` rows —, participants ~12 KB, bans ~1 KB, stats views ~9 KB).
+
+**Since 0030** the stats layer is about the same size: per match, `stats_participants` as a table without its two trait columns ~2.8 KB instead of ~3.8 KB, plus `stats_lanes` ~0.8 KB, `stats_team_traits` ~0.25 KB, `stats_matches` ~0.08 KB and `stats_participant_swaps` (a row for 1.5 % of the participants); `stats_quest_items` holds the same rows as before (measured on 40,000 synthetic matches: 900 MB before the migration, 917 MB after, of which 11 MB of swaps that synthetic matches have 15 times more of).
 
 A full patch is ~300k matches (every Master+ player of the four servers over two weeks) → ~7 GB. Two full patches, at the end of a patch and before the older one is deleted → **~13 GB**, plus the players (~0.1 GB). The stats refresh also needs temporary space while it runs: `stats_participants` no longer does (it wrote 14 GB of temporary files at 442k matches); the hash joins and aggregates of the other views still spill to disk (a few GB, not measured since). The disk must hold both. There is no backup.
 
