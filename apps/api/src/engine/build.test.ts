@@ -898,6 +898,43 @@ describe('recommendBuild', () => {
     ).not.toHaveProperty('lanePhase');
   });
 
+  test('late items: the most built after the core among the players who get that far', () => {
+    // Without items built that late (or without the players' item counts): none.
+    expect(recommendBuild(req(LEONA), data())?.items.late).toEqual([]);
+    // 300 players complete 5 items or more, 600 complete 4 or more. Spirit Visage is a fifth item
+    // for 120 of them (40 %); Chemtech Putrifier comes around the same point for 30 (under 10 %).
+    const choices = [
+      ...data().choices.filter((r) => r.kind !== 'item' || !['3065', '3011'].includes(r.choice)),
+      c('item', '3065', 120, 72, 5),
+      c('item', '3011', 30, 15, 4.8),
+      c('items_done', '4', 300, 160),
+      c('items_done', '5', 200, 120),
+      c('items_done', '6', 100, 70),
+    ];
+    const b = recommendBuild(req(LEONA), data({ choices }));
+    expect(b?.items.late.map((item) => item.itemId)).toEqual([3065]);
+    const reason = b?.items.late[0]?.reasons[0];
+    expect(reason).toMatchObject({ kind: 'popularity', games: 120, itemId: 3065 });
+    expect(reason?.label).toMatch(
+      /^Built by 40\.0% of the players who get that far into their build, [+−]\d+\.\d% vs the others \(120 games\)$/,
+    );
+    // It is not one of the core builds' items, and the core does not change.
+    const core = b?.items.coreBuilds.flatMap((x) => x.items.map((item) => item.itemId)) ?? [];
+    expect(core).not.toContain(3065);
+    expect(b?.items.core.map((item) => item.itemId)).toEqual(
+      recommendBuild(req(LEONA), data())?.items.core.map((item) => item.itemId),
+    );
+
+    // A swap that sells a late item can be listed; without the late item it cannot.
+    const itemSwaps = [
+      { patch: CUR, soldItemId: 3065, boughtItemId: 3011, games: 12, minuteSum: 12 * 36 },
+    ];
+    expect(recommendBuild(req(LEONA), data({ choices, itemSwaps }))?.items.lateSwaps).toEqual([
+      { sellItemId: 3065, buyItemId: 3011, games: 12, minute: 36 },
+    ]);
+    expect(recommendBuild(req(LEONA), data({ itemSwaps }))?.items.lateSwaps).toEqual([]);
+  });
+
   test('late-game swaps: both patches summed whatever the build weighting, empty without rows', () => {
     expect(recommendBuild(req(LEONA), data())?.items.lateSwaps).toEqual([]);
     const itemSwaps = [

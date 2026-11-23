@@ -10,7 +10,15 @@ const build = {
   patchesUsed: ['15.22'],
   games: 500,
   confidence: 0.8,
-  items: { starting: [], early: [], core: [], coreBuilds: [], situational: [], lateSwaps: [] },
+  items: {
+    starting: [],
+    early: [],
+    core: [],
+    coreBuilds: [],
+    situational: [],
+    late: [],
+    lateSwaps: [],
+  },
   runes: {
     primaryTreeId: 8200,
     secondaryTreeId: 8400,

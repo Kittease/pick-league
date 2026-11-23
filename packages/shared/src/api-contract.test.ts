@@ -90,6 +90,7 @@ describe('build response late-game swaps', () => {
       core: [],
       coreBuilds: [],
       situational: [],
+      late: [],
       lateSwaps: [swap],
     };
     const fromBuild: BuildResponse['items']['lateSwaps'] = items.lateSwaps;

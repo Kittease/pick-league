@@ -13,6 +13,7 @@ import type {
   CompTrait,
   CoreBuild,
   ItemsRecommendation,
+  LateItem,
   PatchId,
   Reason,
   RecommendedItem,
@@ -389,11 +390,13 @@ export function recommendBuild(req: BuildRequest, data: BuildData): BuildRespons
     confidence: round(sampleConfidence(baseline.games, B.confidenceK), 3),
     items: {
       ...items,
-      // Only swaps selling an item of the core builds shown, or bought by an earlier swap.
+      // Only swaps selling an item shown (core builds, late items), or bought by an earlier swap.
       lateSwaps: lateSwaps(
         data.itemSwaps ?? [],
         data.items,
-        [items.core, ...items.coreBuilds.map((c) => c.items)].flat().map((item) => item.itemId),
+        [items.core, ...items.coreBuilds.map((c) => c.items), items.late]
+          .flat()
+          .map((item) => item.itemId),
       ),
     },
     runes,
@@ -1223,6 +1226,39 @@ function recommendItems(input: ItemsInput): Omit<ItemsRecommendation, 'lateSwaps
     }
   }
 
+  // Late items: what players most often complete after the core (Guardian Angel, a lifesteal
+  // item...), among the players who get that far. Not in any core build shown nor situational.
+  const shownIds = new Set([
+    ...core.map((item) => item.itemId),
+    ...coreBuilds.flatMap((b) => b.items.map((item) => item.itemId)),
+    ...situational.map((item) => item.itemId),
+  ]);
+  const late: LateItem[] = itemRows
+    .map((r) => {
+      const id = Number(r.choice);
+      const stage = stageReference(data.choices, r.avgPos ?? 0);
+      return { r, id, share: stage && stage.games > 0 ? Math.min(1, r.games / stage.games) : 0 };
+    })
+    .filter(({ id }) => !shownIds.has(id) && !isBoots(id) && data.items.has(id))
+    .filter(({ r }) => (r.avgPos ?? 0) >= B.coreSize + 0.5 && r.games >= B.minChoiceGames)
+    .filter(({ share }) => share >= B.lateItemMinShare)
+    .sort((a, b) => b.r.games - a.r.games || a.id - b.id)
+    .slice(0, B.maxLateItems)
+    .map(({ r, id, share }) => ({
+      itemId: id,
+      games: r.games,
+      share: round(share),
+      reasons: [
+        {
+          kind: 'popularity' as const,
+          label: `Built by ${formatRate(share)} of the players who get that far into their build, ${formatDelta(itemDelta(id))} vs the others (${formatGames(r.games)})`,
+          delta: round(itemDelta(id)),
+          games: r.games,
+          itemId: id,
+        },
+      ],
+    }));
+
   return {
     starting,
     early,
@@ -1241,6 +1277,7 @@ function recommendItems(input: ItemsInput): Omit<ItemsRecommendation, 'lateSwaps
     ),
     coreBuilds,
     situational,
+    late,
     ...(questUpgrade ? { questUpgrade } : {}),
   };
 }

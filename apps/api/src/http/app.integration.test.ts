@@ -262,9 +262,11 @@ function shownSwaps(
 /** The boots of the synthetic loadouts: a pair of boots is always a known item for the swaps. */
 const BOOTS = new Set([3006, 3020, 3047, 3111, 3158]);
 
-/** Item ids of the core builds a build response shows. */
+/** Item ids a build response shows before its swaps: the core builds and the late items. */
 const coreItemIds = (b: BuildResponse) =>
-  [b.items.core, ...b.items.coreBuilds.map((c) => c.items)].flat().map((item) => item.itemId);
+  [b.items.core, ...b.items.coreBuilds.map((c) => c.items), b.items.late]
+    .flat()
+    .map((item) => item.itemId);
 
 describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
   let db: Db;

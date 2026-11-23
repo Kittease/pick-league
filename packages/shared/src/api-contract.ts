@@ -499,6 +499,16 @@ export interface LateSwap {
   minute: number;
 }
 
+/** An item usually completed after the core, see `ItemsRecommendation.late`. */
+export interface LateItem {
+  itemId: number;
+  /** Matches where it was built. */
+  games: number;
+  /** Share of the players who get that far into their build (its usual slot) who build it, 0..1. */
+  share: number;
+  reasons: Reason[];
+}
+
 export interface ItemsRecommendation {
   /** Starting purchase, e.g. [World Atlas, Health Potion x2] → item ids, duplicates allowed. */
   starting: RecommendedItem[];
@@ -518,9 +528,15 @@ export interface ItemsRecommendation {
   /** Adaptations to this game's enemies/allies. */
   situational: RecommendedItem[];
   /**
+   * Late items: the items most often completed after the core (fifth completed item or later),
+   * most built first, at most 3; none of them is in a core build or situational. Empty when no
+   * item is built that late often enough.
+   */
+  late: LateItem[];
+  /**
    * Late-game swaps of the champion + role (at most 3, each seen in at least 10 games), in
-   * reading order: a swap only sells an item of the core builds above, a pair of boots, or the
-   * item bought by a swap before it; among those, the most frequent first. Empty for most rarely played champions.
+   * reading order: a swap only sells an item of the core builds or late items above, a pair of
+   * boots, or the item bought by a swap before it; among those, the most frequent first. Empty for most rarely played champions.
    */
   lateSwaps: LateSwap[];
   /**

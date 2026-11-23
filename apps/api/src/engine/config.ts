@@ -159,6 +159,13 @@ export const ENGINE_CONFIG = {
     earlyItemMinShare: 0.3,
     maxEarlyItems: 4,
     /**
+     * Late items: the items most built after the core (usual slot from `coreSize` + 0.5 on, i.e.
+     * fifth completed item or later), shown when at least this share of the players who get that
+     * far build them, at most `maxLateItems`.
+     */
+    lateItemMinShare: 0.1,
+    maxLateItems: 3,
+    /**
      * The support quest upgrade is recommended when at least this share of the champion+role's
      * games ended with one (supports; keeps a stray off-role quest out of other roles' builds).
      */

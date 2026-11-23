@@ -3,6 +3,7 @@
 import {
   type BuildResponse,
   type CoreBuild,
+  type LateItem,
   type LateSwap,
   type Reason,
   type RecommendedItem,
@@ -196,52 +197,94 @@ function CoreBuilds({
 }
 
 /**
- * Completed items players of the champion sell once their build is full, each with the completed
- * item they buy in its place. Explains, never scores: no win rate (only players in long games
- * they are winning can afford a swap). Nothing is shown without swaps (an API predating them
- * sends none).
+ * Late game, one strip under the item columns: the items players most often complete after the
+ * core ("Then"), and the swaps they make once the build is full ("Swapped at full build": sold
+ * item → item bought in its place). Both explain and never score. A swap only sells an item shown
+ * above or in "Then", a pair of boots, or the item a swap before it bought, so the strip reads left
+ * to right. Nothing is shown without either (an API predating them sends neither).
  */
-function LateSwaps({
+function LateGame({
+  late,
   swaps,
   lookup,
 }: {
+  late: LateItem[] | undefined;
   swaps: LateSwap[] | undefined;
   lookup: StaticLookup | null;
 }) {
-  if (!swaps || swaps.length === 0) return null;
+  const items = late ?? [];
+  const pairs = swaps ?? [];
+  if (items.length === 0 && pairs.length === 0) return null;
   return (
-    <div className="min-w-0">
-      <SectionTitle>Late-game swaps</SectionTitle>
-      <p className="mb-1 text-[10px] text-muted-foreground">
-        Sold for another item once the build is full.
-      </p>
-      <ul className="flex flex-col gap-1">
-        {swaps.map((swap) => {
-          const sold = lookup?.item(swap.sellItemId);
-          const bought = lookup?.item(swap.buyItemId);
-          const soldName = sold?.name ?? `Item ${swap.sellItemId}`;
-          const boughtName = bought?.name ?? `Item ${swap.buyItemId}`;
-          return (
-            <li
-              key={`${swap.sellItemId}-${swap.buyItemId}`}
-              className="flex items-center gap-1.5 bg-card p-1.5"
-              title={`${soldName} sold, ${boughtName} bought in its place: ${swap.games.toLocaleString('en-US')} games, around minute ${Math.round(swap.minute)} on average`}
-            >
-              <GameIcon src={sold?.iconUrl} alt={soldName} size={28} />
-              <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground" />
-              <GameIcon src={bought?.iconUrl} alt={boughtName} size={28} />
-              <span className="ml-0.5 flex min-w-0 flex-col gap-0.5 leading-tight">
-                <span className="truncate text-xs font-medium">{boughtName}</span>
-                <span className="truncate text-[10px] text-muted-foreground">
-                  instead of {soldName}
-                </span>
-                <span className="num text-[10px] text-muted-foreground">{lateSwapText(swap)}</span>
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
+    <section>
+      <SectionTitle>Late game</SectionTitle>
+      <div className="flex flex-wrap items-start gap-x-8 gap-y-3">
+        {items.length > 0 && (
+          <div className="min-w-0">
+            <p className="mb-1 text-[10px] text-muted-foreground">Then, most often</p>
+            <ul className="flex flex-wrap gap-1">
+              {items.map((rec) => {
+                const item = lookup?.item(rec.itemId);
+                const name = item?.name ?? `Item ${rec.itemId}`;
+                return (
+                  <li key={rec.itemId}>
+                    <HoverCard>
+                      <HoverCardTrigger
+                        render={
+                          <button
+                            type="button"
+                            className="flex items-center gap-2 bg-card py-1 pr-2.5 pl-1 text-left outline-none hover:bg-accent/60 focus-visible:ring-1 focus-visible:ring-ring"
+                          />
+                        }
+                      >
+                        <GameIcon src={item?.iconUrl} alt={name} size={28} />
+                        <span className="flex min-w-0 flex-col leading-tight">
+                          <span className="max-w-36 truncate text-xs font-medium">{name}</span>
+                          <span className="num text-[10px] text-muted-foreground">
+                            built by {percent(rec.share, 0)}
+                          </span>
+                        </span>
+                      </HoverCardTrigger>
+                      <HoverCardContent className="w-[420px]" side="top">
+                        <p className="mb-2 text-xs font-semibold">{name}</p>
+                        <ReasonList reasons={rec.reasons} />
+                      </HoverCardContent>
+                    </HoverCard>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+        {pairs.length > 0 && (
+          <div className="min-w-0">
+            <p className="mb-1 text-[10px] text-muted-foreground">Swapped at full build</p>
+            <ul className="flex flex-wrap gap-1">
+              {pairs.map((swap) => {
+                const sold = lookup?.item(swap.sellItemId);
+                const bought = lookup?.item(swap.buyItemId);
+                const soldName = sold?.name ?? `Item ${swap.sellItemId}`;
+                const boughtName = bought?.name ?? `Item ${swap.buyItemId}`;
+                return (
+                  <li
+                    key={`${swap.sellItemId}-${swap.buyItemId}`}
+                    className="flex items-center gap-1.5 bg-card py-1 pr-2.5 pl-1"
+                    title={`${soldName} sold, ${boughtName} bought in its place: ${swap.games.toLocaleString('en-US')} games, around minute ${Math.round(swap.minute)} on average`}
+                  >
+                    <GameIcon src={sold?.iconUrl} alt={soldName} size={28} />
+                    <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground" />
+                    <GameIcon src={bought?.iconUrl} alt={boughtName} size={28} />
+                    <span className="num ml-0.5 text-[10px] whitespace-nowrap text-muted-foreground">
+                      {lateSwapText(swap)}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -549,21 +592,19 @@ export function BuildDetails({
           onSelect={(index) => setPicked({ key, index })}
           lookup={lookup}
         />
-        <div className="flex min-w-0 flex-col gap-4">
-          <div className="min-w-0">
-            <SectionTitle>Situational</SectionTitle>
-            <div className="flex flex-col gap-1">
-              {build.items.situational.length === 0 && (
-                <p className="text-xs text-muted-foreground">No adaptation needed.</p>
-              )}
-              {build.items.situational.map((rec) => (
-                <ItemTile key={rec.itemId} rec={rec} lookup={lookup} variant="situational" />
-              ))}
-            </div>
+        <div className="min-w-0">
+          <SectionTitle>Situational</SectionTitle>
+          <div className="flex flex-col gap-1">
+            {build.items.situational.length === 0 && (
+              <p className="text-xs text-muted-foreground">No adaptation needed.</p>
+            )}
+            {build.items.situational.map((rec) => (
+              <ItemTile key={rec.itemId} rec={rec} lookup={lookup} variant="situational" />
+            ))}
           </div>
-          <LateSwaps swaps={build.items.lateSwaps} lookup={lookup} />
         </div>
       </section>
+      <LateGame late={build.items.late} swaps={build.items.lateSwaps} lookup={lookup} />
       {current && current.reasons.length > 0 && (
         <section>
           <SectionTitle meta={coreBuildMeta(current)}>
