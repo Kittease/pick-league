@@ -10,7 +10,7 @@ PostgreSQL 17, single database, run by Docker Compose next to the worker and the
 - **Two patches only.** `patches` lists the patches we keep. When a new patch is detected, every match of the patch before the previous one is deleted (`ON DELETE CASCADE` cleans every child table). Postgres reuses the freed space for the new patch, so disk usage stays flat at ~2 patches.
 - **Static data is per patch.** Champions, items, runes and summoner spells come from Data Dragon and are stored per patch, so an old match is always read with the item/rune data that existed when it was played.
 - **All 10 players are identified.** Every `puuid` met in a match gets a `players` row. Riot IDs come for free in the match payload. Extra info (mastery, solo queue rank) is fetched with a priority scheme so it never slows match collection:
-  1. ladder refresh (Challenger, Grandmaster and the top Master players, more of them each time the queues empty) → 2. match ids of players who played → 3. matches + timelines → 4. daily refresh of tracked ladder players (mastery) → 5. **lowest priority:** mastery + rank of non-ladder players, only with leftover budget. Fetched once, refreshed only if the player shows up again and the data is older than 7 days, or at once when a stored match shows them on a champion they have no mastery row for (see `champion_masteries`).
+  1. ladder refresh (Challenger, Grandmaster and the top Master players, more of them each time the queues empty) → 2. match ids of players who played → 3. matches + timelines → 4. mastery refresh of tracked ladder players (every 3 days) → 5. **lowest priority:** mastery of non-ladder players, and their rank when nothing else refreshed it lately (the Diamond sweep stores the rank of every known Diamond player, a check that of each Master outside Riot's list), only with leftover budget. Fetched once, refreshed only if the player shows up again and the data is older than 7 days, or at once when a stored match shows them on a champion they have no mastery row for (see `champion_masteries`).
 - Riot timestamps are converted to `timestamptz`; in-game times are kept as milliseconds since game start (`int`).
 
 ## Overview
@@ -24,6 +24,7 @@ patches ─┬─< champions / champion_spells / items / rune_trees / runes / su
                                                                 (0..1: derived by the API's refresh, see Stats layer)
 
 players ─┬── ladder_entries          (tracked set: current Challenger/GM/top Master state, plus tracked Diamond players; used to detect who played)
+         ├── outside_masters         (Master+ players outside Riot's list: the counter of their last check; used to detect who played)
          ├─< champion_masteries      (champions with a stored game only; daily for tracked players, low priority for the others)
          └─< participants            (every player of every match)
 
@@ -141,8 +142,10 @@ CREATE TABLE players (
   game_name             text,                -- Riot ID, from the match payload only (as of the player's last stored match)
   tag_line              text,
   name_updated_at       timestamptz,
-  -- solo queue rank: ladder players get it from ladder_entries;
-  -- others from league-v4 entries/by-puuid (low priority).
+  -- solo queue rank: ladder players get it from ladder_entries; the Diamond players already
+  -- known from the hourly Diamond sweep (0032: written when it changed or is 12 h old); the
+  -- Masters outside Riot's list from their checks; the others from league-v4 entries/by-puuid
+  -- (enrichment, low priority: not asked again while rank_refreshed_at is under 24 h old).
   -- Also the tier list rank filter (current tier, read when the stats views are refreshed).
   solo_tier             solo_tier,
   solo_division         smallint,            -- 1..4, NULL for Master+
@@ -151,8 +154,8 @@ CREATE TABLE players (
   solo_losses           integer,
   rank_refreshed_at     timestamptz,
   masteries_refreshed_at timestamptz,         -- last mastery answer stored; set back to NULL for a tracked player when a stored match shows them on a champion without a mastery row (0027)
-  matches_synced_until  timestamptz,         -- listed players (tracked, or Masters outside Riot's list): newest match already listed → `startTime` for match ids; a listing sets it 1 h before its own time, which is also how the daily pass over the outside Masters knows who was listed since it opened
-  listing_requested_at  timestamptz,         -- tracked players only: "played" (ladder wins+losses changed), match ids not listed yet (0009)
+  matches_synced_until  timestamptz,         -- listed players (tracked, or Masters outside Riot's list): newest match already listed → `startTime` for match ids; a listing sets it 1 h before its own time; the first check of an outside Master asks for a listing unless this says they were listed in the last 72 h
+  listing_requested_at  timestamptz,         -- tracked players and Masters outside Riot's list: "played" (wins+losses changed on the ladder, or at their check), match ids not listed yet (0009)
   last_seen_in_match_at timestamptz,         -- used by cleanup and by the low-priority refresh rule
   last_seen_with_master_at timestamptz,      -- start of the newest stored match shared with a Master+ player (0024)
   created_at            timestamptz NOT NULL DEFAULT now()
@@ -192,16 +195,51 @@ CREATE TABLE ladder_entries (
 );
 -- Players who drop off the ladder lose their ladder_entries row (no longer tracked), and with it
 -- their baseline; their players row and the matches they appear in are kept.
--- Ladder order (listings, fetch_rank): tier, division NULLS FIRST, league_points DESC.
+-- Ladder order (listings, fetch_rank): tier, division NULLS FIRST, league_points DESC for the apex
+-- rows. The DIAMOND rows are two groups: first the players seen in a Master+ game in the last 7
+-- days (players.last_seen_with_master_at), by division then LP, then the others (Diamond I), by LP.
 -- A tracked Diamond player a complete sweep did not see keeps their row untouched, and loses it
 -- once updated_at is 24 h old; one who shows up on an apex list becomes an apex row. The DIAMOND
--- rows are the best candidates of a sweep, as many as diamond_tracking.target: a player who is
--- no longer among them (the target shrank, others passed them) loses their row like any player
--- leaving the ladder.
+-- rows are the best candidates of a sweep, as many as diamond_tracking.target: the Diamond
+-- players (any division) seen in a Master+ game lately, then the other Diamond I players, nobody
+-- else. A player who is no longer among them (the target shrank, others passed them, a lower
+-- division without a Master+ game) loses their row like any player leaving the ladder.
 -- Skip rule: with expected = wins + losses - listed_games, a player about to be listed is skipped
 -- when expected > 0 and at least that many of their stored non-remake matches ended after
 -- listed_snapshot_at and at least 15 minutes before games_changed_at (Riot's ladder counts a
--- finished game up to 10 minutes late); never when listed_at is 24 h old.
+-- finished game up to 10 minutes late); never when listed_at is 24 h old for an apex row, 72 h
+-- for a DIAMOND row.
+
+-- The Master+ players outside Riot's ladder lists (0032; the Master list stops at 10,000 players):
+-- every player of a platform whose players.solo_tier is Master or above and who has no
+-- ladder_entries row. The worker brings the table in line with those two after each ladder refresh
+-- and each Diamond sweep, and asks for each player's own solo queue entry on the platform host in
+-- rotation (league-v4 entries/by-puuid): a change in wins+losses since the previous check means
+-- the player played → players.listing_requested_at is set and their match ids are listed.
+CREATE TABLE outside_masters (
+  puuid              text        PRIMARY KEY REFERENCES players ON DELETE CASCADE,
+  platform           platform    NOT NULL,
+  games              integer,               -- wins + losses at the last check (NULL: never checked)
+  checked_at         timestamptz,           -- last check, or failed try (the rotation: NULLS FIRST, then oldest)
+  games_changed_at   timestamptz,           -- when the check that first saw the current `games` was answered
+  -- Baseline of the listing skip rule, set by the player's last real match-id listing as an
+  -- outside Master (same meaning and same rule as on ladder_entries; safety interval 72 h):
+  listed_games       integer,
+  listed_snapshot_at timestamptz,
+  listed_at          timestamptz
+);
+CREATE INDEX outside_masters_rotation_idx
+  ON outside_masters (platform, checked_at NULLS FIRST, puuid);
+-- A table of its own: a ladder_entries row means "on a list refreshed as a whole" to every reader
+-- (rows a refresh did not return are removed, the MASTER rows are counted as tracked, every row
+-- gets a first listing and a mastery refresh and is kept out of enrichment), and on players the
+-- solo_wins / solo_losses are also written by enrichment and the Diamond sweep, so they cannot say
+-- what the last check saw.
+-- First check (games IS NULL): the counter is only stored when the player's match ids were listed
+-- in the last 72 h (players.matches_synced_until), else one listing is requested. A check that
+-- finds the player below Master, or unranked, removes the row and a waiting listing request; a
+-- player with a ladder_entries row loses it at the next sync and is followed by the ladder.
+-- The row goes with its player (cascade) when an orphan player is purged.
 
 -- Masteries of the champions a player has a stored game on (a participants row), and only those
 -- (0027): the stats read this table joined to a participant on (puuid, champion_id) and nothing
@@ -354,16 +392,18 @@ CREATE TABLE match_fetch_queue (
   attempts      smallint     NOT NULL DEFAULT 0,  -- deterministic errors (404, parse, other 4xx: FAILED at 2) and unknown ones (FAILED at 5)
   transient_errors smallint  NOT NULL DEFAULT 0,  -- Riot 429/5xx, network, DB connection: deferred without an attempt, FAILED at 10 (0009)
   last_error    text,
-  fetch_rank    integer      NOT NULL DEFAULT 1000000,  -- best rank among the players who listed it, a band per tier (0011, bands since 0031): an apex player's ladder position (0 = first Challenger, < 100000); 100000 = a Master outside Riot's list; 200000 + position among the tracked Diamond players; 1000000 = back of the queue (retried/deferred)
+  fetch_rank    integer      NOT NULL DEFAULT 1000000,  -- best rank among the players who listed it, a band per tier (0011, bands since 0031): an apex player's ladder position (0 = first Challenger, < 100000); 100000 = a Master outside Riot's list; 200000 + position among the tracked Diamond players seen in a Master+ game; 400000 + position among the other tracked Diamond I players (since 0032's worker); 1000000 = back of the queue (retried/deferred)
   discovered_at timestamptz  NOT NULL DEFAULT now(),
   updated_at    timestamptz  NOT NULL DEFAULT now()
 );
 CREATE INDEX match_fetch_queue_pending_idx
   ON match_fetch_queue (platform, fetch_rank, discovered_at, match_id) WHERE status = 'PENDING';
 -- Claimed lowest fetch_rank first, so better-placed players' matches are fetched first: apex
--- players', then outside Masters', then Diamond players' (that band only when the first two are
--- nearly empty and nobody of the daily Master pass is due: docs/architecture.md, Worker). A match
--- that fails or is deferred leaves its band for the back of the queue at once.
+-- players', then outside Masters', then Diamond players' (those bands only when the first two are
+-- nearly empty and no outside Master waits for a listing, the Diamond I band only when the band
+-- before it is nearly empty too: docs/architecture.md, Worker). A match that fails or is deferred
+-- leaves its band for the back of the queue at once. Rows queued before the two Diamond bands
+-- existed are all in the first one.
 -- 0031 moved the PENDING rows the previous version had queued for Diamond players (number of apex
 -- players + position) and outside Masters (size of the tracked ladder) into the Diamond band, in
 -- the same order: every PENDING row at or after the platform's number of apex players.
@@ -395,11 +435,11 @@ CREATE TABLE listing_skip_misses (
 );
 CREATE INDEX listing_skip_misses_checked_at_idx ON listing_skip_misses (checked_at);
 
--- Lowest-priority work: mastery + rank for non-ladder players.
--- Only consumed when the higher-priority queues leave rate-limit budget unused.
+-- Lowest-priority work: mastery, and rank when the stored one is over 24 h old, for non-ladder
+-- players. Only consumed when the higher-priority work of the platform host leaves budget unused.
 -- A stored match queues its non-ladder players whose data is older than 7 days, and those without
 -- a mastery row for the champion they played whatever the age (see champion_masteries). Masteries,
--- rank and the removal from the queue are one transaction.
+-- rank (when fetched) and the removal from the queue are one transaction.
 CREATE TABLE player_enrichment_queue (
   puuid        text PRIMARY KEY REFERENCES players ON DELETE CASCADE,
   platform     platform    NOT NULL,
@@ -438,7 +478,7 @@ CREATE TABLE worker_status (
 CREATE TABLE diamond_tracking (
   platform           platform    PRIMARY KEY,
   target             integer     NOT NULL,
-  cycles             text        NOT NULL DEFAULT '',  -- outcome of the ladder cycles since the target last changed, oldest first, one letter each (96 at most): K kept up, P daily Master pass running, R recovering from it, W waiting for patch data, M missed
+  cycles             text        NOT NULL DEFAULT '',  -- outcome of the ladder cycles since the target last changed, oldest first, one letter each (96 at most): K kept up, W waiting for patch data, M missed (P and R, the cycles of the daily Master pass until 0032, are no longer written; read as neither)
   last_cycle_at      timestamptz,                      -- start of the last cycle in `cycles` (a cycle starting less than a ladder interval later is the same one: restart)
   settle_cycles_left smallint    NOT NULL DEFAULT 0,   -- after a growth step, the first start or a long stop: cycles left to absorb the burst; none is recorded meanwhile
   changed_at         timestamptz,                      -- last change of the target
@@ -448,6 +488,8 @@ CREATE TABLE diamond_tracking (
 );
 -- +1 step (500) when the last 24 cycles hold no M and at least 6 K; -1 step once 6 M since the
 -- last K; `cycles` starts over at each change (docs/architecture.md, Worker, the Diamond target).
+-- 0032 emptied `cycles` and set settle_cycles_left to 48: the cycles of the daily pass meant
+-- nothing under the new rules, and the first two days of checks are a burst of their own.
 ```
 
 ## Removed tables and columns
@@ -805,4 +847,4 @@ Before 0025–0028 it was ~62 KB/match plus ~8 GB of masteries whatever the numb
 
 A full patch is ~300k matches (every Master+ player of the four servers over two weeks) → ~7 GB. Two full patches, at the end of a patch and before the older one is deleted → **~13 GB**, plus the players (~0.1 GB). The stats refresh also needs temporary space while it runs: `stats_participants` no longer does (it wrote 14 GB of temporary files at 442k matches); the hash joins and aggregates of the other views still spill to disk (a few GB, not measured since). The disk must hold both. There is no backup.
 
-Low-priority enrichment volume: roughly 6–8 non-ladder players per match → tens of thousands of new players per region per patch, 2 requests each (mastery + rank). At leftover budget this takes a few days to catch up after the first run, then keeps pace. Since 0027 a first stored game on a champion asks for the player's masteries again (about 3 new (player, champion) pairs per stored match on production at 442k matches, fewer once a player's usual champions are known): one more mastery request for a tracked player, a mastery + rank pair for the others, at the same priorities.
+Low-priority enrichment volume: roughly 6–8 non-ladder players per match → tens of thousands of new players per region per patch, 2 requests each (mastery + rank), 1 since 0032 for the players whose rank the Diamond sweep or a check keeps fresh. At leftover budget this takes a few days to catch up after the first run, then keeps pace. Since 0027 a first stored game on a champion asks for the player's masteries again (about 3 new (player, champion) pairs per stored match on production at 442k matches, fewer once a player's usual champions are known): one more mastery request for a tracked player, a mastery + rank pair for the others, at the same priorities.

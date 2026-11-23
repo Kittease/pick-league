@@ -53,44 +53,57 @@ Master. Matches of better-placed players are always fetched first. The `masterTr
 Riot's budget for match requests (3,000 an hour per region) is spent in three strict tiers:
 
 1. the tracked Master+ players: those who played are listed and their matches fetched first;
-2. the Masters outside Riot's list (it stops at 10,000 players), found in stored matches: once a
-   day, from 04:00 local time of the server (after the evening peak), each of them is listed once
-   and the games found are fetched, whenever tier 1 has nothing waiting. `extraPass` in the
-   `progress` log shows whether the pass is still open, when it opened, how many players are left
-   and how many of their matches are waiting;
+2. the Masters outside Riot's list (it stops at 10,000 players), found in stored matches: Riot
+   gives no list for them, so the worker asks for each one's own win and loss counter, in
+   rotation, on the server's platform host (a separate budget of 3,000 requests an hour). Only
+   those whose counter moved are listed, and the games found are fetched, whenever tier 1 has
+   nothing waiting. `outsideMasters` in the `progress` log shows how many are followed, how many
+   were checked in the last hour, the age of the oldest check, how many wait for a listing and
+   how many of their matches are waiting;
 3. Diamond players, with what is left (see `DIAMOND_MAX_TRACKED`): nothing of theirs is listed or
-   fetched while tier 1 has work or tier 2 is not done.
+   fetched while tier 1 or tier 2 has something waiting. First the Diamond players seen in a
+   Master+ game in the last 7 days, then, once those have nothing waiting, the other Diamond I
+   players.
+
+The platform host serves, in this order: the ladder lists, the Diamond pages, the checks of the
+Masters outside Riot's list, the masteries of tracked players, then masteries and rank of the
+other players met in matches (which get what is left).
 
 Worker settings (in `.env`, applied with `docker compose up -d worker`):
 
 - `LISTING_SKIP` = `off` | `shadow` | `on`. A stored match holds about 6 tracked players, and each
   of them is asked for their match ids only to find that match again. With `on`, a tracked player
-  whose new games (ladder wins + losses) are all stored already is not asked; at least one real
-  listing per player every 24 hours stays. `shadow` runs every listing as before, counts what `on`
-  would have skipped (`listingsSkipped` in the `progress` log) and records in the
-  `listing_skip_misses` table the skipped listings that would have brought new match ids
+  whose new games (wins + losses on the ladder, or at the check of a Master outside Riot's list)
+  are all stored already is not asked; at least one real listing stays per player who plays,
+  every 24 hours for the Master+ players of Riot's lists, every 72 hours for the others. `shadow`
+  runs every listing as before, counts what `on` would have skipped (`listingsSkipped` in the
+  `progress` log) and records in the `listing_skip_misses` table the skipped listings that would
+  have brought new match ids
   (`listingSkipMisses`): run it first, then read that table. In both modes a player is listed only
   after the matches brought by better-placed players are stored.
 - `DIAMOND_MAX_TRACKED` = the most Diamond players the worker may track per server (0, the
   default: none, Diamond is not read). It is a ceiling, there to protect the disk: how many are
   tracked under it is a target the worker sizes by itself. With each hourly ladder refresh the
-  worker reads the Diamond divisions (a few hundred requests on the server's platform host, which
-  is mostly idle) and tracks the best candidates, as many as the target: first the Diamond players
-  seen in a Master+ game in the last 7 days, then all the others, each group by division (I down
-  to IV) then LP. The target grows by 500 after a full day (24 hourly cycles) in which the worker
+  worker reads the Diamond divisions (a few hundred requests on the server's platform host,
+  served right after the ladder lists) and tracks the best candidates, as many as the target: first the Diamond players
+  seen in a Master+ game in the last 7 days (by division, I down to IV, then LP), then the other
+  Diamond I players by LP; nobody else. The target grows by 500 after a full day (24 hourly cycles) in which the worker
   kept up, that is, in which everything of the three tiers was listed and fetched at least once
-  in each hour, the hours of the daily Master pass and the three after it aside; it shrinks by 500
+  in each hour; it shrinks by 500
   (the last candidates leave, their stored matches stay) once six hours were missed since the
   last one kept up with. A step up first brings the new players' matches of the patch: until that
   burst is absorbed (a day at most) hours are not counted. Their matches are collected like
   everyone's, so Diamond lobbies enter the statistics. `diamond` in the `progress` log shows the
   players seen per division, the target, those tracked, the ceiling, the last hours (`cycles`:
-  `K` kept up, `P` Master pass, `R` recovering from it, `W` waiting for patch data, `M` missed)
+  `K` kept up, `W` waiting for patch data, `M` missed)
   and the last change of the target with its reason.
-- `UNTRACKED_MASTER_LISTING_START_HOUR` = the local hour (0 to 23, default 4) at which the daily
-  pass over the Masters outside Riot's list opens on each server. Local time is a fixed offset
-  from UTC (KR +9, VN2 +7, EUW1 +1, NA1 -6): no daylight saving, so the pass opens an hour later
-  by the clock in summer on EUW1 and NA1.
+- `OUTSIDE_MASTER_CHECKS_PER_HOUR` = the most checks per hour and per server of the Masters
+  outside Riot's list (default 1500; 0: they are not followed). At 1,500 each of the 23,000 such
+  players of KR or EUW1 is checked about every 16 hours (every 3 hours on NA1 and VN2). The
+  checks go before masteries and ranks on the platform host: a higher number checks more often
+  and leaves less for those (about 800 requests an hour on KR at 1,500).
+- `MASTERY_REFRESH_DAYS` = how old the masteries of a tracked player may get before they are
+  fetched again (default 3; a first stored game on a champion fetches them at once).
 
 ### Operations
 
