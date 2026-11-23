@@ -23,6 +23,7 @@ import {
   ladderPuuid,
   makeMatch,
   NOW,
+  soloEntry,
   staticPatch,
 } from './test-helpers.ts';
 
@@ -214,7 +215,7 @@ d('PlatformWorker (Postgres)', () => {
       VALUES (${puuid}, 'EUW1', ${tier}::solo_tier, ${division}, ${lp})`;
   };
 
-  test('untracked players are listed only once every Master player is tracked and the queues are nearly empty', async () => {
+  test('outside Masters are listed only once every Master player is tracked and the queues are nearly empty', async () => {
     riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
     riot.leagues.MASTER.entries = [master(100)];
     /** A worker that restarted with nothing left to list (its listings were done by `w`). */
@@ -231,29 +232,29 @@ d('PlatformWorker (Postgres)', () => {
       return r;
     };
     const w = await restarted();
-    expect(await w.canListExtraPlayers()).toBe(false);
+    expect(await w.canListOutsideMasters()).toBe(false);
     await w.listPlayerMatches(ladderPuuid(0));
     // One Master player of Riot's list is not tracked yet: track more Masters first.
     let idle = await restarted();
     expect(await idle.canTrackMoreMasters()).toBe(true);
-    expect(await idle.canListExtraPlayers()).toBe(false);
+    expect(await idle.canListOutsideMasters()).toBe(false);
 
     await w.refreshLadder(undefined, 1);
     await w.listPlayerMatches('fake-master-100');
     idle = await restarted();
     expect(await idle.canTrackMoreMasters()).toBe(false);
-    expect(await idle.canListExtraPlayers()).toBe(true);
+    expect(await idle.canListOutsideMasters()).toBe(true);
 
     // Matches of Diamond players, and retried ones at the back of the queue, hold nothing back.
     await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000011', 'EUW1_7000000012'], DIAMOND_FETCH_RANK);
     await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000021', 'EUW1_7000000022']);
-    expect(await idle.canListExtraPlayers()).toBe(true);
+    expect(await idle.canListOutsideMasters()).toBe(true);
     // Too many matches of the tracked apex players waiting: they come first.
     await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000001', 'EUW1_7000000002'], 1);
-    expect(await idle.canListExtraPlayers()).toBe(false);
+    expect(await idle.canListOutsideMasters()).toBe(false);
   });
 
-  test('start(): untracked players are listed highest ranked first, at the lowest priority, their matches queued last', async () => {
+  test('start(): Master+ players outside the ladder are checked on the platform host; those never listed get a first listing, after the tracked players, their matches queued after theirs', async () => {
     riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
     riot.leagues.MASTER.entries = [master(100)];
     await untracked('fake-extra-master-50', 'MASTER', 50, null);
@@ -261,16 +262,20 @@ d('PlatformWorker (Postgres)', () => {
     await untracked('fake-extra-master-80', 'MASTER', 80, null);
     await untracked('fake-extra-diamond', 'DIAMOND', 90, 1);
     await untracked('fake-extra-recent', 'MASTER', 70, null);
-    await untracked('fake-extra-ladder-dropout', 'MASTER', 60, null);
-    // NOW is 13:00 on EUW1: today's pass opened at 04:00 local time, nine hours ago.
-    // Listed since then: not again today.
+    await untracked('fake-extra-old', 'MASTER', 60, null);
+    for (const p of ['master-50', 'master-80', 'recent', 'old']) {
+      riot.leagueEntries.set(`fake-extra-${p}`, [soloEntry(`fake-extra-${p}`, 'MASTER', 200)]);
+    }
+    riot.leagueEntries.set('fake-extra-gm', [soloEntry('fake-extra-gm', 'GRANDMASTER', 300)]);
+    // Listed seven hours ago (by the daily pass of the previous version): the first check is
+    // their starting counter, nothing is listed.
     await db`
       UPDATE players SET matches_synced_until = ${new Date(NOW - 7 * 3_600_000)}
       WHERE puuid = 'fake-extra-recent'`;
-    // Last listed yesterday evening: due.
+    // Last listed four days ago: listed once.
     await db`
-      UPDATE players SET matches_synced_until = ${new Date(NOW - 12 * 3_600_000)}
-      WHERE puuid = 'fake-extra-ladder-dropout'`;
+      UPDATE players SET matches_synced_until = ${new Date(NOW - 4 * DAY)}
+      WHERE puuid = 'fake-extra-old'`;
     riot.matchIds.set(ladderPuuid(0), ['EUW1_7000000900']);
     riot.matchIds.set('fake-extra-gm', ['EUW1_7000000910', 'EUW1_7000000900']);
     const w = new PlatformWorker({
@@ -283,26 +288,39 @@ d('PlatformWorker (Postgres)', () => {
         idleMs: 10,
         expansionCheckMs: 10,
         expandBelowPendingMatches: 5,
-        concurrency: { listing: 1, match: 0, daily: 0, enrichment: 0, extraListing: 1 },
+        concurrency: {
+          listing: 1,
+          match: 0,
+          daily: 0,
+          enrichment: 0,
+          outsideCheck: 1,
+          outsideListing: 1,
+        },
       },
     });
     const ac = new AbortController();
     const running = w.start(ac.signal);
-    for (let i = 0; i < 200 && !riot.calls.includes('ids:fake-extra-master-50:0'); i++) {
+    for (let i = 0; i < 200 && !riot.calls.includes('ids:fake-extra-old:0'); i++) {
       await Bun.sleep(10);
     }
     await Bun.sleep(50);
     ac.abort();
     await running;
 
+    // One check each, in rotation (nobody was checked before: by player id), at the priority
+    // of the checks; the Diamond player is not one of them.
+    expect(riot.calls.filter((c) => c.startsWith('entries:'))).toEqual(
+      ['gm', 'master-50', 'master-80', 'old', 'recent'].map(
+        (p) => `entries:fake-extra-${p}:${PRIORITY.OUTSIDE_MASTER_CHECK}`,
+      ),
+    );
     const ids = riot.calls.filter((c) => c.startsWith('ids:'));
-    expect(ids).toEqual([
-      `ids:${ladderPuuid(0)}:0`,
-      'ids:fake-master-100:0',
+    expect(ids.slice(0, 2)).toEqual([`ids:${ladderPuuid(0)}:0`, 'ids:fake-master-100:0']);
+    expect(ids.slice(2).sort()).toEqual([
       'ids:fake-extra-gm:0',
-      'ids:fake-extra-master-80:0',
-      'ids:fake-extra-ladder-dropout:0',
       'ids:fake-extra-master-50:0',
+      'ids:fake-extra-master-80:0',
+      'ids:fake-extra-old:0',
     ]);
     expect(riot.idQueries.map((q) => q.priority)).toEqual([
       undefined,
@@ -312,8 +330,8 @@ d('PlatformWorker (Postgres)', () => {
       PRIORITY.EXTRA_MATCH_IDS,
       PRIORITY.EXTRA_MATCH_IDS,
     ]);
-    // A match an untracked player shares with a tracked one keeps the tracked player's rank; their
-    // other matches go to the band after every apex player's.
+    // A match an outside Master shares with a tracked player keeps the tracked player's rank;
+    // their other matches go to the band after every apex player's.
     const queued = await db<{ match_id: string; fetch_rank: number }[]>`
       SELECT match_id, fetch_rank FROM match_fetch_queue ORDER BY match_id`;
     expect([...queued]).toEqual([
@@ -321,11 +339,14 @@ d('PlatformWorker (Postgres)', () => {
       { match_id: 'EUW1_7000000910', fetch_rank: EXTRA_FETCH_RANK },
     ]);
     expect(await w.progress()).toMatchObject({
+      outsideMasterChecks: 5,
       extraPlayersPolled: 4,
-      extraPass: {
-        open: false,
-        openedAt: '2026-11-13T03:00:00.000Z',
-        remaining: 0,
+      outsideMasters: {
+        followed: 5,
+        checkedLastHour: 5,
+        neverChecked: 0,
+        oldestCheckMinutes: 0,
+        toList: 0,
         matchesWaiting: 1,
       },
     });

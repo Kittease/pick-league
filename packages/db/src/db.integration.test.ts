@@ -10,18 +10,18 @@ import {
   clearWorkerAuthRejected,
   completeEnrichment,
   countEnrichmentQueue,
-  countExtraListingCandidates,
   countPendingMatchesInBand,
   countStoredGamesEndedBetween,
   DIAMOND_FETCH_RANK,
+  DIAMOND_ONE_FETCH_RANK,
   deferMatch,
   deferMatchAfterError,
+  deferOutsideMasterCheck,
   deleteOldPatches,
   EXTRA_FETCH_RANK,
   enqueueEnrichment,
   enqueueMatchIds,
   enqueueNewMatchIds,
-  extraListingCandidates,
   failEnrichment,
   finishListing,
   finishWorkerRun,
@@ -29,6 +29,8 @@ import {
   getLatestPatch,
   getListingSkipState,
   getMatchesSyncedUntil,
+  getOutsideMasterSkipState,
+  getRankRefreshedAt,
   hasPendingMatchBefore,
   insertParsedMatch,
   ladderOrder,
@@ -40,6 +42,9 @@ import {
   markMatchSkipped,
   markWorkerAuthRejected,
   migrate,
+  outsideMasterStats,
+  outsideMastersToCheck,
+  outsideMastersToList,
   pickProbeMatch,
   playersNeedingDailyRefresh,
   playersSeenWithMasterSince,
@@ -47,15 +52,19 @@ import {
   purgeOrphanPlayers,
   QUEUE_BACK_RANK,
   recordListingSkipMiss,
+  recordOutsideMasterCheck,
   recordWorkerError,
   replaceMasteries,
   saveDiamondTracking,
   setListingBaseline,
   setMatchesSyncedUntil,
+  setOutsideMasterBaseline,
   skipPendingMatchesUpTo,
   startWorkerRun,
+  syncOutsideMasters,
   touchWorkerStatus,
   trackedDiamondEntries,
+  updateKnownPlayerRanks,
   updatePlayerRank,
   upsertDiamondLadder,
   upsertLadder,
@@ -458,13 +467,18 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       );
       expect(first.added.sort()).toEqual([d1, d2, d3]);
       expect(first.played.sort()).toEqual([d1, d2, d3]);
+      const notSeen = { lastSeenWithMasterAt: null };
       expect(await ladderOrder(db, 'EUW1')).toEqual([
-        { puuid: ch, tier: 'CHALLENGER', division: null, leaguePoints: 1 },
-        { puuid: promoted, tier: 'CHALLENGER', division: null, leaguePoints: 1 },
-        { puuid: d3, tier: 'DIAMOND', division: 1, leaguePoints: 50 },
-        { puuid: d1, tier: 'DIAMOND', division: 1, leaguePoints: 10 },
-        { puuid: d2, tier: 'DIAMOND', division: 2, leaguePoints: 90 },
+        { puuid: ch, tier: 'CHALLENGER', division: null, leaguePoints: 1, ...notSeen },
+        { puuid: promoted, tier: 'CHALLENGER', division: null, leaguePoints: 1, ...notSeen },
+        { puuid: d3, tier: 'DIAMOND', division: 1, leaguePoints: 50, ...notSeen },
+        { puuid: d1, tier: 'DIAMOND', division: 1, leaguePoints: 10, ...notSeen },
+        { puuid: d2, tier: 'DIAMOND', division: 2, leaguePoints: 90, ...notSeen },
       ]);
+      // Each row says when the player was last seen in a Master+ game.
+      await db`UPDATE players SET last_seen_with_master_at = ${t(4)} WHERE puuid = ${d2}`;
+      const seen = (await ladderOrder(db, 'EUW1')).filter((r) => r.lastSeenWithMasterAt !== null);
+      expect(seen.map((r) => [r.puuid, r.lastSeenWithMasterAt])).toEqual([[d2, t(4)]]);
       const [player] = await db`
         SELECT solo_tier, solo_division, solo_lp, listing_requested_at, rank_refreshed_at
         FROM players WHERE puuid = ${d2}`;
@@ -587,30 +601,44 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       expect(await hasPendingMatchBefore(db, 'EUW1', 6)).toBe(false);
     });
 
-    test('fetch_rank bands: apex players, then outside Masters, then Diamond players; the Diamond band can be left out', async () => {
+    test('fetch_rank bands: apex players, then outside Masters, then Diamond players; the Diamond bands can be left out', async () => {
       await enqueueMatchIds(db, 'EUW1', ['EUW1_1'], DIAMOND_FETCH_RANK + 7);
       await enqueueMatchIds(db, 'EUW1', ['EUW1_2'], EXTRA_FETCH_RANK);
       await enqueueMatchIds(db, 'EUW1', ['EUW1_3']); // at the back
       await enqueueMatchIds(db, 'EUW1', ['EUW1_4'], 9000);
       await enqueueMatchIds(db, 'EUW1', ['EUW1_5'], DIAMOND_FETCH_RANK);
+      await enqueueMatchIds(db, 'EUW1', ['EUW1_6'], DIAMOND_ONE_FETCH_RANK + 2);
       await enqueueMatchIds(db, 'KR', ['KR_1'], 0);
       expect(await claimPendingMatches(db, 'EUW1', 10)).toEqual([
         { matchId: 'EUW1_4', platform: 'EUW1', attempts: 0, fetchRank: 9000 },
         { matchId: 'EUW1_2', platform: 'EUW1', attempts: 0, fetchRank: EXTRA_FETCH_RANK },
         { matchId: 'EUW1_5', platform: 'EUW1', attempts: 0, fetchRank: DIAMOND_FETCH_RANK },
         { matchId: 'EUW1_1', platform: 'EUW1', attempts: 0, fetchRank: DIAMOND_FETCH_RANK + 7 },
+        { matchId: 'EUW1_6', platform: 'EUW1', attempts: 0, fetchRank: DIAMOND_ONE_FETCH_RANK + 2 },
         { matchId: 'EUW1_3', platform: 'EUW1', attempts: 0, fetchRank: QUEUE_BACK_RANK },
       ]);
       // Not the Diamond players' turn: their matches stay, the back of the queue does not wait.
-      const claimed = await claimPendingMatches(db, 'EUW1', 10, { withoutDiamond: true });
+      const claimed = await claimPendingMatches(db, 'EUW1', 10, { heldFrom: DIAMOND_FETCH_RANK });
       expect(claimed.map((c) => c.matchId)).toEqual(['EUW1_4', 'EUW1_2', 'EUW1_3']);
+      // The Diamond players seen in a Master+ game have work left: only the Diamond I band waits.
+      const withoutOne = await claimPendingMatches(db, 'EUW1', 10, {
+        heldFrom: DIAMOND_ONE_FETCH_RANK,
+      });
+      expect(withoutOne.map((c) => c.matchId)).toEqual([
+        'EUW1_4',
+        'EUW1_2',
+        'EUW1_5',
+        'EUW1_1',
+        'EUW1_3',
+      ]);
 
       const inBand = (from: number, below?: number, limit = 10) =>
         countPendingMatchesInBand(db, 'EUW1', { from, below }, limit);
       expect(await inBand(0, EXTRA_FETCH_RANK)).toBe(1);
       expect(await inBand(0, DIAMOND_FETCH_RANK)).toBe(2);
       expect(await inBand(EXTRA_FETCH_RANK, DIAMOND_FETCH_RANK)).toBe(1);
-      expect(await inBand(0, QUEUE_BACK_RANK)).toBe(4);
+      expect(await inBand(0, DIAMOND_ONE_FETCH_RANK)).toBe(4);
+      expect(await inBand(0, QUEUE_BACK_RANK)).toBe(5);
       expect(await inBand(QUEUE_BACK_RANK)).toBe(1);
       expect(await inBand(0, QUEUE_BACK_RANK, 3)).toBe(3);
       await markMatchDone(db, 'EUW1_4');
@@ -1148,7 +1176,7 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       expect(await getDiamondTracking(db, 'EUW1')).toBeNull();
     });
 
-    test('outside Masters due for a listing: not listed since a given time, highest rank first', async () => {
+    test('outside Masters: the Master+ players on no ladder, checked in rotation', async () => {
       const t = (hour: number) => new Date(Date.UTC(2026, 10, 13, hour));
       await db`
         INSERT INTO players (puuid, platform, solo_tier, solo_lp, matches_synced_until) VALUES
@@ -1162,14 +1190,185 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
       await upsertLadder(db, 'EUW1', [
         { puuid: fakePuuid(5), tier: 'MASTER', leaguePoints: 90, wins: 1, losses: 1 },
       ]);
-      const due = { minTier: 'MASTER' as const, syncedBefore: t(3) };
-      expect(await extraListingCandidates(db, 'EUW1', { ...due, limit: 10 })).toEqual([
+      expect(await syncOutsideMasters(db, 'EUW1')).toEqual({ added: 3, removed: 0 });
+      expect(await syncOutsideMasters(db, 'EUW1')).toEqual({ added: 0, removed: 0 });
+      const toCheck = (at: Date, limit = 10) =>
+        outsideMastersToCheck(db, 'EUW1', { checkedBefore: at, limit });
+      // Never checked: by player id.
+      expect(await toCheck(t(6))).toEqual([fakePuuid(1), fakePuuid(2), fakePuuid(3)]);
+      expect(await outsideMastersToCheck(db, 'KR', { checkedBefore: t(6), limit: 10 })).toEqual([]);
+
+      const master = (games: number) => ({
+        tier: 'MASTER' as const,
+        division: null,
+        lp: 10,
+        wins: games,
+        losses: 0,
+      });
+      const check = (n: number, games: number, hour: number, listedSince = t(0)) =>
+        recordOutsideMasterCheck(db, fakePuuid(n), master(games), {
+          now: t(hour),
+          listedSince,
+        });
+      const requested = async (n: number) =>
+        (await db`SELECT listing_requested_at FROM players WHERE puuid = ${fakePuuid(n)}`)[0]
+          ?.listing_requested_at as Date | null;
+
+      // First checks: a player listed since `listedSince` only gets a starting counter; one
+      // never listed, or not since, gets a listing.
+      expect(await check(1, 100, 6)).toBe('first');
+      expect(await requested(1)).toBeNull();
+      expect(await check(2, 200, 7)).toBe('first-listing');
+      expect(await requested(2)).toEqual(t(7));
+      expect(await check(3, 300, 8, t(6))).toBe('first-listing');
+      expect(await requested(3)).toEqual(t(8));
+      // The rank the check saw is stored.
+      const [rank] = await db`
+        SELECT solo_tier, solo_lp, solo_wins, rank_refreshed_at FROM players
+        WHERE puuid = ${fakePuuid(1)}`;
+      expect(rank).toEqual({
+        solo_tier: 'MASTER',
+        solo_lp: 10,
+        solo_wins: 100,
+        rank_refreshed_at: t(6),
+      });
+      expect(await getRankRefreshedAt(db, fakePuuid(1))).toEqual(t(6));
+      expect(await getRankRefreshedAt(db, fakePuuid(4))).toBeNull();
+
+      // The rotation: least recently checked first, nobody again before `checkedBefore`.
+      expect(await toCheck(t(9))).toEqual([fakePuuid(1), fakePuuid(2), fakePuuid(3)]);
+      expect(await toCheck(t(7))).toEqual([fakePuuid(1), fakePuuid(2)]);
+      expect(await toCheck(t(9), 1)).toEqual([fakePuuid(1)]);
+      // A failed check sends the player to the back, counter untouched.
+      await deferOutsideMasterCheck(db, fakePuuid(1), t(9));
+      expect(await toCheck(t(10))).toEqual([fakePuuid(2), fakePuuid(3), fakePuuid(1)]);
+
+      // The counter did not move: only the time of the check. It moved: a listing is requested,
+      // and the check is the snapshot of the new counter.
+      expect(await check(1, 100, 10)).toBe('unchanged');
+      expect(await requested(1)).toBeNull();
+      expect(await getOutsideMasterSkipState(db, fakePuuid(1))).toEqual({
+        gamesNow: 100,
+        snapshotAt: t(6),
+        listedGames: null,
+        listedSnapshotAt: null,
+        listedAt: null,
+      });
+      expect(await check(1, 102, 11)).toBe('played');
+      expect(await requested(1)).toEqual(t(11));
+      await setOutsideMasterBaseline(db, fakePuuid(1), {
+        games: 102,
+        snapshotAt: t(11),
+        listedAt: t(12),
+      });
+      expect(await getOutsideMasterSkipState(db, fakePuuid(1))).toEqual({
+        gamesNow: 102,
+        snapshotAt: t(11),
+        listedGames: 102,
+        listedSnapshotAt: t(11),
+        listedAt: t(12),
+      });
+      // Not one of them, or never checked: nothing to read.
+      expect(await getOutsideMasterSkipState(db, fakePuuid(5))).toBeNull();
+
+      // Waiting for a listing: oldest request first.
+      expect(await outsideMastersToList(db, 'EUW1', 10)).toEqual([
         fakePuuid(2),
+        fakePuuid(3),
         fakePuuid(1),
       ]);
-      expect(await countExtraListingCandidates(db, 'EUW1', due)).toBe(2);
-      expect(await countExtraListingCandidates(db, 'EUW1', { ...due, syncedBefore: t(6) })).toBe(3);
-      expect(await countExtraListingCandidates(db, 'KR', due)).toBe(1);
+      expect(await outsideMasterStats(db, 'EUW1', t(8))).toEqual({
+        followed: 3,
+        checkedSince: 2,
+        neverChecked: 0,
+        oldestCheckAt: t(7),
+        toList: 3,
+      });
+
+      // No longer Master: out, with their listing request; their new rank is stored.
+      const diamond = { tier: 'DIAMOND' as const, division: 1, lp: 80, wins: 201, losses: 0 };
+      expect(
+        await recordOutsideMasterCheck(db, fakePuuid(2), diamond, {
+          now: t(13),
+          listedSince: t(0),
+        }),
+      ).toBe('left');
+      expect(await requested(2)).toBeNull();
+      expect(await outsideMastersToList(db, 'EUW1', 10)).toEqual([fakePuuid(3), fakePuuid(1)]);
+      const [left] =
+        await db`SELECT solo_tier, solo_division FROM players WHERE puuid = ${fakePuuid(2)}`;
+      expect(left).toEqual({ solo_tier: 'DIAMOND', solo_division: 1 });
+      // Unranked: out as well.
+      expect(
+        await recordOutsideMasterCheck(db, fakePuuid(3), null, { now: t(13), listedSince: t(0) }),
+      ).toBe('left');
+
+      // Picked up by Riot's list: the ladder follows them, their row goes with the next sync and
+      // a check that was on its way changes nothing. A player who left the ladder comes in.
+      await upsertLadder(db, 'EUW1', [
+        { puuid: fakePuuid(1), tier: 'MASTER', leaguePoints: 95, wins: 103, losses: 0 },
+      ]);
+      expect(await syncOutsideMasters(db, 'EUW1')).toEqual({ added: 1, removed: 1 });
+      expect(await check(1, 110, 14)).toBe('gone');
+      const [kept] = await db`SELECT solo_wins FROM players WHERE puuid = ${fakePuuid(1)}`;
+      expect(kept).toEqual({ solo_wins: 103 });
+      expect(await toCheck(t(15))).toEqual([fakePuuid(5)]);
+      expect((await outsideMasterStats(db, 'EUW1', t(8))).neverChecked).toBe(1);
+    });
+
+    test('ranks of a Diamond page: stored for the players already known, only when something changed or the rank got old', async () => {
+      const t = (hour: number) => new Date(Date.UTC(2026, 10, 13, hour));
+      await db`
+        INSERT INTO players (puuid, platform, solo_tier, solo_division, solo_lp, solo_wins,
+                             solo_losses, rank_refreshed_at) VALUES
+          (${fakePuuid(1)}, 'EUW1', NULL, NULL, NULL, NULL, NULL, NULL),
+          (${fakePuuid(2)}, 'EUW1', 'DIAMOND', 2, 40, 10, 5, ${t(1)}),
+          (${fakePuuid(3)}, 'EUW1', 'MASTER', NULL, 12, 30, 5, ${t(1)}),
+          (${fakePuuid(4)}, 'EUW1', 'EMERALD', 1, 99, 30, 5, ${t(9)}),
+          (${fakePuuid(5)}, 'EUW1', 'DIAMOND', 1, 10, 1, 1, ${t(1)}),
+          (${fakePuuid(6)}, 'KR', 'DIAMOND', 1, 10, 1, 1, ${t(1)})`;
+      // A tracked apex player a Diamond page still names: their ladder owns their rank.
+      await upsertLadder(
+        db,
+        'EUW1',
+        [{ puuid: fakePuuid(5), tier: 'MASTER', leaguePoints: 5, wins: 2, losses: 1 }],
+        t(1),
+      );
+      const page = [1, 2, 3, 4, 5, 6, 7].map((n) => ({
+        puuid: fakePuuid(n),
+        division: 2,
+        leaguePoints: 40,
+        wins: 10,
+        losses: 5,
+      }));
+      // Seen at 03:00; ranks refreshed before 02:00 are touched even when nothing changed.
+      expect(await updateKnownPlayerRanks(db, 'EUW1', page, t(3), t(2))).toBe(3);
+      const ranks = async () =>
+        Object.fromEntries(
+          (
+            await db<{ puuid: string; solo_tier: string; d: number | null; at: Date }[]>`
+              SELECT puuid, solo_tier, solo_division AS d, rank_refreshed_at AS at FROM players
+              ORDER BY puuid`
+          ).map((r) => [r.puuid, [r.solo_tier, r.d, r.at]]),
+        );
+      expect(await ranks()).toEqual({
+        // Never ranked, and a Master who dropped: stored.
+        [fakePuuid(1)]: ['DIAMOND', 2, t(3)],
+        [fakePuuid(3)]: ['DIAMOND', 2, t(3)],
+        // Same rank, refreshed before `touchBefore`: only the time moves.
+        [fakePuuid(2)]: ['DIAMOND', 2, t(3)],
+        // A rank refreshed after the page was read stays.
+        [fakePuuid(4)]: ['EMERALD', 1, t(9)],
+        // The apex ladder's, another platform's, and a player who is not stored (not created).
+        [fakePuuid(5)]: ['MASTER', null, t(1)],
+        [fakePuuid(6)]: ['DIAMOND', 1, t(1)],
+      });
+      // An hour later nothing changed and every rank is recent: nothing is written.
+      expect(await updateKnownPlayerRanks(db, 'EUW1', page, t(4), t(2))).toBe(0);
+      // A player who played since: written.
+      const played = page.map((e) => (e.puuid === fakePuuid(2) ? { ...e, wins: 11 } : e));
+      expect(await updateKnownPlayerRanks(db, 'EUW1', played, t(5), t(2))).toBe(1);
+      expect(await updateKnownPlayerRanks(db, 'EUW1', [], t(5), t(2))).toBe(0);
     });
   });
 });

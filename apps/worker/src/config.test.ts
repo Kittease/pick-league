@@ -64,24 +64,48 @@ describe('loadConfig: DIAMOND_MAX_TRACKED', () => {
   });
 });
 
-describe('loadConfig: UNTRACKED_MASTER_LISTING_START_HOUR', () => {
-  test.each([undefined, '', '4'])('4 in the morning with %p', (value) => {
-    const config = loadConfig({ ...VALID, UNTRACKED_MASTER_LISTING_START_HOUR: value });
-    expect(config.untrackedMasterListingStartHour).toBe(4);
+describe('loadConfig: OUTSIDE_MASTER_CHECKS_PER_HOUR', () => {
+  test.each([undefined, '', '1500'])('1,500 an hour with %p', (value) => {
+    const config = loadConfig({ ...VALID, OUTSIDE_MASTER_CHECKS_PER_HOUR: value });
+    expect(config.outsideMasterChecksPerHour).toBe(1500);
   });
 
   test.each([
     ['0', 0],
-    [' 3 ', 3],
-    ['23', 23],
-  ])('%p is that hour', (value, hour) => {
-    const config = loadConfig({ ...VALID, UNTRACKED_MASTER_LISTING_START_HOUR: value });
-    expect(config.untrackedMasterListingStartHour).toBe(hour);
+    [' 800 ', 800],
+    ['3000', 3000],
+  ])('%p is that many', (value, checks) => {
+    const config = loadConfig({ ...VALID, OUTSIDE_MASTER_CHECKS_PER_HOUR: value });
+    expect(config.outsideMasterChecksPerHour).toBe(checks);
   });
 
-  test.each(['24', '-1', '3.5', '4am', '100'])('%p is a configuration error', (value) => {
-    const load = () => loadConfig({ ...VALID, UNTRACKED_MASTER_LISTING_START_HOUR: value });
+  test.each(['3001', '-1', '2.5', 'all', '10000'])('%p is a configuration error', (value) => {
+    const load = () => loadConfig({ ...VALID, OUTSIDE_MASTER_CHECKS_PER_HOUR: value });
     expect(load).toThrow(ConfigError);
-    expect(load).toThrow(/UNTRACKED_MASTER_LISTING_START_HOUR/);
+    expect(load).toThrow(/OUTSIDE_MASTER_CHECKS_PER_HOUR/);
+  });
+});
+
+describe('loadConfig: MASTERY_REFRESH_DAYS', () => {
+  test.each([undefined, '', '3'])('3 days with %p', (value) => {
+    expect(loadConfig({ ...VALID, MASTERY_REFRESH_DAYS: value }).masteryRefreshDays).toBe(3);
+  });
+
+  test('a number of days', () => {
+    expect(loadConfig({ ...VALID, MASTERY_REFRESH_DAYS: ' 1 ' }).masteryRefreshDays).toBe(1);
+    expect(loadConfig({ ...VALID, MASTERY_REFRESH_DAYS: '7' }).masteryRefreshDays).toBe(7);
+  });
+
+  test.each(['0', '-1', '1.5', 'daily', '1000'])('%p is a configuration error', (value) => {
+    const load = () => loadConfig({ ...VALID, MASTERY_REFRESH_DAYS: value });
+    expect(load).toThrow(ConfigError);
+    expect(load).toThrow(/MASTERY_REFRESH_DAYS/);
+  });
+});
+
+describe('loadConfig: the daily pass is gone', () => {
+  test('its start hour, still set in an old .env, is ignored', () => {
+    const config = loadConfig({ ...VALID, UNTRACKED_MASTER_LISTING_START_HOUR: 'whatever' });
+    expect(config).not.toHaveProperty('untrackedMasterListingStartHour');
   });
 });

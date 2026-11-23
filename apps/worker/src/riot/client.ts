@@ -33,28 +33,39 @@ import { HostLimiter, type HostLimiterOptions, type HostLimiterStats } from './r
 
 /**
  * Priority levels of docs/architecture.md (higher = served first). Each host serves its own
- * waiting requests in this order: the platform hosts get the ladders, the Diamond sweep,
- * masteries and rank lookups; the regional hosts get every match-v5 request, in the order of the
- * three tiers (apex players, Masters outside Riot's list, Diamond players).
+ * waiting requests in this order. The platform hosts: the ladder lists (5), the Diamond sweep
+ * (4), the checks of the Masters outside Riot's list (3), the mastery refresh of tracked players
+ * (2), enrichment (1). The regional hosts get every match-v5 request, in the order of the three
+ * tiers (apex players, Masters outside Riot's list, Diamond players).
  */
 export const PRIORITY = {
   LADDER: 5,
   /**
-   * Pages of the Diamond sweep, on the platform host: after the apex ladders, before the
-   * masteries and rank lookups of the same host (the sweep decides who played).
+   * Pages of the Diamond sweep, on the platform host: after the apex ladders, before everything
+   * else of the same host (the sweep decides who played for 205 players a request).
    */
   DIAMOND_SWEEP: 4,
+  /**
+   * The solo queue entry of one Master outside Riot's list, on the platform host: it decides
+   * who played for one player a request, so after the lists and the sweep, and before the
+   * masteries and rank lookups below (the worker caps how many it asks for an hour).
+   */
+  OUTSIDE_MASTER_CHECK: 3,
   /** Tier 1: listings of the tracked apex players, then their matches (and every timeline). */
   MATCH_IDS: 4,
   MATCH: 3,
+  /** The mastery refresh of tracked players, then enrichment (platform host). */
   DAILY_REFRESH: 2,
   ENRICHMENT: 1,
-  /** Tier 2: the matches found by listing a Master outside Riot's list, then those blind listings. */
+  /** Tier 2: the matches found by listing a Master outside Riot's list, then those listings. */
   EXTRA_MATCH: 0,
   EXTRA_MATCH_IDS: -1,
-  /** Tier 3: listings of the tracked Diamond players, then their matches. */
+  /** Tier 3a: listings of the Diamond players seen in a Master+ game, then their matches. */
   DIAMOND_MATCH_IDS: -2,
   DIAMOND_MATCH: -3,
+  /** Tier 3b: listings of the other tracked Diamond I players, then their matches. */
+  DIAMOND_ONE_MATCH_IDS: -4,
+  DIAMOND_ONE_MATCH: -5,
 } as const;
 export type Priority = (typeof PRIORITY)[keyof typeof PRIORITY];
 

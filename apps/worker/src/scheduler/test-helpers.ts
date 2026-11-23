@@ -74,6 +74,29 @@ export function makeTimedMatch(
   return m;
 }
 
+/** The solo queue entry of a player, as league-v4 entries/by-puuid gives it. */
+export function soloEntry(
+  puuid: string,
+  tier: LeagueEntryDto['tier'],
+  games: number,
+  leaguePoints = 50,
+  rank: Division = 'I',
+): LeagueEntryDto {
+  return {
+    puuid,
+    queueType: 'RANKED_SOLO_5x5',
+    tier,
+    rank,
+    leaguePoints,
+    wins: games,
+    losses: 0,
+    hotStreak: false,
+    veteran: false,
+    freshBlood: false,
+    inactive: false,
+  };
+}
+
 /** A solo queue entry of a Diamond division page. */
 export function diamondEntry(
   puuid: string,
@@ -177,6 +200,11 @@ export class FakeRiot implements RiotApi {
       championPointsUntilNextLevel: 0,
     }));
   }
+  /** Solo queue entries of given players (the others are Diamond II, 190 games). */
+  leagueEntries = new Map<string, LeagueEntryDto[]>();
+  /** When set, the solo queue entry requests wait for it (after recording the call). */
+  entriesGate: Promise<void> | null = null;
+
   async getLeagueEntries(
     _p: Platform,
     puuid: string,
@@ -184,6 +212,9 @@ export class FakeRiot implements RiotApi {
   ): Promise<LeagueEntryDto[]> {
     this.calls.push(`entries:${puuid}:${priority}`);
     this.maybeThrow(`entries:${puuid}`);
+    if (this.entriesGate) await this.entriesGate;
+    const own = this.leagueEntries.get(puuid);
+    if (own) return own;
     return [
       {
         puuid,

@@ -255,6 +255,8 @@ describe('RiotClient', () => {
     const { client, clock, calls } = setup(() => json([]), { appLimit: '1:1' });
     await client.getMatch('EUW1', 'EUW1_1');
     // Asked for in the reverse order.
+    client.getMatch('EUW1', 'EUW1_11', undefined, PRIORITY.DIAMOND_ONE_MATCH);
+    client.getMatchIds('EUW1', 'diamond-one', { priority: PRIORITY.DIAMOND_ONE_MATCH_IDS });
     client.getMatch('EUW1', 'EUW1_9', undefined, PRIORITY.DIAMOND_MATCH);
     client.getMatchIds('EUW1', 'diamond', { priority: PRIORITY.DIAMOND_MATCH_IDS });
     client.getMatchIds('EUW1', 'outside', { priority: PRIORITY.EXTRA_MATCH_IDS });
@@ -262,7 +264,7 @@ describe('RiotClient', () => {
     client.getTimeline('EUW1', 'EUW1_2');
     client.getMatch('EUW1', 'EUW1_3');
     client.getMatchIds('EUW1', 'apex', {});
-    for (let i = 0; i < 8; i++) await clock.advance(1000);
+    for (let i = 0; i < 10; i++) await clock.advance(1000);
     expect(calls.map((c) => c.url.split('/matches/')[1]?.split('?')[0])).toEqual([
       'EUW1_1',
       'by-puuid/apex/ids',
@@ -270,8 +272,36 @@ describe('RiotClient', () => {
       'EUW1_3',
       'EUW1_5',
       'by-puuid/outside/ids',
+      // The Diamond players seen in a Master+ game, then the other Diamond I players.
       'by-puuid/diamond/ids',
       'EUW1_9',
+      'by-puuid/diamond-one/ids',
+      'EUW1_11',
+    ]);
+  });
+
+  test('platform host: ladder lists, Diamond pages, checks of outside Masters, mastery refresh, enrichment', async () => {
+    const { client, clock, calls } = setup(() => json([]), { appLimit: '1:1' });
+    await client.getMasteries('EUW1', 'first', PRIORITY.ENRICHMENT);
+    // Asked for in the reverse order.
+    client.getLeagueEntries('EUW1', 'enrich-rank', PRIORITY.ENRICHMENT);
+    client.getMasteries('EUW1', 'refresh', PRIORITY.DAILY_REFRESH);
+    client.getLeagueEntries('EUW1', 'outside-check', PRIORITY.OUTSIDE_MASTER_CHECK);
+    client.getDiamondEntries('EUW1', 'I', 1);
+    client.getLeague('EUW1', 'MASTER');
+    // A list and a page asked for later still go before the check that was already waiting.
+    client.getLeague('EUW1', 'CHALLENGER');
+    client.getDiamondEntries('EUW1', 'I', 2);
+    for (let i = 0; i < 7; i++) await clock.advance(1000);
+    expect(calls.map((c) => c.url.split('/').slice(-1)[0])).toEqual([
+      'first',
+      'RANKED_SOLO_5x5',
+      'RANKED_SOLO_5x5',
+      'I?page=1',
+      'I?page=2',
+      'outside-check',
+      'refresh',
+      'enrich-rank',
     ]);
   });
 

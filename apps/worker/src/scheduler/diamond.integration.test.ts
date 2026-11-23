@@ -3,6 +3,7 @@ import {
   createDb,
   type Db,
   DIAMOND_FETCH_RANK,
+  DIAMOND_ONE_FETCH_RANK,
   enqueueMatchIds,
   ladderOrder,
   listWorkerStatus,
@@ -12,7 +13,7 @@ import {
 } from '@pick-league/db';
 import type { Division, LeagueListDto } from '@pick-league/shared';
 import { PRIORITY, RiotHttpError } from '../riot/client.ts';
-import { PlatformWorker, type SchedulerOptions } from './platform-worker.ts';
+import { PlatformWorker, type SchedulerOptionsInput } from './platform-worker.ts';
 import {
   DAY,
   diamondEntry,
@@ -57,9 +58,7 @@ d('PlatformWorker: Diamond players (Postgres)', () => {
     await db?.end();
   });
 
-  type Options = Partial<Omit<SchedulerOptions, 'concurrency'>> & {
-    concurrency?: Partial<SchedulerOptions['concurrency']>;
-  };
+  type Options = SchedulerOptionsInput;
   const makeWorker = (options: Options = {}) =>
     new PlatformWorker({
       platform: 'EUW1',
@@ -169,7 +168,7 @@ d('PlatformWorker: Diamond players (Postgres)', () => {
     expect(await db`SELECT 1 FROM diamond_tracking`).toHaveLength(0);
   });
 
-  test('a sweep reads every page; the best candidates are tracked, as many as the target: seen in a Master+ game first, then the others, by division then LP', async () => {
+  test('a sweep reads every page; the best candidates are tracked, as many as the target: seen in a Master+ game first (by division then LP), then the other Diamond I players', async () => {
     await sevenPlayers();
     await setTarget(4);
     const w = makeWorker({ diamondMaxTracked: 10 });
@@ -218,8 +217,7 @@ d('PlatformWorker: Diamond players (Postgres)', () => {
     ]);
     expect(riot.idQueries.map((q) => q.priority)).toEqual([PRIORITY.DIAMOND_MATCH_IDS, undefined]);
 
-    // A larger target: the rest of the first group, then the other Diamond players, Diamond I
-    // first, down to the lower divisions.
+    // A larger target: the rest of the first group, then the other Diamond I players by LP.
     await setTarget(6);
     const wide = makeWorker({ diamondMaxTracked: 10 });
     await wide.refreshLadder();
@@ -251,11 +249,23 @@ d('PlatformWorker: Diamond players (Postgres)', () => {
     await restarted.listTrackedPlayer(dia('four-50'));
     const [last] = await db<{ fetch_rank: number }[]>`
       SELECT fetch_rank FROM match_fetch_queue WHERE match_id = 'EUW1_7000000003'`;
-    expect(last?.fetch_rank).toBe(DIAMOND_FETCH_RANK + 5);
+    // The fifth of the players seen in a Master+ game, whatever the division of the others.
+    expect(last?.fetch_rank).toBe(DIAMOND_FETCH_RANK + 4);
+    // The Diamond I player who was not seen in one lately is in the band after them all.
+    riot.matchIds.set(dia('one-90'), ['EUW1_7000000004']);
+    riot.idQueries = [];
+    await restarted.listTrackedPlayer(dia('one-90'));
+    const [one] = await db<{ fetch_rank: number }[]>`
+      SELECT fetch_rank FROM match_fetch_queue WHERE match_id = 'EUW1_7000000004'`;
+    expect(one?.fetch_rank).toBe(DIAMOND_ONE_FETCH_RANK);
+    expect(riot.idQueries.map((q) => q.priority)).toEqual([PRIORITY.DIAMOND_ONE_MATCH_IDS]);
   });
 
-  test('every division is a candidate: Diamond I by LP, then II, III and IV', async () => {
-    setDivision('I', [['one-10', 10]]);
+  test('only the players seen in a Master+ game and the Diamond I players are candidates', async () => {
+    setDivision('I', [
+      ['one-10', 10],
+      ['one-70', 70],
+    ]);
     setDivision('II', [
       ['two-40', 40],
       ['two-99', 99],
@@ -275,20 +285,16 @@ d('PlatformWorker: Diamond players (Postgres)', () => {
       return trackedDiamonds();
     };
     expect(await tracked(1)).toEqual(['four-90']);
-    expect(await tracked(2)).toEqual(['one-10', 'four-90']);
-    expect(await tracked(4)).toEqual(['one-10', 'two-99', 'two-40', 'four-90']);
-    expect(await tracked(5)).toEqual(['one-10', 'two-99', 'two-40', 'three-80', 'four-90']);
-    expect(await tracked(10)).toEqual([
-      'one-10',
-      'two-99',
-      'two-40',
-      'three-80',
-      'four-95',
-      'four-90',
-    ]);
+    expect(await tracked(2)).toEqual(['one-70', 'four-90']);
+    // Nobody of Diamond II to IV without a Master+ game, however large the target.
+    expect(await tracked(10)).toEqual(['one-70', 'one-10', 'four-90']);
+    // A Diamond II player turns up in one: tracked, before the Diamond I players.
+    await seenWithMaster(['two-99']);
+    expect(await tracked(10)).toEqual(['one-70', 'one-10', 'two-99', 'four-90']);
     // A smaller target drops the last candidates of that order; their players rows stay.
-    expect(await tracked(3)).toEqual(['one-10', 'two-99', 'four-90']);
-    expect(await db`SELECT 1 FROM players WHERE puuid = ${dia('four-95')}`).toHaveLength(1);
+    expect(await tracked(3)).toEqual(['one-70', 'two-99', 'four-90']);
+    expect(await tracked(2)).toEqual(['two-99', 'four-90']);
+    expect(await db`SELECT 1 FROM players WHERE puuid = ${dia('one-70')}`).toHaveLength(1);
   });
 
   test("who played is read from wins + losses at each sweep, with the time of the player's page", async () => {

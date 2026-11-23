@@ -2,7 +2,7 @@
  * PickLeague worker: crawls high-elo ranked games from the Riot API into Postgres.
  * See docs/architecture.md ("Worker"). Config via env: RIOT_API_KEY, DATABASE_URL, PLATFORMS,
  * LOG_LEVEL, COLLECT_PREVIOUS_PATCH, LISTING_SKIP, DIAMOND_MAX_TRACKED,
- * UNTRACKED_MASTER_LISTING_START_HOUR.
+ * OUTSIDE_MASTER_CHECKS_PER_HOUR, MASTERY_REFRESH_DAYS.
  */
 import { createDb, migrate } from '@pick-league/db';
 import { createDdragonClient } from '@pick-league/shared';
@@ -37,7 +37,8 @@ if (config.collectPreviousPatch) {
 log.info('collection settings', {
   listingSkip: config.listingSkip,
   diamondMaxTracked: config.diamondMaxTracked,
-  untrackedMasterListingStartHour: config.untrackedMasterListingStartHour,
+  outsideMasterChecksPerHour: config.outsideMasterChecksPerHour,
+  masteryRefreshDays: config.masteryRefreshDays,
 });
 
 const riot = new RiotClient({ apiKey: config.riotApiKey, log });
@@ -55,7 +56,8 @@ const workers = config.platforms.map(
         collectPreviousPatch: config.collectPreviousPatch,
         listingSkip: config.listingSkip,
         diamondMaxTracked: config.diamondMaxTracked,
-        extraPassStartHour: config.untrackedMasterListingStartHour,
+        outsideCheckMaxPerHour: config.outsideMasterChecksPerHour,
+        masteryRefreshIntervalMs: config.masteryRefreshDays * 86_400_000,
       },
     }),
 );

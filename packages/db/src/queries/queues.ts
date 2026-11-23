@@ -9,11 +9,13 @@ import type { QueuedEnrichment, QueuedMatch } from '../types.ts';
 /**
  * `fetch_rank` is a band per tier, fetched in that order: an apex player's ladder position (below
  * `EXTRA_FETCH_RANK`), then the matches listed by a Master outside Riot's list
- * (`EXTRA_FETCH_RANK`), then a tracked Diamond player's (`DIAMOND_FETCH_RANK` + their position
- * among the Diamond players).
+ * (`EXTRA_FETCH_RANK`), then a tracked Diamond player's: `DIAMOND_FETCH_RANK` + their position
+ * among those seen in a Master+ game lately, `DIAMOND_ONE_FETCH_RANK` + their position among the
+ * other tracked Diamond I players.
  */
 export const EXTRA_FETCH_RANK = 100_000;
 export const DIAMOND_FETCH_RANK = 200_000;
+export const DIAMOND_ONE_FETCH_RANK = 400_000;
 
 /**
  * `fetch_rank` of retried and deferred matches (and of matches queued without a rank): after
@@ -103,13 +105,15 @@ export async function countPendingMatchesInBand(
  * discovery. Rows are locked with
  * `FOR UPDATE SKIP LOCKED` and their `updated_at` bumped, so concurrent claimers don't get the
  * same ids within a transaction; the status stays PENDING until marked done/skipped/failed.
- * `withoutDiamond` leaves out the matches of the Diamond band (it is not that tier's turn).
+ * `heldFrom` leaves out the matches of the bands from that `fetch_rank` up to the back of the
+ * queue (it is not those tiers' turn): `DIAMOND_FETCH_RANK` for every Diamond player's matches,
+ * `DIAMOND_ONE_FETCH_RANK` for those of the Diamond I players only.
  */
 export async function claimPendingMatches(
   q: Queryable,
   platform: Platform,
   limit: number,
-  options: { withoutDiamond?: boolean } = {},
+  options: { heldFrom?: number } = {},
 ): Promise<QueuedMatch[]> {
   const rows = await q<
     {
@@ -125,8 +129,8 @@ export async function claimPendingMatches(
       SELECT match_id FROM match_fetch_queue
       WHERE platform = ${platform} AND status = 'PENDING'
         ${
-          options.withoutDiamond
-            ? q`AND (fetch_rank < ${DIAMOND_FETCH_RANK} OR fetch_rank >= ${QUEUE_BACK_RANK})`
+          options.heldFrom !== undefined
+            ? q`AND (fetch_rank < ${Math.trunc(options.heldFrom)} OR fetch_rank >= ${QUEUE_BACK_RANK})`
             : q``
         }
       ORDER BY fetch_rank, discovered_at, match_id
@@ -302,7 +306,8 @@ export async function countPendingMatches(q: Queryable, platform: Platform): Pro
 }
 
 // ---------------------------------------------------------------------------
-// player_enrichment_queue (lowest priority: mastery + rank of non-ladder players)
+// player_enrichment_queue (lowest priority: masteries, and the rank when it is stale, of
+// non-ladder players)
 // ---------------------------------------------------------------------------
 
 /**

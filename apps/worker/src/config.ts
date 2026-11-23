@@ -20,10 +20,13 @@ export interface WorkerConfig {
    */
   diamondMaxTracked: number;
   /**
-   * Local hour (0 to 23, default 4) at which the daily listing pass over the Masters outside
-   * Riot's list opens on each platform.
+   * Most checks an hour, per platform, of the Masters outside Riot's list (their own solo queue
+   * entry, on the platform host; default 1500, 0: they are not followed). What is left of that
+   * host's 3,000 requests an hour goes to the mastery refresh and enrichment.
    */
-  untrackedMasterListingStartHour: number;
+  outsideMasterChecksPerHour: number;
+  /** Masteries of a tracked player are fetched again after this many days (default 3). */
+  masteryRefreshDays: number;
 }
 
 export class ConfigError extends Error {
@@ -84,13 +87,23 @@ export function loadConfig(env: Record<string, string | undefined>): WorkerConfi
     );
   }
 
-  const rawStartHour = (env.UNTRACKED_MASTER_LISTING_START_HOUR ?? '').trim() || '4';
-  let untrackedMasterListingStartHour = 4;
-  if (/^\d{1,2}$/.test(rawStartHour) && Number(rawStartHour) <= 23) {
-    untrackedMasterListingStartHour = Number(rawStartHour);
+  const rawChecks = (env.OUTSIDE_MASTER_CHECKS_PER_HOUR ?? '').trim() || '1500';
+  let outsideMasterChecksPerHour = 1500;
+  if (/^\d{1,4}$/.test(rawChecks) && Number(rawChecks) <= 3000) {
+    outsideMasterChecksPerHour = Number(rawChecks);
   } else {
     problems.push(
-      `UNTRACKED_MASTER_LISTING_START_HOUR must be a whole hour, 0 to 23 (got "${rawStartHour}")`,
+      `OUTSIDE_MASTER_CHECKS_PER_HOUR must be a whole number, 0 to 3000 (got "${rawChecks}")`,
+    );
+  }
+
+  const rawMasteryDays = (env.MASTERY_REFRESH_DAYS ?? '').trim() || '3';
+  let masteryRefreshDays = 3;
+  if (/^\d{1,3}$/.test(rawMasteryDays) && Number(rawMasteryDays) >= 1) {
+    masteryRefreshDays = Number(rawMasteryDays);
+  } else {
+    problems.push(
+      `MASTERY_REFRESH_DAYS must be a whole number of days, 1 to 999 (got "${rawMasteryDays}")`,
     );
   }
 
@@ -105,6 +118,7 @@ export function loadConfig(env: Record<string, string | undefined>): WorkerConfi
     collectPreviousPatch,
     listingSkip,
     diamondMaxTracked,
-    untrackedMasterListingStartHour,
+    outsideMasterChecksPerHour,
+    masteryRefreshDays,
   };
 }

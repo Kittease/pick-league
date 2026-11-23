@@ -1,4 +1,4 @@
-import type { LadderTier, Platform, SoloTier } from '@pick-league/shared';
+import type { LadderTier, Platform } from '@pick-league/shared';
 import { byPuuid, chunks, inTransaction, type Queryable } from '../client.ts';
 import type {
   DailyRefreshCandidate,
@@ -9,6 +9,7 @@ import type {
   ListingSkipState,
   MasteryInput,
   SoloRankInput,
+  SweptRankInput,
   TrackedDiamondEntry,
 } from '../types.ts';
 
@@ -178,20 +179,29 @@ export async function upsertDiamondLadder(
 
 /**
  * The tracked ladder of a platform from the top down: Challenger, Grandmaster, Master, each by LP
- * (most first), then the tracked Diamond players by division (I first) then LP.
+ * (most first), then the tracked Diamond players by division (I first) then LP. Each row with
+ * when the player was last seen in a Master+ game.
  */
 export async function ladderOrder(q: Queryable, platform: Platform): Promise<LadderOrderRow[]> {
   const rows = await q<
-    { puuid: string; tier: LadderTier; division: number | null; league_points: number }[]
+    {
+      puuid: string;
+      tier: LadderTier;
+      division: number | null;
+      league_points: number;
+      last_seen_with_master_at: Date | null;
+    }[]
   >`
-    SELECT puuid, tier, division, league_points FROM ladder_entries
-    WHERE platform = ${platform}
-    ORDER BY tier, division NULLS FIRST, league_points DESC, puuid`;
+    SELECT le.puuid, le.tier, le.division, le.league_points, p.last_seen_with_master_at
+    FROM ladder_entries le JOIN players p USING (puuid)
+    WHERE le.platform = ${platform}
+    ORDER BY le.tier, le.division NULLS FIRST, le.league_points DESC, le.puuid`;
   return rows.map((r) => ({
     puuid: r.puuid,
     tier: r.tier,
     division: r.division,
     leaguePoints: r.league_points,
+    lastSeenWithMasterAt: r.last_seen_with_master_at,
   }));
 }
 
@@ -378,42 +388,6 @@ export async function playersWithListingRequested(
   return rows.map((r) => r.puuid);
 }
 
-/**
- * Players of a platform that are not on the tracked ladder (seen in stored matches, ranked by
- * enrichment) with a solo rank of at least `minTier`, whose match ids were never listed or were
- * last synced before `syncedBefore`. Highest ranked first: tier, division, LP.
- */
-export async function extraListingCandidates(
-  q: Queryable,
-  platform: Platform,
-  opts: { minTier: SoloTier; syncedBefore: Date; limit: number },
-): Promise<string[]> {
-  const rows = await q<{ puuid: string }[]>`
-    SELECT p.puuid FROM players p
-    WHERE p.platform = ${platform}
-      AND p.solo_tier >= ${opts.minTier}::solo_tier
-      AND (p.matches_synced_until IS NULL OR p.matches_synced_until < ${opts.syncedBefore})
-      AND NOT EXISTS (SELECT 1 FROM ladder_entries le WHERE le.puuid = p.puuid)
-    ORDER BY p.solo_tier DESC, p.solo_division NULLS FIRST, p.solo_lp DESC NULLS LAST, p.puuid
-    LIMIT ${opts.limit}`;
-  return rows.map((r) => r.puuid);
-}
-
-/** How many players `extraListingCandidates` would return without a limit. */
-export async function countExtraListingCandidates(
-  q: Queryable,
-  platform: Platform,
-  opts: { minTier: SoloTier; syncedBefore: Date },
-): Promise<number> {
-  const [row] = await q<{ n: number }[]>`
-    SELECT count(*)::int AS n FROM players p
-    WHERE p.platform = ${platform}
-      AND p.solo_tier >= ${opts.minTier}::solo_tier
-      AND (p.matches_synced_until IS NULL OR p.matches_synced_until < ${opts.syncedBefore})
-      AND NOT EXISTS (SELECT 1 FROM ladder_entries le WHERE le.puuid = p.puuid)`;
-  return row?.n ?? 0;
-}
-
 /** Stores the solo-queue rank from league-v4 entries/by-puuid (null = unranked in solo queue). */
 export async function updatePlayerRank(
   q: Queryable,
@@ -430,6 +404,67 @@ export async function updatePlayerRank(
       solo_losses = ${rank?.losses ?? null},
       rank_refreshed_at = ${now}
     WHERE puuid = ${puuid}`;
+}
+
+/** When a player's stored solo rank was last refreshed; null when never (or no such player). */
+export async function getRankRefreshedAt(q: Queryable, puuid: string): Promise<Date | null> {
+  const [row] = await q<{ rank_refreshed_at: Date | null }[]>`
+    SELECT rank_refreshed_at FROM players WHERE puuid = ${puuid}`;
+  return row?.rank_refreshed_at ?? null;
+}
+
+/**
+ * Stores the Diamond rank of the players of a sweep page who are already known (`players` rows of
+ * the platform): division, LP, wins and losses as the page gave them at `seenAt`. Players the
+ * page names that are not stored are ignored (nothing is created), and so are tracked apex
+ * players (their ladder owns their rank) and players whose rank was refreshed after `seenAt`.
+ * To keep the hourly write small, a player whose stored rank already says the same is only
+ * touched when it was last refreshed before `touchBefore`. Rows are locked in puuid order, like
+ * every multi-player write. Returns how many were written.
+ */
+export async function updateKnownPlayerRanks(
+  q: Queryable,
+  platform: Platform,
+  entries: readonly SweptRankInput[],
+  seenAt: Date,
+  touchBefore: Date,
+): Promise<number> {
+  const unique = [...new Map(entries.map((e) => [e.puuid, e])).values()];
+  if (unique.length === 0) return 0;
+  const res = await q`
+    WITH e AS (
+      SELECT * FROM unnest(
+        ${unique.map((e) => e.puuid)}::text[],
+        ${unique.map((e) => e.division)}::int[],
+        ${unique.map((e) => e.leaguePoints)}::int[],
+        ${unique.map((e) => e.wins)}::int[],
+        ${unique.map((e) => e.losses)}::int[]
+      ) AS t(puuid, division, lp, wins, losses)
+    ), due AS (
+      SELECT p.puuid FROM players p JOIN e USING (puuid)
+      WHERE p.platform = ${platform}
+        AND (p.rank_refreshed_at IS NULL OR p.rank_refreshed_at < ${seenAt})
+        AND (p.rank_refreshed_at IS NULL OR p.rank_refreshed_at < ${touchBefore}
+             OR p.solo_tier IS DISTINCT FROM 'DIAMOND'
+             OR p.solo_division IS DISTINCT FROM e.division
+             OR p.solo_lp IS DISTINCT FROM e.lp
+             OR p.solo_wins IS DISTINCT FROM e.wins
+             OR p.solo_losses IS DISTINCT FROM e.losses)
+        AND NOT EXISTS (SELECT 1 FROM ladder_entries le
+                        WHERE le.puuid = p.puuid AND le.tier <> 'DIAMOND')
+      ORDER BY p.puuid
+      FOR UPDATE OF p
+    )
+    UPDATE players p SET
+      solo_tier = 'DIAMOND',
+      solo_division = e.division,
+      solo_lp = e.lp,
+      solo_wins = e.wins,
+      solo_losses = e.losses,
+      rank_refreshed_at = ${seenAt}
+    FROM e, due
+    WHERE p.puuid = due.puuid AND e.puuid = p.puuid`;
+  return res.count;
 }
 
 /**
@@ -474,7 +509,8 @@ export async function replaceMasteries(
 
 /**
  * Tracked (ladder) players of a platform whose masteries are older than `olderThanHours`
- * (default 24) or were never fetched. Oldest first.
+ * (default 24; the worker passes its mastery refresh interval) or were never fetched. Oldest
+ * first.
  */
 export async function playersNeedingDailyRefresh(
   q: Queryable,

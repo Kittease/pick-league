@@ -9,7 +9,11 @@ import {
   migrate,
   upsertPatchStaticData,
 } from '@pick-league/db';
-import { type ListingSkipMode, PlatformWorker, type SchedulerOptions } from './platform-worker.ts';
+import {
+  type ListingSkipMode,
+  PlatformWorker,
+  type SchedulerOptionsInput,
+} from './platform-worker.ts';
 import {
   FakePatches,
   FakeRiot,
@@ -52,9 +56,7 @@ d('PlatformWorker: listing skip rule (Postgres)', () => {
     await db?.end();
   });
 
-  type Options = Partial<Omit<SchedulerOptions, 'concurrency'>> & {
-    concurrency?: Partial<SchedulerOptions['concurrency']>;
-  };
+  type Options = SchedulerOptionsInput;
   const makeWorker = (listingSkip: ListingSkipMode | undefined, options: Options = {}) =>
     new PlatformWorker({
       platform: 'EUW1',
@@ -251,7 +253,7 @@ d('PlatformWorker: listing skip rule (Postgres)', () => {
   });
 
   test('on: a last real listing older than the safety interval → listed', async () => {
-    const w = await tracked('on', { listingSkipSafetyMs: 3 * HOUR });
+    const w = await tracked('on', { listingSkipSafetyMs: { apex: 3 * HOUR } });
     await store(w, 'EUW1_7000000001', NOW + 30 * MIN, [P]);
     await anHourLater(w, 51);
     expect(await w.listTrackedPlayer(P)).toBe('skipped');
@@ -365,7 +367,14 @@ d('PlatformWorker: listing skip rule (Postgres)', () => {
   const riotWork = () =>
     riot.calls.filter((c) => /^(ids|match|timeline):/.test(c)).map((c) => c.replace(/:0$/, ''));
   /** One listing and one match at a time, so the order of the requests is the order of the work. */
-  const serial = { listing: 1, match: 1, daily: 0, enrichment: 0, extraListing: 0 };
+  const serial = {
+    listing: 1,
+    match: 1,
+    daily: 0,
+    enrichment: 0,
+    outsideCheck: 0,
+    outsideListing: 0,
+  };
   const SHARED = 'EUW1_7000000100';
 
   /**
@@ -441,7 +450,7 @@ d('PlatformWorker: listing skip rule (Postgres)', () => {
     '%s, start(): a player waits for the matches of better-placed players, not for their own or later ones',
     async (mode) => {
       const w = makeWorker(mode, {
-        concurrency: { listing: 1, match: 4, daily: 0, enrichment: 0, extraListing: 0 },
+        concurrency: { ...serial, match: 4 },
       });
       setLadder([50, 50, 50]);
       const P2 = ladderPuuid(2);

@@ -1,13 +1,14 @@
 /**
- * The three tiers of the match cluster's budget: tracked apex players, then the daily pass over
- * the Masters outside Riot's list, then the Diamond players, whose number the worker sizes by
- * itself. Needs DATABASE_URL_TEST.
+ * The three tiers of the match cluster's budget: tracked apex players, then the Masters outside
+ * Riot's list whose counter moved, then the Diamond players (those seen in a Master+ game, then
+ * the other Diamond I players), whose number the worker sizes by itself. Needs DATABASE_URL_TEST.
  */
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import {
   createDb,
   type Db,
   DIAMOND_FETCH_RANK,
+  DIAMOND_ONE_FETCH_RANK,
   EXTRA_FETCH_RANK,
   enqueueMatchIds,
   getDiamondTracking,
@@ -20,10 +21,9 @@ import {
 } from '@pick-league/db';
 import type { Division, LeagueListDto, Platform } from '@pick-league/shared';
 import { PRIORITY } from '../riot/client.ts';
-import { PlatformWorker, type SchedulerOptions } from './platform-worker.ts';
+import { PlatformWorker, type SchedulerOptionsInput } from './platform-worker.ts';
 import {
   count,
-  DAY,
   diamondEntry,
   FakePatches,
   FakeRiot,
@@ -31,6 +31,7 @@ import {
   ladderPuuid,
   makeTimedMatch,
   NOW,
+  soloEntry,
   staticPatch,
 } from './test-helpers.ts';
 
@@ -69,9 +70,7 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
     await db?.end();
   });
 
-  type Options = Partial<Omit<SchedulerOptions, 'concurrency'>> & {
-    concurrency?: Partial<SchedulerOptions['concurrency']>;
-  };
+  type Options = SchedulerOptionsInput;
   const makeWorker = (options: Options = {}, platform: Platform = 'EUW1') =>
     new PlatformWorker({
       platform,
@@ -82,7 +81,14 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
       options: { idleMs: 10, expansionCheckMs: 10, ...options },
     });
   /** One listing, one match and one outside Master at a time: the requests come in work order. */
-  const serial = { listing: 1, match: 1, daily: 0, enrichment: 0, extraListing: 1 };
+  const serial = {
+    listing: 1,
+    match: 1,
+    daily: 0,
+    enrichment: 0,
+    outsideCheck: 1,
+    outsideListing: 1,
+  };
 
   const apex = (puuid: string, lp: number, wins = 50) =>
     ({
@@ -124,19 +130,26 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
       new Date(t),
     );
   /**
-   * A Master outside Riot's list (seen in stored matches, ranked by enrichment); `listedAt`: when
-   * their match ids were last listed (never without it).
+   * A Master outside Riot's list (seen in stored matches, ranked by enrichment), never listed:
+   * their first check asks for a listing. Riot answers `games` wins + losses for them.
    */
-  const outside = async (
-    name: string,
-    lp: number,
-    platform: Platform = 'EUW1',
-    listedAt?: number,
-  ) => {
+  const outside = async (name: string, lp: number, games = 100) => {
     await db`
-      INSERT INTO players (puuid, platform, solo_tier, solo_lp, matches_synced_until)
-      VALUES (${out(name)}, ${platform}, 'MASTER', ${lp},
-              ${listedAt === undefined ? null : new Date(listedAt - HOUR)})`;
+      INSERT INTO players (puuid, platform, solo_tier, solo_lp)
+      VALUES (${out(name)}, 'EUW1', 'MASTER', ${lp})`;
+    riot.leagueEntries.set(out(name), [soloEntry(out(name), 'MASTER', games, lp)]);
+  };
+  /** The same, followed by the worker and waiting for their listing. */
+  const outsideWaiting = async (w: PlatformWorker, name: string, lp: number) => {
+    await outside(name, lp);
+    await w.refreshOutsideMasters();
+    expect(await w.checkOutsideMaster(out(name))).toBe('first-listing');
+  };
+  /** A Diamond player seen in a Master+ game an hour ago (before any sweep saw them). */
+  const seenWithMaster = async (name: string) => {
+    await db`
+      INSERT INTO players (puuid, platform, last_seen_with_master_at)
+      VALUES (${dia(name)}, 'EUW1', ${new Date(t - HOUR)})`;
   };
   const trackedDiamonds = async () =>
     (await ladderOrder(db, 'EUW1'))
@@ -148,10 +161,6 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
   /** Match-id listings so far, as 'ids:<puuid>'. */
   const listings = () =>
     riot.calls.filter((c) => c.startsWith('ids:')).map((c) => c.replace(/:0$/, ''));
-  const outsideListings = () =>
-    listings()
-      .filter((c) => c.startsWith('ids:fake-outside-master-'))
-      .map((c) => c.replace('ids:fake-outside-master-', ''));
   const at = (call: string) => riot.calls.indexOf(call);
   /** Runs the worker's loops until `until` holds (and a little longer). */
   const run = async (w: PlatformWorker, until: () => boolean | Promise<boolean>) => {
@@ -199,8 +208,8 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
   test("start(): apex players and their matches, then the Masters outside Riot's list and theirs, then Diamond players", async () => {
     setDivision('I', [['one', 50]]);
     await setTarget(1);
-    await outside('m-80', 80);
     await outside('m-50', 50);
+    await outside('m-80', 80);
     const [MA, ME, MD, GONE] = [
       'EUW1_7000000101',
       'EUW1_7000000102',
@@ -208,9 +217,9 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
       'EUW1_7000000104',
     ] as const;
     riot.matchIds.set(A, [MA]);
-    riot.matchIds.set(out('m-80'), [ME]);
+    riot.matchIds.set(out('m-50'), [ME]);
     // A match Riot answers 404 for: it must not keep the Diamond players waiting.
-    riot.matchIds.set(out('m-50'), [GONE]);
+    riot.matchIds.set(out('m-80'), [GONE]);
     riot.matchIds.set(dia('one'), [MD]);
     for (const id of [MA, ME, MD]) {
       riot.matches.set(id, makeTimedMatch(id, { startMs: NOW - HOUR }));
@@ -222,16 +231,38 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
     });
     const failed = async () =>
       (await db`SELECT 1 FROM match_fetch_queue WHERE status = 'FAILED'`).length === 1;
-    await run(w, async () => riot.calls.includes(`timeline:${MD}`) && (await failed()));
+    // The apex listing hangs until both outside Masters were checked (on the platform host,
+    // whatever the tiers are doing): from then on they wait for a listing.
+    let open = () => {};
+    riot.idsGate = new Promise<void>((r) => {
+      open = r;
+    });
+    const ac = new AbortController();
+    const running = w.start(ac.signal);
+    await waitFor(async () => (await w.progress()).outsideMasters?.toList === 2);
+    await waitFor(() => riot.calls.includes(`ids:${A}:0`));
+    expect(listings()).toEqual([`ids:${A}`]);
+    riot.idsGate = null;
+    open();
+    await waitFor(async () => riot.calls.includes(`timeline:${MD}`) && (await failed()));
+    await Bun.sleep(80);
+    ac.abort();
+    await running;
 
     expect(listings()).toEqual([
       `ids:${A}`,
-      `ids:${out('m-80')}`,
       `ids:${out('m-50')}`,
+      `ids:${out('m-80')}`,
       `ids:${dia('one')}`,
     ]);
+    // The outside Masters were asked for their own entry on the platform host, once each, after
+    // the ladder lists and the Diamond pages in that host's order.
+    expect(riot.calls.filter((c) => c.startsWith('entries:'))).toEqual([
+      `entries:${out('m-50')}:${PRIORITY.OUTSIDE_MASTER_CHECK}`,
+      `entries:${out('m-80')}:${PRIORITY.OUTSIDE_MASTER_CHECK}`,
+    ]);
     // The outside Masters wait for the apex player's match, the Diamond player for theirs.
-    expect(at(`timeline:${MA}`)).toBeLessThan(at(`ids:${out('m-80')}:0`));
+    expect(at(`timeline:${MA}`)).toBeLessThan(at(`ids:${out('m-50')}:0`));
     expect(at(`timeline:${ME}`)).toBeLessThan(at(`ids:${dia('one')}:0`));
     expect(at(`match:${GONE}`)).toBeLessThan(at(`ids:${dia('one')}:0`));
     expect(at(`ids:${dia('one')}:0`)).toBeLessThan(at(`match:${MD}`));
@@ -240,17 +271,18 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
       undefined,
       PRIORITY.EXTRA_MATCH_IDS,
       PRIORITY.EXTRA_MATCH_IDS,
-      PRIORITY.DIAMOND_MATCH_IDS,
+      // A Diamond I player nobody saw in a Master+ game: the last sub-tier.
+      PRIORITY.DIAMOND_ONE_MATCH_IDS,
     ]);
     expect(riot.matchPriorities.get(MA)).toBe(PRIORITY.MATCH);
     expect(riot.matchPriorities.get(ME)).toBe(PRIORITY.EXTRA_MATCH);
-    expect(riot.matchPriorities.get(MD)).toBe(PRIORITY.DIAMOND_MATCH);
+    expect(riot.matchPriorities.get(MD)).toBe(PRIORITY.DIAMOND_ONE_MATCH);
     const queued = await db<{ match_id: string; fetch_rank: number; status: string }[]>`
       SELECT match_id, fetch_rank, status FROM match_fetch_queue ORDER BY match_id`;
     expect([...queued]).toEqual([
       { match_id: MA, fetch_rank: 0, status: 'DONE' },
       { match_id: ME, fetch_rank: EXTRA_FETCH_RANK, status: 'DONE' },
-      { match_id: MD, fetch_rank: DIAMOND_FETCH_RANK, status: 'DONE' },
+      { match_id: MD, fetch_rank: DIAMOND_ONE_FETCH_RANK, status: 'DONE' },
       // Failed twice, at the back of the queue from the first time.
       { match_id: GONE, fetch_rank: 1_000_000, status: 'FAILED' },
     ]);
@@ -319,118 +351,31 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
       DIAMOND_FETCH_RANK,
     );
     expect(await w.canTrackMoreMasters()).toBe(true);
-    expect(await w.canListExtraPlayers()).toBe(false);
+    expect(await w.canListOutsideMasters()).toBe(false);
     await w.trackMoreMasters();
     await w.listTrackedPlayer('fake-master-1');
-    expect(await w.canListExtraPlayers()).toBe(true);
+    expect(await w.canListOutsideMasters()).toBe(true);
     // An apex player who played comes first again.
     riot.leagues.CHALLENGER.entries = [apex(A, 900, 51)];
     await w.refreshLadder();
-    expect(await w.canListExtraPlayers()).toBe(false);
+    expect(await w.canListOutsideMasters()).toBe(false);
   });
 
   // ---------------------------------------------------------------------------
-  // Tier 2: one pass a day
+  // Tier 2 before tier 3; inside tier 3, the players seen in a Master+ game first
   // ---------------------------------------------------------------------------
 
-  test('start(): the pass opens at 04:00 local time of the platform; each player is listed once per pass, again the next day', async () => {
-    // NOW is 21:00 in Korea (UTC+9). Both were listed in today's pass, which opened at 04:00.
-    await outside('m-80', 80, 'KR', NOW - 2 * HOUR);
-    await outside('m-50', 50, 'KR', NOW - 3 * HOUR);
-    const w = makeWorker({ concurrency: serial }, 'KR');
-    const ac = new AbortController();
-    const running = w.start(ac.signal);
-    await waitFor(() => riot.calls.includes(`ids:${A}:0`));
-    await Bun.sleep(150);
-    expect(outsideListings()).toEqual([]);
-    expect((await w.progress()).extraPass).toEqual({
-      open: false,
-      openedAt: '2026-11-12T19:00:00.000Z',
-      remaining: 0,
-      matchesWaiting: 0,
-    });
-
-    // 03:59 in Korea: not yet.
-    t = Date.parse('2026-11-13T18:59:00Z');
-    await Bun.sleep(150);
-    expect(outsideListings()).toEqual([]);
-    // 04:00: everyone is due, highest rank first.
-    t = Date.parse('2026-11-13T19:00:30Z');
-    await waitFor(() => outsideListings().length === 2);
-    expect(outsideListings()).toEqual(['m-80', 'm-50']);
-    await waitFor(async () => (await w.progress()).extraPass?.open === false);
-    expect((await w.progress()).extraPass).toEqual({
-      open: false,
-      openedAt: '2026-11-13T19:00:00.000Z',
-      remaining: 0,
-      matchesWaiting: 0,
-    });
-    // Once: not again that day, however long after.
-    for (const later of ['2026-11-13T23:00:00Z', '2026-11-14T10:00:00Z', '2026-11-14T18:59:00Z']) {
-      t = Date.parse(later);
-      await Bun.sleep(120);
-      expect(outsideListings()).toHaveLength(2);
-    }
-    // The next day's pass.
-    t = Date.parse('2026-11-14T19:00:30Z');
-    await waitFor(() => outsideListings().length === 4);
-    await Bun.sleep(120);
-    ac.abort();
-    await running;
-    expect(outsideListings()).toEqual(['m-80', 'm-50', 'm-80', 'm-50']);
-  });
-
-  test('the start hour and the UTC offset of a platform are options', async () => {
-    const openedAt = async (options: Options, platform: Platform) => {
-      const w = makeWorker(options, platform);
-      return (await w.progress()).extraPass?.openedAt;
-    };
-    // NOW is 2026-11-13 12:00 UTC.
-    expect(await openedAt({}, 'KR')).toBe('2026-11-12T19:00:00.000Z');
-    expect(await openedAt({}, 'VN2')).toBe('2026-11-12T21:00:00.000Z');
-    expect(await openedAt({}, 'EUW1')).toBe('2026-11-13T03:00:00.000Z');
-    expect(await openedAt({}, 'NA1')).toBe('2026-11-13T10:00:00.000Z');
-    expect(await openedAt({ extraPassStartHour: 3 }, 'EUW1')).toBe('2026-11-13T02:00:00.000Z');
-    expect(await openedAt({ extraPassStartHour: 15 }, 'EUW1')).toBe('2026-11-12T14:00:00.000Z');
-    expect(await openedAt({ extraPassUtcOffsetHours: { EUW1: 2 } }, 'EUW1')).toBe(
-      '2026-11-13T02:00:00.000Z',
-    );
-  });
-
-  test('start(): a restart during the pass lists nobody twice; a worker stopped at the start hour runs the pass when it comes back', async () => {
-    // 04:30 in Korea: the pass opened half an hour ago.
-    t = Date.parse('2026-11-13T19:30:00Z');
-    await outside('m-80', 80, 'KR', t - 20 * HOUR);
-    await outside('m-50', 50, 'KR');
-    const options = { concurrency: serial };
-    await run(makeWorker(options, 'KR'), () => outsideListings().length === 2);
-    expect(outsideListings()).toEqual(['m-80', 'm-50']);
-
-    // The worker restarts ten minutes later, while another player of the pass is still due.
-    await outside('m-60', 60, 'KR', t - 20 * HOUR);
-    t += 10 * MIN;
-    riot.calls = [];
-    await run(makeWorker(options, 'KR'), () => outsideListings().length === 1);
-    expect(outsideListings()).toEqual(['m-60']);
-
-    // Stopped over the next start hour: the pass runs when the worker is back, three hours late.
-    t = Date.parse('2026-11-14T22:00:00Z');
-    riot.calls = [];
-    await run(makeWorker(options, 'KR'), () => outsideListings().length === 3);
-    expect(outsideListings()).toEqual(['m-80', 'm-60', 'm-50']);
-  });
-
-  test('start(): Diamond players wait during the pass and are listed once it is over', async () => {
+  test('start(): Diamond players wait while outside Masters wait for a listing, and are listed once they are', async () => {
     // A worker that restarts with the apex player listed: only tiers 2 and 3 have work.
     const before = makeWorker();
     await before.refreshLadder();
     await before.listTrackedPlayer(A);
-    riot.calls = [];
     setDivision('I', [['one', 50]]);
     await setTarget(1);
-    await outside('m-80', 80);
-    await outside('m-50', 50);
-    // The listings of the pass hang.
+    await outsideWaiting(before, 'm-50', 50);
+    await outsideWaiting(before, 'm-80', 80);
+    riot.calls = [];
+    // The listings of the outside Masters hang.
     let open = () => {};
     riot.idsGate = new Promise<void>((r) => {
       open = r;
@@ -438,12 +383,12 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
     const w = makeWorker({ diamondMaxTracked: 5, concurrency: serial });
     const ac = new AbortController();
     const running = w.start(ac.signal);
-    await waitFor(() => riot.calls.includes(`ids:${out('m-80')}:0`));
+    await waitFor(() => riot.calls.includes(`ids:${out('m-50')}:0`));
     await Bun.sleep(200);
-    expect(listings()).toEqual([`ids:${out('m-80')}`]);
+    expect(listings()).toEqual([`ids:${out('m-50')}`]);
     expect(await w.progress()).toMatchObject({
       playedToList: 1,
-      extraPass: { open: true, openedAt: '2026-11-13T03:00:00.000Z', remaining: 2 },
+      outsideMasters: { followed: 2, checkedLastHour: 2, neverChecked: 0, toList: 2 },
     });
 
     riot.idsGate = null;
@@ -452,8 +397,111 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
     await Bun.sleep(80);
     ac.abort();
     await running;
-    expect(listings()).toEqual([`ids:${out('m-80')}`, `ids:${out('m-50')}`, `ids:${dia('one')}`]);
-    expect((await w.progress()).extraPass).toMatchObject({ open: false, remaining: 0 });
+    expect(listings()).toEqual([`ids:${out('m-50')}`, `ids:${out('m-80')}`, `ids:${dia('one')}`]);
+    expect((await w.progress()).outsideMasters).toMatchObject({ followed: 2, toList: 0 });
+  });
+
+  test('start(): the Diamond players seen in a Master+ game (3a) and their matches come before any Diamond I player (3b)', async () => {
+    // A Diamond III player seen in a Master+ game, and two Diamond I players who were not.
+    await seenWithMaster('three');
+    setDivision('I', [
+      ['one-90', 90],
+      ['one-80', 80],
+    ]);
+    setDivision('III', [['three', 10]]);
+    await setTarget(3);
+    const [M3, M1, M1B] = ['EUW1_7000000601', 'EUW1_7000000602', 'EUW1_7000000603'] as const;
+    riot.matchIds.set(dia('three'), [M3]);
+    riot.matchIds.set(dia('one-90'), [M1]);
+    riot.matchIds.set(dia('one-80'), [M1B]);
+    for (const id of [M3, M1, M1B]) {
+      riot.matches.set(id, makeTimedMatch(id, { startMs: NOW - HOUR }));
+    }
+    const w = makeWorker({
+      diamondMaxTracked: 5,
+      expandBelowPendingMatches: 0,
+      concurrency: { ...serial, outsideCheck: 0 },
+    });
+    await run(w, () => riot.calls.includes(`timeline:${M1B}`));
+
+    expect(await trackedDiamonds()).toEqual(['one-90', 'one-80', 'three']);
+    expect(listings()).toEqual([
+      `ids:${A}`,
+      `ids:${dia('three')}`,
+      `ids:${dia('one-90')}`,
+      `ids:${dia('one-80')}`,
+    ]);
+    // No Diamond I player is listed before the match of the 3a player is stored.
+    expect(at(`timeline:${M3}`)).toBeLessThan(at(`ids:${dia('one-90')}:0`));
+    expect(riot.idQueries.map((q) => q.priority)).toEqual([
+      undefined,
+      PRIORITY.DIAMOND_MATCH_IDS,
+      PRIORITY.DIAMOND_ONE_MATCH_IDS,
+      PRIORITY.DIAMOND_ONE_MATCH_IDS,
+    ]);
+    expect(riot.matchPriorities.get(M3)).toBe(PRIORITY.DIAMOND_MATCH);
+    expect(riot.matchPriorities.get(M1)).toBe(PRIORITY.DIAMOND_ONE_MATCH);
+    const queued = await db<{ match_id: string; fetch_rank: number }[]>`
+      SELECT match_id, fetch_rank FROM match_fetch_queue ORDER BY match_id`;
+    expect([...queued]).toEqual([
+      { match_id: M3, fetch_rank: DIAMOND_FETCH_RANK },
+      { match_id: M1, fetch_rank: DIAMOND_ONE_FETCH_RANK },
+      { match_id: M1B, fetch_rank: DIAMOND_ONE_FETCH_RANK + 1 },
+    ]);
+    expect((await w.progress()).diamond).toMatchObject({ tracked: 3, trackedWithMaster: 1 });
+  });
+
+  test('start(): a backlog of 3a matches holds the Diamond I players, and a 3b match waits for a 3a listing', async () => {
+    await seenWithMaster('three');
+    setDivision('I', [['one', 90]]);
+    setDivision('III', [['three', 10]]);
+    await setTarget(2);
+    // A worker that restarts with both tracked and the apex player listed.
+    const before = makeWorker({ diamondMaxTracked: 5 });
+    await before.refreshLadder();
+    await before.refreshDiamonds();
+    await before.listTrackedPlayer(A);
+    await before.listTrackedPlayer(dia('one'));
+    riot.calls = [];
+    // 3b matches are queued; the 3a player still waits for a listing, which hangs.
+    const backlog = Array.from({ length: 8 }, (_, i) => `EUW1_700000061${i}`);
+    const M3 = 'EUW1_7000000609';
+    for (const id of [...backlog, M3]) {
+      riot.matches.set(id, makeTimedMatch(id, { startMs: NOW - HOUR }));
+    }
+    await enqueueMatchIds(db, 'EUW1', backlog, DIAMOND_ONE_FETCH_RANK);
+    riot.matchIds.set(dia('three'), [M3]);
+    const fetched = () => backlog.filter((id) => riot.calls.includes(`match:${id}`));
+    let open = () => {};
+    riot.idsGate = new Promise<void>((r) => {
+      open = r;
+    });
+    const w = makeWorker({
+      diamondMaxTracked: 5,
+      expandBelowPendingMatches: 0,
+      concurrency: { ...serial, outsideCheck: 0 },
+    });
+    const ac = new AbortController();
+    const running = w.start(ac.signal);
+    await waitFor(() => riot.calls.includes(`ids:${dia('three')}:0`));
+    await Bun.sleep(300);
+    // The search for the patch boundary at startup fetched a few of them, whatever their tier.
+    // The others wait: a listing of a player seen in a Master+ game is running.
+    const probed = fetched();
+    expect(probed.length).toBeLessThan(backlog.length);
+    await Bun.sleep(200);
+    expect(fetched()).toEqual(probed);
+
+    riot.idsGate = null;
+    open();
+    await waitFor(async () => (await count(db, 'matches')) === backlog.length + 1);
+    await Bun.sleep(80);
+    ac.abort();
+    await running;
+    // The match that listing found is fetched before the Diamond I players' matches.
+    for (const id of backlog.filter((m) => !probed.includes(m))) {
+      expect(at(`match:${id}`)).toBeGreaterThan(at(`timeline:${M3}`));
+    }
   });
 
   // ---------------------------------------------------------------------------
@@ -583,91 +631,54 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
     expect(await diamond(w)).toMatchObject({ target: 1, tracked: 1, cycles: 'KK' });
   });
 
-  test('the cycles of the daily pass do not use up the time a growth step has to settle', async () => {
-    const quick = {
-      diamondStep: 1,
-      diamondGrowCycles: 3,
-      diamondGrowMinKeptCycles: 1,
-      diamondSettleCycles: 2,
-      diamondShrinkMissedCycles: 2,
-    };
-    // 23:00 on EUW1; the outside Master was listed in today's pass, the next one opens at 04:00.
-    t = Date.parse('2026-11-13T22:00:00Z');
-    await outside('m-80', 80, 'EUW1', t - HOUR);
-    const w = await tracking(1, ['d-90'], quick);
-    await hours(w, 4);
-    expect(t).toBe(Date.parse('2026-11-14T02:00:00Z'));
-    expect(await diamond(w)).toMatchObject({ target: 2, cycles: '', settleCyclesLeft: 2 });
-    // 'd-80' is not listed yet, and the pass runs for five cycles: tier 3 could do nothing.
-    await hours(w, 5);
-    expect((await w.progress()).extraPass).toMatchObject({ open: true, remaining: 1 });
-    expect(await diamond(w)).toMatchObject({ target: 2, cycles: '', settleCyclesLeft: 2 });
-    // Once the pass is over the burst gets its two cycles, then is absorbed.
-    await w.listPlayerMatches(out('m-80'), undefined, true);
-    await hour(w);
-    expect(await diamond(w)).toMatchObject({ target: 2, cycles: '', settleCyclesLeft: 1 });
-    await w.listTrackedPlayer(dia('d-80'));
-    await hour(w);
-    expect(await diamond(w)).toMatchObject({ target: 2, cycles: 'K', settleCyclesLeft: 0 });
-  });
-
-  test('the cycles of the daily pass and of its recovery are neither kept nor missed', async () => {
-    const options = {
-      diamondStep: 1,
-      diamondShrinkMissedCycles: 2,
-      diamondPassRecoveryCycles: 1,
-    };
-    // 'd-80' waits for a listing all along: without the pass every cycle would be missed.
-    const w = await tracking(2, ['d-90'], options);
-    await outside('m-80', 80);
-    await hours(w, 5);
-    expect(await diamond(w)).toMatchObject({ target: 2, cycles: 'PPPP' });
-    expect((await w.progress()).extraPass).toMatchObject({ open: true, remaining: 1 });
-
-    // The pass is over (the outside Master is listed): one cycle of recovery, then they count.
-    await w.listPlayerMatches(out('m-80'), undefined, true);
-    await hour(w);
-    expect(await diamond(w)).toMatchObject({ target: 2, cycles: 'PPPPR' });
-    await hour(w);
-    expect(await diamond(w)).toMatchObject({ target: 2, cycles: 'PPPPRM' });
-    await hour(w);
-    expect(await diamond(w)).toMatchObject({ target: 1, tracked: 1, cycles: '' });
-    await hour(w);
-    expect(await diamond(w)).toMatchObject({ target: 1, cycles: 'K' });
-  });
-
-  test('a player who turns up once the pass is over does not make a pass cycle', async () => {
-    // 'd-80' waits for a listing; nobody is due in today's pass.
-    const w = await tracking(2, ['d-90']);
+  test('an outside Master waiting for a listing is tier 2 work like any other: the cycle is missed until they are listed', async () => {
+    const options = { diamondStep: 1, diamondShrinkMissedCycles: 3 };
+    const w = await tracking(2, ['d-90', 'd-80'], options);
     await hours(w, 2);
-    expect(await diamond(w)).toMatchObject({ cycles: 'M' });
-    expect((await w.progress()).extraPass).toMatchObject({ open: false, remaining: 0 });
-    // A Master outside Riot's list is seen for the first time: due, but not "the pass".
-    await outside('m-80', 80);
+    expect(await diamond(w)).toMatchObject({ target: 2, cycles: 'K' });
+    // Their counter moved and nothing lists them: the three tiers have something waiting.
+    await outsideWaiting(w, 'm-80', 80);
+    await hours(w, 2);
+    expect(await diamond(w)).toMatchObject({ target: 2, cycles: 'KMM' });
+    expect((await w.progress()).outsideMasters).toMatchObject({ followed: 1, toList: 1 });
+    // Listed: the platform keeps up again, and the missed cycles are forgotten.
+    await w.listOutsideMaster(out('m-80'));
     await hour(w);
-    expect(await diamond(w)).toMatchObject({ cycles: 'MM' });
-    expect((await w.progress()).extraPass).toMatchObject({ open: false, remaining: 1 });
+    expect(await diamond(w)).toMatchObject({ target: 2, cycles: 'KMMK' });
+    expect((await w.progress()).outsideMasters).toMatchObject({ toList: 0 });
   });
 
-  test('the games found by the pass still being fetched keep tier 3 waiting, and the cycle is a pass cycle', async () => {
-    const w = await tracking(1, ['d-90'], { expandBelowPendingMatches: 1 });
+  test('an outside Master who is checked and did not play costs the Diamond target nothing', async () => {
+    const w = await tracking(2, ['d-90', 'd-80']);
     await outside('m-80', 80);
+    await db`
+      UPDATE players SET matches_synced_until = ${new Date(t - 2 * HOUR)}
+      WHERE puuid = ${out('m-80')}`;
+    await w.refreshOutsideMasters();
+    // Listed two hours ago by the previous version: the first check is the starting counter.
+    expect(await w.checkOutsideMaster(out('m-80'))).toBe('first');
+    await hours(w, 3);
+    expect(await w.checkOutsideMaster(out('m-80'))).toBe('unchanged');
+    await hour(w);
+    expect(await diamond(w)).toMatchObject({ target: 2, cycles: 'KKK' });
+    expect(listings()).not.toContain(`ids:${out('m-80')}`);
+  });
+
+  test('the games an outside Master brought still being fetched keep tier 3 waiting, and the cycle is missed', async () => {
+    const w = await tracking(1, ['d-90'], { expandBelowPendingMatches: 1 });
+    await hour(w);
+    await outsideWaiting(w, 'm-80', 80);
     riot.matchIds.set(out('m-80'), ['EUW1_7000000501', 'EUW1_7000000502']);
+    await w.listOutsideMaster(out('m-80'));
+    // Nobody waits for a listing any more, but the two matches are not stored yet.
     await hour(w);
-    await w.listPlayerMatches(out('m-80'), undefined, true);
-    // Nobody is due any more, but the two matches are not stored yet.
-    await hour(w);
-    expect(await diamond(w)).toMatchObject({ cycles: 'P' });
-    expect((await w.progress()).extraPass).toMatchObject({
-      open: false,
-      remaining: 0,
-      matchesWaiting: 2,
-    });
+    expect(await diamond(w)).toMatchObject({ cycles: 'M' });
+    expect((await w.progress()).outsideMasters).toMatchObject({ toList: 0, matchesWaiting: 2 });
     // One is stored, the other fails and goes to the back of the queue: tier 2 is done.
     await db`UPDATE match_fetch_queue SET status = 'DONE' WHERE match_id = 'EUW1_7000000501'`;
     await w.processMatch({ matchId: 'EUW1_7000000502', platform: 'EUW1', attempts: 0 });
     await hour(w);
-    expect(await diamond(w)).toMatchObject({ cycles: 'PK' });
+    expect(await diamond(w)).toMatchObject({ cycles: 'MK' });
   });
 
   // ---------------------------------------------------------------------------
@@ -783,21 +794,4 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
     await capped.refreshDiamonds();
     expect(await trackedDiamonds()).toEqual(['d-90', 'd-80']);
   });
-
-  test('a full day with the daily pass in it: the cycles of the pass do not stop the growth', async () => {
-    const w = await tracking(1, ['d-90'], { diamondStep: 1 });
-    await outside('m-80', 80, 'EUW1', NOW - HOUR);
-    for (let i = 0; i < 25; i++) {
-      await hour(w);
-      // 04:00 to 07:00 local time: the outside Master is due and not listed yet.
-      if (t === Date.parse('2026-11-14T06:00:00Z')) {
-        await w.listPlayerMatches(out('m-80'), undefined, true);
-      }
-    }
-    expect(t - NOW).toBe(DAY + HOUR);
-    expect(await diamond(w)).toMatchObject({
-      target: 2,
-      lastChange: { from: 1, reason: 'kept up for 24 cycles (20 kept, none missed)' },
-    });
-  }, 60_000);
 });

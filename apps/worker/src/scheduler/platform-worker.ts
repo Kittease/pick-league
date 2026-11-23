@@ -2,18 +2,22 @@
  * One platform's crawler. Several kinds of work run concurrently and all wait on the same per-host
  * rate limiters, which serve the highest priority first (docs/architecture.md, "Worker").
  *
- * Platform host: ladder refresh (hourly, and when Master grows; priority 5), the Diamond sweep
- * (4), the daily mastery refresh (2), enrichment (mastery + rank, 1).
+ * Platform host, in this order: ladder refresh (hourly, and when Master grows; priority 5), the
+ * Diamond sweep (4), the checks of the Masters outside Riot's list (3, at most
+ * `outsideCheckMaxPerHour`), the mastery refresh of tracked players (2), enrichment (masteries,
+ * and the rank when the stored one is old; 1).
  *
  * Match cluster (the scarce budget), three strict tiers:
  *
  * 1. the tracked apex players (Challenger, Grandmaster, Riot's Master list): listings of those
  *    who played (priority 4), then their matches (3);
- * 2. the Masters outside Riot's list (it stops at 10,000 players), listed blind, one pass a day
- *    that opens at a fixed local hour: only once tier 1 has caught up (their matches 0, their
- *    listings -1);
- * 3. the tracked Diamond players: only once tier 1 has caught up and tier 2 has nobody due
- *    (listings -2, matches -3). How many are tracked is a target the worker sizes by itself.
+ * 2. the Masters outside Riot's list (it stops at 10,000 players): each one's own solo queue
+ *    entry is checked in rotation on the platform host, and those whose wins + losses moved are
+ *    listed, only once tier 1 has caught up (their matches 0, their listings -1);
+ * 3. the tracked Diamond players, only once tier 1 has caught up and tier 2 has nothing waiting:
+ *    3a those seen in a Master+ game lately (listings -2, matches -3), then 3b the other Diamond I
+ *    players, only once 3a has nothing waiting (listings -4, matches -5). How many are tracked is
+ *    a target the worker sizes by itself.
  *
  * A tier is held back twice: its work is not handed out before its turn (below), and its requests
  * wait behind those of the tiers above in the limiter.
@@ -22,16 +26,17 @@
  * LP, `masterStep` more each time tier 1 has caught up. Listings and match fetches follow the
  * ladder order too, so the best players' matches always come first.
  *
- * Listing skip rule (`listingSkip` 'shadow' | 'on'): a tracked player whose new games are all
- * stored already (found through other players) needs no listing. For that the matches a listing
- * queues must be stored before the next players are decided, so a tracked player is only picked
- * for a listing once no match queued by a better-placed player is still to be fetched.
+ * Listing skip rule (`listingSkip` 'shadow' | 'on'): a player whose new games are all stored
+ * already (found through other players) needs no listing. For that the matches a listing queues
+ * must be stored before the next players are decided, so a player is only picked for a listing
+ * once no match queued by a better-placed player is still to be fetched.
  *
  * Diamond tracking (`diamondMaxTracked` > 0): after each hourly ladder refresh the four Diamond
- * divisions are read page by page, and the best Diamond players are tracked, as many as the
- * target says: first those seen in a Master+ game lately, then everyone else, each group by
- * division then LP. The target grows a step after a full day of keeping up and shrinks a step
- * when the platform has not kept up for several cycles (`startBudgetCycle`).
+ * divisions are read page by page (the rank of every player already known is stored on the way),
+ * and the best candidates are tracked, as many as the target says: first those seen in a Master+
+ * game lately, by division then LP, then the other Diamond I players by LP; nobody else. The
+ * target grows a step after a full day of keeping up and shrinks a step when the platform has not
+ * kept up for several cycles (`startBudgetCycle`).
  */
 import {
   claimEnrichment,
@@ -40,25 +45,27 @@ import {
   clearWorkerAuthRejected,
   completeEnrichment,
   countEnrichmentQueue,
-  countExtraListingCandidates,
   countPendingMatches,
   countPendingMatchesInBand,
   countStoredGamesEndedBetween,
   type DailyRefreshCandidate,
   type Db,
   DIAMOND_FETCH_RANK,
+  DIAMOND_ONE_FETCH_RANK,
   type DiamondTracking,
   deferMatch,
   deferMatchAfterError,
+  deferOutsideMasterCheck,
   EXTRA_FETCH_RANK,
   enqueueNewMatchIds,
-  extraListingCandidates,
   failEnrichment,
   finishListing,
   finishWorkerRun,
   getDiamondTracking,
   getListingSkipState,
   getMatchesSyncedUntil,
+  getOutsideMasterSkipState,
+  getRankRefreshedAt,
   hasPendingMatchBefore,
   insertParsedMatch,
   inTransaction,
@@ -70,6 +77,10 @@ import {
   markMatchFailed,
   markMatchSkipped,
   markWorkerAuthRejected,
+  type OutsideMasterCheck,
+  outsideMasterStats,
+  outsideMastersToCheck,
+  outsideMastersToList,
   pickProbeMatch,
   platformHasMatchOnPatch,
   playersNeedingDailyRefresh,
@@ -79,15 +90,19 @@ import {
   type QueuedEnrichment,
   type QueuedMatch,
   recordListingSkipMiss,
+  recordOutsideMasterCheck,
   recordWorkerError,
   replaceMasteries,
   saveDiamondTracking,
   setListingBaseline,
+  setOutsideMasterBaseline,
   skipPendingMatchesUpTo,
   startWorkerRun,
+  syncOutsideMasters,
   touchWorkerStatus,
   trackedDiamondEntries,
   trackedPlayersNeverListed,
+  updateKnownPlayerRanks,
   updatePlayerRank,
   upsertDiamondLadder,
   upsertLadder,
@@ -103,7 +118,6 @@ import {
   patchFromGameVersion,
   platformFromMatchId,
   RANKED_SOLO_QUEUE,
-  type SoloTier,
 } from '@pick-league/shared';
 import { abortError, type Clock, isAbortError, systemClock } from '../clock.ts';
 import { errorMessage, type Logger, silentLogger } from '../log.ts';
@@ -127,6 +141,9 @@ const MAX_DIAMOND_PAGES = 5_000;
  */
 export const LISTING_SKIP_MODES = ['off', 'shadow', 'on'] as const;
 export type ListingSkipMode = (typeof LISTING_SKIP_MODES)[number];
+
+/** The groups of players that are listed: each has its own safety interval of the skip rule. */
+export type ListingGroup = 'apex' | 'outsideMaster' | 'diamond';
 
 export interface SchedulerOptions {
   /** Ladder refresh period (default 1 h). */
@@ -174,22 +191,39 @@ export interface SchedulerOptions {
   concurrency: {
     listing: number;
     match: number;
+    /** Mastery refresh of tracked players. */
     daily: number;
     enrichment: number;
-    extraListing: number;
+    /** Checks of the Masters outside Riot's list (platform host). */
+    outsideCheck: number;
+    /** Listings of those whose counter moved (tier 2). */
+    outsideListing: number;
   };
   /**
-   * Tier 2. Untracked players (seen in stored matches, ranked by enrichment) of at least this
-   * tier (default MASTER: the Masters outside Riot's list) are listed once every Master player of
-   * Riot's list is tracked and tier 1 has caught up, highest ranked first, in one pass a day.
-   * The pass opens at `extraPassStartHour` (default 4: after the evening peak) in the platform's
-   * local time, a fixed UTC offset in hours (`extraPassUtcOffsetHours`, default KR +9, VN2 +7,
-   * EUW1 +1, NA1 -6; no daylight saving). From then on every such player not listed since is
-   * due, once, however long the pass takes.
+   * Tier 2. The Master+ players outside Riot's list (seen in stored matches and ranked Master or
+   * above, on no tracked ladder) are followed by their own solo queue entry, asked for on the
+   * platform host in rotation, least recently checked first, once every Master player of Riot's
+   * list is tracked. At most `outsideCheckMaxPerHour` checks an hour (default 1,500, half of what
+   * a platform host allows; 0: none): the checks go before the mastery refresh and enrichment on
+   * that host, so without a ceiling those two would get nothing as long as anyone is left to
+   * check. What a busy hour did not use (the Diamond sweep goes first) is caught up, up to half
+   * an hour's worth. A player is not checked again within `outsideCheckIntervalMs` (default 1 h,
+   * the pace of the ladder lists).
    */
-  extraMinTier: SoloTier;
-  extraPassStartHour: number;
-  extraPassUtcOffsetHours: Partial<Record<Platform, number>>;
+  outsideCheckMaxPerHour: number;
+  outsideCheckIntervalMs: number;
+  /**
+   * Masteries of a tracked player are fetched again when they are this old (default 3 days), and
+   * at once after a first stored game on a champion.
+   */
+  masteryRefreshIntervalMs: number;
+  /**
+   * Enrichment does not ask for the rank of a player whose stored rank was refreshed less than
+   * this ago (by a ladder, the Diamond sweep, a check or a previous enrichment; default 24 h): it
+   * only fetches their masteries. The sweep keeps the rank of the Diamond players it sees at most
+   * half this old.
+   */
+  enrichmentRankFreshMs: number;
   /**
    * Keep collecting the previous patch after the latest one is live (default false). For a
    * backfill of the previous patch by hand; while it is on, first listings go back up to
@@ -198,8 +232,14 @@ export interface SchedulerOptions {
   collectPreviousPatch: boolean;
   /** Listing skip rule (default 'off': exactly the behaviour without it). */
   listingSkip: ListingSkipMode;
-  /** A player whose last real listing is older than this is listed whatever is stored (default 24 h). */
-  listingSkipSafetyMs: number;
+  /**
+   * A player whose last real listing is older than this is listed whatever is stored, per group:
+   * 24 h for the apex players, 72 h for the Masters outside Riot's list and the Diamond players
+   * (at 20,000 players and more, a forced listing a day each is most of the regional budget). It
+   * is also how old the last listing of an outside Master may be for their first check to be
+   * taken as the starting counter without a listing.
+   */
+  listingSkipSafetyMs: Record<ListingGroup, number>;
   /**
    * Riot's ladder counts a finished game late: measured on 2026-11-22, 11 % of the games that
    * ended in the 2 minutes before a ladder refresh were in its wins + losses, 78 % of those that
@@ -218,9 +258,9 @@ export interface SchedulerOptions {
   /**
    * Tier 3. Ceiling of the Diamond target (default 0: no Diamond player is tracked and no
    * Diamond request is made). The target itself is sized by the worker, `diamondStep` players
-   * at a time (default 500), and kept in `diamond_tracking`. Tracked first: those seen in a
-   * Master+ game during `diamondWithMasterWindowMs` (default 7 days), then every other Diamond
-   * player, each group by division then LP.
+   * at a time (default 500), and kept in `diamond_tracking`. Tracked first (3a): those seen in a
+   * Master+ game during `diamondWithMasterWindowMs` (default 7 days), by division then LP; then
+   * (3b) the other Diamond I players by LP. Nobody else.
    */
   diamondMaxTracked: number;
   diamondStep: number;
@@ -229,14 +269,10 @@ export interface SchedulerOptions {
    * The target grows a step when the last `diamondGrowCycles` ladder cycles (default 24: a full
    * day, evening peak included) hold no missed cycle and at least `diamondGrowMinKeptCycles`
    * (default 6) kept ones. A cycle is kept when the three tiers had nothing waiting at least
-   * once during it; missed otherwise, unless the daily pass of tier 2 was still running (players
-   * left to list, or their matches to fetch, while tier 1 had caught up), or it is one of the
-   * first `diamondPassRecoveryCycles` (default 3) after that pass, or patch data was missing:
-   * those are neither.
+   * once during it; missed otherwise, unless patch data was missing: that one is neither.
    */
   diamondGrowCycles: number;
   diamondGrowMinKeptCycles: number;
-  diamondPassRecoveryCycles: number;
   /**
    * The target shrinks a step once `diamondShrinkMissedCycles` cycles (default 6) were missed
    * since the last kept one.
@@ -245,8 +281,7 @@ export interface SchedulerOptions {
   /**
    * A growth step brings a burst of first listings: until the three tiers have nothing waiting
    * again, cycles are not recorded at all, for at most this many cycles that would have been
-   * missed ones (default 24; the cycles of the daily pass do not use them up). The same after a
-   * stop of more than one ladder interval.
+   * missed ones (default 24). The same after a stop of more than one ladder interval.
    */
   diamondSettleCycles: number;
   /**
@@ -271,13 +306,21 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   transientBackoffMs: 5_000,
   maxTransientBackoffMs: 5 * 60_000,
   maxTransientErrors: 10,
-  concurrency: { listing: 2, match: 3, daily: 1, enrichment: 2, extraListing: 1 },
-  extraMinTier: 'MASTER',
-  extraPassStartHour: 4,
-  extraPassUtcOffsetHours: { KR: 9, VN2: 7, EUW1: 1, NA1: -6 },
+  concurrency: {
+    listing: 2,
+    match: 3,
+    daily: 1,
+    enrichment: 2,
+    outsideCheck: 2,
+    outsideListing: 1,
+  },
+  outsideCheckMaxPerHour: 1_500,
+  outsideCheckIntervalMs: HOUR,
+  masteryRefreshIntervalMs: 3 * DAY,
+  enrichmentRankFreshMs: DAY,
   collectPreviousPatch: false,
   listingSkip: 'off',
-  listingSkipSafetyMs: DAY,
+  listingSkipSafetyMs: { apex: DAY, outsideMaster: 3 * DAY, diamond: 3 * DAY },
   listingSkipLadderLagMs: 15 * 60_000,
   listingGateMaxWaitMs: 5 * 60_000,
   listingGatePollMs: 1_000,
@@ -286,7 +329,6 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   diamondWithMasterWindowMs: 7 * DAY,
   diamondGrowCycles: 24,
   diamondGrowMinKeptCycles: 6,
-  diamondPassRecoveryCycles: 3,
   diamondShrinkMissedCycles: 6,
   diamondSettleCycles: 24,
   diamondKeepMs: DAY,
@@ -313,10 +355,16 @@ export interface PlatformWorkerDeps {
   clock?: Clock;
   /** Requests sent so far for this platform (for `worker_runs`). */
   requestCount?: () => number;
-  options?: Partial<Omit<SchedulerOptions, 'concurrency'>> & {
-    concurrency?: Partial<SchedulerOptions['concurrency']>;
-  };
+  options?: SchedulerOptionsInput;
 }
+
+/** Scheduler options to override: any of them, and any part of the grouped ones. */
+export type SchedulerOptionsInput = Partial<
+  Omit<SchedulerOptions, 'concurrency' | 'listingSkipSafetyMs'>
+> & {
+  concurrency?: Partial<SchedulerOptions['concurrency']>;
+  listingSkipSafetyMs?: Partial<SchedulerOptions['listingSkipSafetyMs']>;
+};
 
 /** 'retry': transient error, the match was deferred without counting an attempt. */
 export type MatchOutcome = 'added' | 'exists' | 'skipped' | 'deferred' | 'retry' | 'failed';
@@ -342,7 +390,12 @@ export interface PlatformProgress {
   matchesFailed: number;
   matchesRetried: number;
   enriched: number;
+  /** Enrichments that did not ask for the rank: the stored one was fresh (also in `enriched`). */
+  enrichedRankFresh: number;
+  /** Mastery refreshes of tracked players. */
   dailyRefreshed: number;
+  /** Checks of Masters outside Riot's list (platform host). */
+  outsideMasterChecks: number;
   /** Listings of Masters outside Riot's list (also counted in `playersPolled`). */
   extraPlayersPolled: number;
   /**
@@ -352,19 +405,23 @@ export interface PlatformProgress {
   listingsSkipped: number;
   /** 'shadow': would-be-skipped listings that queued new match ids (`listing_skip_misses` rows). */
   listingSkipMisses: number;
-  /** Tier 2, the daily pass over the Masters outside Riot's list; null when they are not listed. */
-  extraPass: ExtraPassProgress | null;
+  /** Tier 2, the Masters outside Riot's list; null when they are not followed. */
+  outsideMasters: OutsideMastersProgress | null;
   /** Diamond tracking; null when it is off (`diamondMaxTracked` = 0). */
   diamond: DiamondProgress | null;
 }
 
-export interface ExtraPassProgress {
-  /** Whether the pass that opened at `openedAt` still has players to list. */
-  open: boolean;
-  /** When today's pass opened (ISO time). */
-  openedAt: string;
-  /** Players due for a listing now. */
-  remaining: number;
+export interface OutsideMastersProgress {
+  /** Master+ players outside Riot's list that are followed. */
+  followed: number;
+  /** Of them, checked in the last hour. */
+  checkedLastHour: number;
+  /** Not checked yet. */
+  neverChecked: number;
+  /** Age of the oldest check, in minutes (null: nobody was checked yet). */
+  oldestCheckMinutes: number | null;
+  /** Waiting for a match-id listing: their counter moved. */
+  toList: number;
   /** Matches their listings queued that are still to be fetched (tier 3 waits for them too). */
   matchesWaiting: number;
 }
@@ -374,16 +431,15 @@ export interface DiamondProgress {
   seen: [number, number, number, number] | null;
   /** Diamond players tracked. */
   tracked: number;
-  /** Of them, as of the last complete sweep: seen in a Master+ game lately. */
-  trackedWithMaster: number | null;
+  /** Of them, seen in a Master+ game lately (3a); the others are Diamond I players (3b). */
+  trackedWithMaster: number;
   /** Diamond players to track: sized by the worker, at most `cap`. */
   target: number;
   /** `diamondMaxTracked`. */
   cap: number;
   /**
    * The last ladder cycles since the target changed (at most `diamondGrowCycles`), oldest first:
-   * K kept up, P daily Master pass running, R recovering from it, W waiting for patch data,
-   * M missed; and how many of them were kept up with.
+   * K kept up, W waiting for patch data, M missed; and how many of them were kept up with.
    */
   cycles: string;
   keptCycles: number;
@@ -459,16 +515,16 @@ function toDiamondLadderEntry(e: DiamondEntry): LadderEntryInput {
 }
 
 export interface DiamondSelection {
-  /** The players to track, best candidate first. */
+  /** The players to track, best candidate first: those seen in a Master+ game, then the others. */
   tracked: DiamondEntry[];
   /** How many of them were seen in a Master+ game lately. */
   withMaster: number;
 }
 
 /**
- * Which Diamond players to track, `target` at most. One order for every candidate: those of
- * `seenWithMaster` first, then all the others, each group by division (I first, down to IV)
- * then LP.
+ * Which Diamond players to track, `target` at most. Two groups, in this order: (3a) those of
+ * `seenWithMaster`, whatever their division, by division (I first) then LP; (3b) the other
+ * Diamond I players by LP. Nobody else is a candidate.
  */
 export function selectDiamondPlayers(
   candidates: readonly DiamondEntry[],
@@ -477,7 +533,10 @@ export function selectDiamondPlayers(
 ): DiamondSelection {
   const first: DiamondEntry[] = [];
   const others: DiamondEntry[] = [];
-  for (const c of candidates) (seenWithMaster.has(c.puuid) ? first : others).push(c);
+  for (const c of candidates) {
+    if (seenWithMaster.has(c.puuid)) first.push(c);
+    else if (c.division === 1) others.push(c);
+  }
   first.sort(byDivisionThenLp);
   others.sort(byDivisionThenLp);
   const tracked = [...first, ...others].slice(0, Math.max(0, target));
@@ -511,41 +570,11 @@ export class BestDiamonds {
 }
 
 /**
- * When the daily pass of tier 2 last opened: the latest `startHour` o'clock, at or before `now`,
- * of a local time that is UTC + `utcOffsetHours` (a fixed offset: no daylight saving).
- */
-export function passOpenedAt(now: number, startHour: number, utcOffsetHours: number): number {
-  const offset = utcOffsetHours * HOUR;
-  const local = now + offset;
-  let opened = Math.floor(local / DAY) * DAY + startHour * HOUR;
-  if (opened > local) opened -= DAY;
-  return opened - offset;
-}
-
-/**
  * Outcome of a ladder cycle, as recorded in `diamond_tracking.cycles`: K kept up (the three tiers
- * had nothing waiting at least once), P the daily Master pass still had players to list, R one of
- * the first cycles after that pass (its backlog is being absorbed), W waiting for patch data,
- * M missed.
+ * had nothing waiting at least once), W waiting for patch data, M missed. (A history written
+ * before the daily Master pass was removed may hold P and R: neither kept nor missed.)
  */
-export type CycleOutcome = 'K' | 'P' | 'R' | 'W' | 'M';
-
-/** Outcome of a cycle that was not kept up with, after the cycles of `history`. */
-export function classifyMissedCycle(
-  history: string,
-  seen: { pass: boolean; patch: boolean },
-  recoveryCycles: number,
-): Exclude<CycleOutcome, 'K'> {
-  if (seen.patch) return 'W';
-  if (seen.pass) return 'P';
-  const lastPass = history.lastIndexOf('P');
-  if (lastPass >= 0) {
-    const since = history.slice(lastPass + 1);
-    const recovering = since.replaceAll('W', '');
-    if (/^R*$/.test(recovering) && recovering.length < recoveryCycles) return 'R';
-  }
-  return 'M';
-}
+export type CycleOutcome = 'K' | 'W' | 'M';
 
 export interface DiamondTargetRules {
   /** `diamondMaxTracked`. */
@@ -624,8 +653,6 @@ interface BudgetCycle {
   startedAt: number;
   /** The three tiers had nothing waiting at least once (recorded at once). */
   kept: boolean;
-  /** The daily pass of tier 2 still had players to list. */
-  pass: boolean;
   /** Matches were waiting for patch data. */
   patch: boolean;
 }
@@ -634,7 +661,8 @@ interface BudgetCycle {
 function matchPriority(fetchRank: number | undefined): Priority {
   if (fetchRank === undefined || fetchRank < EXTRA_FETCH_RANK) return PRIORITY.MATCH;
   if (fetchRank < DIAMOND_FETCH_RANK) return PRIORITY.EXTRA_MATCH;
-  if (fetchRank < QUEUE_BACK_RANK) return PRIORITY.DIAMOND_MATCH;
+  if (fetchRank < DIAMOND_ONE_FETCH_RANK) return PRIORITY.DIAMOND_MATCH;
+  if (fetchRank < QUEUE_BACK_RANK) return PRIORITY.DIAMOND_ONE_MATCH;
   // Retried and deferred matches may be anyone's.
   return PRIORITY.MATCH;
 }
@@ -672,8 +700,9 @@ export class PlatformWorker {
   private readonly played = new Set<string>();
   /**
    * `fetch_rank` of each tracked player, from the last refresh: the ladder position of the apex
-   * players (`apexOrder`, 0 = first Challenger), `DIAMOND_FETCH_RANK` + their position for the
-   * tracked Diamond players (`diamond.tracked`). Listings follow it too.
+   * players (`apexOrder`, 0 = first Challenger); for the tracked Diamond players
+   * (`diamond.tracked`), `DIAMOND_FETCH_RANK` + their position among those seen in a Master+ game
+   * lately, `DIAMOND_ONE_FETCH_RANK` + their position among the others. Listings follow it too.
    */
   private ladderRank = new Map<string, number>();
   private apexOrder: string[] = [];
@@ -681,22 +710,29 @@ export class PlatformWorker {
   private apexPuuids = new Set<string>();
   /** Diamond tracking (`diamondMaxTracked` > 0). */
   private readonly diamond = {
-    /** Tracked Diamond players, top down (division, then LP). */
+    /**
+     * Tracked Diamond players: those seen in a Master+ game lately (3a; division, then LP), then
+     * the other Diamond I players (3b; by LP).
+     */
     tracked: [] as DiamondRank[],
+    /** How many of `tracked`, from its start, are of 3a. */
+    withMaster: 0,
     /** Players per division of the last complete sweep. */
     seen: null as [number, number, number, number] | null,
-    /** Tracked players seen in a Master+ game lately, at the last complete sweep. */
-    withMaster: null as number | null,
+    /** Ranks of known players stored by the sweep in progress. */
+    ranksWritten: 0,
     /** The target and its history (`diamond_tracking`), once read. */
     state: null as DiamondTracking | null,
     loading: null as Promise<DiamondTracking> | null,
     /** The ladder cycle in progress. */
     cycle: null as BudgetCycle | null,
   };
-  /** Tier 2: the pass that opened at `openedAt`, and whether nobody was left to list since. */
-  private extraPass = { openedAt: 0, done: false };
-  /** Whether a player of tier 2 could be listed, as last read (null: read again). */
-  private extraDue: { checkedAt: number; due: boolean } | null = null;
+  /** Whether an outside Master is waiting for a listing, as last read (null: read again). */
+  private outsideDue: { checkedAt: number; due: boolean } | null = null;
+  /** Checks refused with a 401/403 in a row (a single one is the player's, not the key's). */
+  private checksRefused = 0;
+  /** What is left of the hourly allowance of outside-Master checks (`outsideCheckMaxPerHour`). */
+  private readonly checkBudget = { tokens: 0, at: 0 };
   /** Whether a ladder refresh succeeded in this process. */
   private ladderRefreshed = false;
   /** Master players tracked: grows by `masterStep` when tier 1 has caught up. */
@@ -748,9 +784,10 @@ export class PlatformWorker {
   private readonly matchSource: WorkSource<QueuedMatch>;
   private readonly dailySource: WorkSource<DailyRefreshCandidate>;
   private readonly enrichmentSource: WorkSource<QueuedEnrichment>;
-  private readonly extraSource: WorkSource<string>;
-  /** Untracked players whose listing failed: not listed again before this time. */
-  private readonly extraCooldown = new Map<string, number>();
+  private readonly outsideCheckSource: WorkSource<string>;
+  private readonly outsideListSource: WorkSource<string>;
+  /** Outside Masters whose listing failed: not listed again before this time. */
+  private readonly outsideListCooldown = new Map<string, number>();
 
   private readonly counters = {
     matchesAdded: 0,
@@ -759,7 +796,9 @@ export class PlatformWorker {
     matchesFailed: 0,
     matchesRetried: 0,
     enriched: 0,
+    enrichedRankFresh: 0,
     dailyRefreshed: 0,
+    outsideMasterChecks: 0,
     extraPlayersPolled: 0,
     listingsSkipped: 0,
     listingSkipMisses: 0,
@@ -786,7 +825,12 @@ export class PlatformWorker {
       ...DEFAULT_SCHEDULER_OPTIONS,
       ...deps.options,
       concurrency: { ...DEFAULT_SCHEDULER_OPTIONS.concurrency, ...deps.options?.concurrency },
+      listingSkipSafetyMs: {
+        ...DEFAULT_SCHEDULER_OPTIONS.listingSkipSafetyMs,
+        ...deps.options?.listingSkipSafetyMs,
+      },
     };
+    this.checkBudget = { tokens: this.checkBudgetCapacity(), at: this.clock.now() };
 
     this.matchSource = new WorkSource(
       async (exclude) => {
@@ -796,10 +840,13 @@ export class PlatformWorker {
         const probe = await this.nextProbe(exclude);
         if (probe !== undefined) return probe ? [probe] : [];
         // The Diamond players' matches only when it is their tier's turn.
-        const withoutDiamond = !(await this.diamondTurn());
-        const rows = await claimPendingMatches(this.db, this.platform, 50 + exclude.size, {
-          withoutDiamond,
-        });
+        const heldFrom = await this.matchesHeldFrom();
+        const rows = await claimPendingMatches(
+          this.db,
+          this.platform,
+          50 + exclude.size,
+          heldFrom === null ? {} : { heldFrom },
+        );
         return rows.filter((r) => !exclude.has(r.matchId) && !this.deferredUntil.has(r.matchId));
       },
       (m) => m.matchId,
@@ -812,7 +859,7 @@ export class PlatformWorker {
           this.db,
           this.platform,
           20 + exclude.size + this.dailyCooldown.size,
-          24,
+          this.opts.masteryRefreshIntervalMs / HOUR,
           new Date(now),
         );
         return rows.filter((r) => !exclude.has(r.puuid) && !this.dailyCooldown.has(r.puuid));
@@ -826,16 +873,28 @@ export class PlatformWorker {
       },
       (e) => e.puuid,
     );
-    this.extraSource = new WorkSource(
+    this.outsideCheckSource = new WorkSource(
+      async (exclude) => {
+        const rows = await outsideMastersToCheck(this.db, this.platform, {
+          checkedBefore: new Date(this.clock.now() - this.opts.outsideCheckIntervalMs),
+          limit: 20 + exclude.size,
+        });
+        return rows.filter((p) => !exclude.has(p));
+      },
+      (p) => p,
+    );
+    this.outsideListSource = new WorkSource(
       async (exclude) => {
         const now = this.clock.now();
-        for (const [p, until] of this.extraCooldown) if (until <= now) this.extraCooldown.delete(p);
-        const rows = await extraListingCandidates(this.db, this.platform, {
-          minTier: this.opts.extraMinTier,
-          syncedBefore: this.extraDueBefore(now),
-          limit: 20 + exclude.size + this.extraCooldown.size,
-        });
-        return rows.filter((p) => !exclude.has(p) && !this.extraCooldown.has(p));
+        for (const [p, until] of this.outsideListCooldown) {
+          if (until <= now) this.outsideListCooldown.delete(p);
+        }
+        const rows = await outsideMastersToList(
+          this.db,
+          this.platform,
+          20 + exclude.size + this.outsideListCooldown.size,
+        );
+        return rows.filter((p) => !exclude.has(p) && !this.outsideListCooldown.has(p));
       },
       (p) => p,
     );
@@ -876,14 +935,17 @@ export class PlatformWorker {
     });
     this.apexOrder = entries.map((e) => e.puuid);
     if (keepDiamond) this.apexPuuids = new Set([...entries, ...masters].map((e) => e.puuid));
-    else this.diamond.tracked = [];
+    else {
+      this.diamond.tracked = [];
+      this.diamond.withMaster = 0;
+    }
     this.applyLadderOrder();
     this.masterTracked = tracked.length;
     this.ladderRefreshed = true;
-    // Players who left the tracked ladder may be due in tier 2.
-    this.extraDue = null;
     for (const p of result.played) this.played.add(p);
     await this.loadPendingListings();
+    // Players who left the tracked ladder are outside Masters now; those it took are not.
+    await this.refreshOutsideMasters();
     this.log.info('ladder refreshed', {
       entries: entries.length,
       masterTracked: this.masterTracked,
@@ -898,7 +960,8 @@ export class PlatformWorker {
 
   /**
    * The `fetch_rank` of every tracked player, top down: the apex players by ladder position, then
-   * the tracked Diamond players in their own band (a player in both keeps the apex position).
+   * the tracked Diamond players in their two bands, those seen in a Master+ game first (a player
+   * in both keeps the apex position).
    */
   private applyLadderOrder(): void {
     const rank = new Map<string, number>();
@@ -906,9 +969,15 @@ export class PlatformWorker {
       if (!rank.has(p)) rank.set(p, Math.min(rank.size, EXTRA_FETCH_RANK - 1));
     }
     let position = DIAMOND_FETCH_RANK;
-    for (const d of this.diamond.tracked) {
-      if (!rank.has(d.puuid)) rank.set(d.puuid, Math.min(position++, QUEUE_BACK_RANK - 1));
-    }
+    let onePosition = DIAMOND_ONE_FETCH_RANK;
+    this.diamond.tracked.forEach((d, i) => {
+      if (rank.has(d.puuid)) return;
+      if (i < this.diamond.withMaster) {
+        rank.set(d.puuid, Math.min(position++, DIAMOND_ONE_FETCH_RANK - 1));
+      } else {
+        rank.set(d.puuid, Math.min(onePosition++, QUEUE_BACK_RANK - 1));
+      }
+    });
     this.ladderRank = rank;
   }
 
@@ -916,18 +985,37 @@ export class PlatformWorker {
     return this.ladderRank.get(puuid) ?? UNRANKED;
   }
 
-  /** A tracked apex player (tier 1); anyone else to list is of tier 3. */
+  /** A tracked apex player (tier 1); anyone else of `played` is of tier 3. */
   private isApex(puuid: string): boolean {
     return this.rankOf(puuid) < EXTRA_FETCH_RANK;
+  }
+
+  /**
+   * Of tier 3, a Diamond player seen in a Master+ game lately (3a); the others (3b) are the
+   * Diamond I players, and those who left the tracked ladder while waiting.
+   */
+  private isDiamondWithMaster(puuid: string): boolean {
+    const rank = this.rankOf(puuid);
+    return rank >= DIAMOND_FETCH_RANK && rank < DIAMOND_ONE_FETCH_RANK;
   }
 
   /** The tracked ladder as stored, before this process refreshes it (at startup). */
   private async loadLadderOrder(): Promise<void> {
     const rows = await ladderOrder(this.db, this.platform);
     this.apexOrder = rows.filter((r) => r.tier !== 'DIAMOND').map((r) => r.puuid);
-    this.diamond.tracked = rows
-      .filter((r) => r.tier === 'DIAMOND')
-      .map((r) => ({ puuid: r.puuid, division: r.division ?? 4, leaguePoints: r.leaguePoints }));
+    // The two Diamond groups as the next sweep will see them (rows come by division, then LP).
+    const since = this.clock.now() - this.opts.diamondWithMasterWindowMs;
+    const diamonds = rows.filter((r) => r.tier === 'DIAMOND');
+    const seenLately = (r: (typeof rows)[number]) =>
+      (r.lastSeenWithMasterAt?.getTime() ?? 0) >= since;
+    const withMaster = diamonds.filter(seenLately);
+    const others = diamonds.filter((r) => !seenLately(r));
+    this.diamond.tracked = [...withMaster, ...others].map((r) => ({
+      puuid: r.puuid,
+      division: r.division ?? 4,
+      leaguePoints: r.leaguePoints,
+    }));
+    this.diamond.withMaster = withMaster.length;
     this.applyLadderOrder();
     this.masterTracked = rows.filter((r) => r.tier === 'MASTER').length;
     this.ladderLoaded = true;
@@ -979,86 +1067,117 @@ export class PlatformWorker {
   }
 
   /**
-   * Tier 2's turn: whether to list the Masters outside Riot's list now. Every Master player of
-   * that list is tracked and tier 1 has caught up.
+   * Tier 2's turn: whether to list the Masters outside Riot's list whose counter moved. Every
+   * Master player of that list is tracked and tier 1 has caught up.
    */
-  async canListExtraPlayers(): Promise<boolean> {
+  async canListOutsideMasters(): Promise<boolean> {
     return this.apexComplete() && (await this.apexCaughtUp());
   }
 
-  /** When today's pass of tier 2 opened (the pass of a new day starts over). */
-  private extraPassOpenedAt(now: number): number {
-    const offset = this.opts.extraPassUtcOffsetHours[this.platform] ?? 0;
-    const openedAt = passOpenedAt(now, this.opts.extraPassStartHour, offset);
-    if (openedAt !== this.extraPass.openedAt) {
-      this.extraPass = { openedAt, done: false };
-      this.extraDue = null;
+  /** Whether the Masters outside Riot's list are followed at all. */
+  private followsOutsideMasters(): boolean {
+    const c = this.opts.concurrency;
+    return c.outsideCheck > 0 || c.outsideListing > 0;
+  }
+
+  /**
+   * Brings the set of outside Masters in line with the stored ranks and the tracked ladders
+   * (after each ladder refresh and each Diamond sweep): the Master+ players on no tracked ladder
+   * join it, those a ladder follows now or who are ranked lower leave it.
+   */
+  async refreshOutsideMasters(): Promise<void> {
+    if (!this.followsOutsideMasters()) return;
+    const { added, removed } = await syncOutsideMasters(this.db, this.platform);
+    this.outsideDue = null;
+    if (removed > 0) {
+      this.outsideCheckSource.clear();
+      this.outsideListSource.clear();
     }
-    return openedAt;
+    if (added > 0 || removed > 0) this.log.info('outside Masters updated', { added, removed });
   }
 
   /**
-   * A player of tier 2 is due when their last listing is older than the opening of today's pass.
-   * A listing sets `matches_synced_until` to `listingOverlapMs` before its own time.
+   * Whether an outside Master is waiting for a listing and could be listed now (those cooling
+   * down after a failed listing could not). Read at most every `idleMs`, and again after each
+   * check that asked for a listing and each of their listings.
    */
-  private extraDueBefore(now: number): Date {
-    return new Date(this.extraPassOpenedAt(now) - this.opts.listingOverlapMs);
-  }
-
-  /**
-   * Whether a player of tier 2 is due and could be listed now (those cooling down after a failed
-   * listing could not). Read at most every `idleMs`, and again after each of their listings.
-   */
-  private async extraListingDue(): Promise<boolean> {
-    if (this.opts.concurrency.extraListing <= 0) return false;
+  private async outsideListingWaiting(): Promise<boolean> {
+    if (this.opts.concurrency.outsideListing <= 0) return false;
     const now = this.clock.now();
-    const before = this.extraDueBefore(now);
-    const last = this.extraDue;
+    const last = this.outsideDue;
     if (last !== null && now - last.checkedAt < this.opts.idleMs) return last.due;
-    const coolingDown = (p: string) => (this.extraCooldown.get(p) ?? 0) > now;
-    const rows = await extraListingCandidates(this.db, this.platform, {
-      minTier: this.opts.extraMinTier,
-      syncedBefore: before,
-      limit: 1 + [...this.extraCooldown.keys()].filter(coolingDown).length,
-    });
+    const coolingDown = (p: string) => (this.outsideListCooldown.get(p) ?? 0) > now;
+    const rows = await outsideMastersToList(
+      this.db,
+      this.platform,
+      1 + [...this.outsideListCooldown.keys()].filter(coolingDown).length,
+    );
     const due = rows.some((p) => !coolingDown(p));
-    this.extraDue = { checkedAt: now, due };
-    // Nobody left: today's pass is over (players who turn up later are listed as they come).
-    if (!due) this.extraPass.done = true;
+    this.outsideDue = { checkedAt: now, due };
     return due;
   }
 
   /**
-   * Tier 2 is done: nobody of it is due (and could be listed), none of their listings is running,
-   * and the matches queued by tiers 1 and 2 are fetched, all but `expandBelowPendingMatches` at
-   * most. A match that fails or is deferred goes to the back of the queue at once, out of these
-   * bands, so one that cannot be fetched never keeps tier 2 open.
+   * Tier 2 has nothing waiting: no outside Master is waiting for a listing (and could be
+   * listed), none of their listings is running, and the matches queued by tiers 1 and 2 are
+   * fetched, all but `expandBelowPendingMatches` at most. A match that fails or is deferred goes
+   * to the back of the queue at once, out of these bands, so one that cannot be fetched never
+   * keeps tier 2 open. The checks themselves (platform host) are not waited for.
    */
-  private async extraTierDone(): Promise<boolean> {
-    if (await this.extraListingDue()) return false;
-    if (this.extraSource.active > 0) return false;
+  private async outsideTierDone(): Promise<boolean> {
+    if (await this.outsideListingWaiting()) return false;
+    if (this.outsideListSource.active > 0) return false;
     return this.fewPendingMatchesBefore(DIAMOND_FETCH_RANK);
   }
 
   /**
    * Tier 3's turn: whether a tracked Diamond player may be listed, or one of their matches
-   * fetched, now. Tier 1 has caught up and tier 2 is done: every Master outside Riot's list is
-   * listed and their games are stored.
+   * fetched, now. Tier 1 has caught up and tier 2 has nothing waiting.
    */
   private async diamondTurn(): Promise<boolean> {
     if (!this.apexComplete() || !(await this.apexCaughtUp())) return false;
-    return this.extraTierDone();
+    return this.outsideTierDone();
   }
 
   /**
-   * The three tiers have nothing waiting: no listing waiting or running, tier 2 done, at most
-   * `expandBelowPendingMatches` matches PENDING (retried and deferred ones aside).
+   * Turn of the Diamond I players (3b), inside tier 3: the Diamond players seen in a Master+ game
+   * (3a) have nothing waiting. None of their listings is waiting or running (players cooling
+   * down after a failed listing aside) and at most `expandBelowPendingMatches` of their matches
+   * are PENDING.
+   */
+  private async diamondOneTurn(): Promise<boolean> {
+    return (await this.diamondTurn()) && (await this.diamondWithMasterDone());
+  }
+
+  /** The Diamond players seen in a Master+ game (3a) have nothing waiting (see above). */
+  private async diamondWithMasterDone(): Promise<boolean> {
+    for (const p of this.listingInFlight) if (this.isDiamondWithMaster(p)) return false;
+    const next = this.peekPlayedPlayer();
+    if (next !== null && this.isDiamondWithMaster(next)) return false;
+    return this.fewPendingMatchesBefore(DIAMOND_ONE_FETCH_RANK);
+  }
+
+  /**
+   * The first band of `fetch_rank` whose matches must wait now, up to the back of the queue
+   * (null: none): every Diamond player's when it is not tier 3's turn, those of the Diamond I
+   * players when the players seen in a Master+ game still have something waiting.
+   */
+  private async matchesHeldFrom(): Promise<number | null> {
+    if (!(await this.diamondTurn())) return DIAMOND_FETCH_RANK;
+    if (!(await this.diamondWithMasterDone())) return DIAMOND_ONE_FETCH_RANK;
+    return null;
+  }
+
+  /**
+   * The three tiers have nothing waiting: no listing waiting or running (of a tracked player or
+   * of an outside Master), at most `expandBelowPendingMatches` matches PENDING (retried and
+   * deferred ones aside).
    */
   private async nothingWaiting(): Promise<boolean> {
     if (!this.patches.ready || !this.apexComplete()) return false;
     if (this.listingInFlight.size > 0) return false;
     if (this.peekPlayedPlayer() !== null) return false;
-    if (!(await this.extraTierDone())) return false;
+    if (!(await this.outsideTierDone())) return false;
     return this.fewPendingMatchesBefore(QUEUE_BACK_RANK);
   }
 
@@ -1156,28 +1275,26 @@ export class PlatformWorker {
     if (cycle !== null) {
       await this.noteKeepingUp();
       if (!cycle.kept) {
-        const outcome = classifyMissedCycle(
-          state.cycles,
-          cycle,
-          this.opts.diamondPassRecoveryCycles,
-        );
+        const outcome: CycleOutcome = cycle.patch ? 'W' : 'M';
         if (state.settleCyclesLeft === 0) {
           await this.recordCycle(cycle, outcome);
         } else if (outcome === 'M') {
-          // Settling: not recorded. A cycle of the daily pass does not use up the time to settle.
+          // Settling: not recorded. A cycle without patch data does not use up the time to settle.
           state.settleCyclesLeft -= 1;
           await this.saveDiamondState();
         }
       }
     }
     await this.adjustDiamondTarget();
-    this.diamond.cycle = { startedAt: this.clock.now(), kept: false, pass: false, patch: false };
+    this.diamond.cycle = { startedAt: this.clock.now(), kept: false, patch: false };
   }
 
   /**
    * Looks at the cycle in progress (every `expansionCheckMs`): the first time the three tiers
    * have nothing waiting, the cycle is recorded as kept up with. Also notes what excuses a cycle
-   * that is not: the daily pass of tier 2 still running, matches waiting for patch data.
+   * that is not: matches waiting for patch data. Tier 2 has no excuse of its own any more: its
+   * listings are spread over the day (only the players whose counter moved), so an hour in which
+   * tiers 1 and 2 leave nothing to the Diamond players is an hour the platform did not keep up.
    */
   async noteKeepingUp(): Promise<void> {
     const cycle = this.diamond.cycle;
@@ -1187,17 +1304,7 @@ export class PlatformWorker {
       cycle.patch = true;
       return;
     }
-    if (!this.apexComplete()) return;
-    if (await this.extraListingDue()) {
-      // Strays listed after the pass was over don't make it a pass cycle.
-      if (!this.extraPass.done) cycle.pass = true;
-      return;
-    }
-    if (!(await this.nothingWaiting())) {
-      // The games the pass found are still being fetched: tier 3 is still waiting for it.
-      if ((await this.apexCaughtUp()) && !(await this.extraTierDone())) cycle.pass = true;
-      return;
-    }
+    if (!(await this.nothingWaiting())) return;
     cycle.kept = true;
     await this.recordCycle(cycle, 'K');
   }
@@ -1262,11 +1369,16 @@ export class PlatformWorker {
   }
 
   /**
-   * Reads the four Diamond divisions page by page and tracks the best Diamond players, as many
-   * as the target says (`diamond_tracking`, at most `diamondMaxTracked`): first those seen in a
-   * Master+ game during `diamondWithMasterWindowMs`, then every other Diamond player, each group
-   * by division then LP. Marks who played; returns how many (null: tracking is off, or Riot
-   * answered with no player at all and nothing was changed).
+   * Reads the four Diamond divisions page by page and tracks the best candidates, as many as the
+   * target says (`diamond_tracking`, at most `diamondMaxTracked`): first (3a) those seen in a
+   * Master+ game during `diamondWithMasterWindowMs`, whatever their division, by division then
+   * LP; then (3b) the other Diamond I players by LP. A Diamond II to IV player not seen in a
+   * Master+ game is not a candidate, tracked so far or not. Marks who played; returns how many
+   * (null: tracking is off, or Riot answered with no player at all and nothing was changed).
+   *
+   * On the way, each page's tier, division, LP and counters are stored for the players already
+   * known (`updateKnownPlayerRanks`), so enrichment does not ask for them again; that part is
+   * kept even when the sweep fails later (each page is true when it is read).
    *
    * A page that fails throws and nothing is changed: nobody is removed nor taken as "did not
    * play". A tracked player the sweep did not see (moved between pages meanwhile, promoted,
@@ -1292,16 +1404,16 @@ export class PlatformWorker {
     ]);
     const seenWithMaster = new Set(withMaster);
     const storedPuuids = new Set(stored.map((r) => r.puuid));
-    // A sweep is up to 140,000 entries. Every Diamond player is a candidate, but only those who
-    // can end up tracked are kept in memory: the players seen in a Master+ game and the tracked
-    // ones, and of all the others the best by division then LP, as many as the target (and a
-    // margin for players seen twice).
+    // A sweep is up to 140,000 entries. Only those who can end up tracked are kept in memory:
+    // the players seen in a Master+ game and the tracked ones, and of the other Diamond I players
+    // the best by LP, as many as the target (and a margin for players seen twice).
     const first: DiamondEntry[] = [];
     const others = new BestDiamonds(target + this.opts.diamondStep);
+    this.diamond.ranksWritten = 0;
     const seen = await this.sweepDiamond((e) => {
       if (this.apexPuuids.has(e.puuid)) return;
       if (seenWithMaster.has(e.puuid) || storedPuuids.has(e.puuid)) first.push(e);
-      else others.add(e);
+      else if (e.division === 1) others.add(e);
     }, signal);
     if (seen.every((n) => n === 0)) {
       this.log.warn('empty Diamond sweep from Riot, not applied');
@@ -1341,7 +1453,7 @@ export class PlatformWorker {
       { keep: tracked.filter((e) => missing.has(e.puuid)).map((e) => e.puuid), now: new Date(now) },
     );
     const before = this.diamond.tracked;
-    this.diamond.tracked = [...tracked].sort(byDivisionThenLp);
+    this.diamond.tracked = tracked;
     this.diamond.seen = seen;
     this.diamond.withMaster = selection.withMaster;
     this.applyLadderOrder();
@@ -1354,8 +1466,11 @@ export class PlatformWorker {
     }
     for (const p of result.played) this.played.add(p);
     await this.loadPendingListings();
+    // A Master outside Riot's list the sweep saw in Diamond is not one any more.
+    await this.refreshOutsideMasters();
     this.log.info('diamond sweep applied', {
       seen,
+      ranksStored: this.diamond.ranksWritten,
       tracked: tracked.length,
       withMaster: selection.withMaster,
       target,
@@ -1415,12 +1530,35 @@ export class PlatformWorker {
       if (signal.aborted) throw abortError();
       const entries = await this.riot.getDiamondEntries(this.platform, division, page, signal);
       if (entries.length === 0) return seen;
-      for (const e of toDiamondEntries(entries, number, this.clock.now())) {
+      const seenAt = this.clock.now();
+      const players = toDiamondEntries(entries, number, seenAt);
+      for (const e of players) {
         seen++;
         collect(e);
       }
+      await this.storeSweptRanks(players, seenAt);
     }
     throw new Error(`Diamond ${division} did not end after ${MAX_DIAMOND_PAGES} pages`);
+  }
+
+  /**
+   * Stores the rank of the players of a Diamond page that are already known (not the players of
+   * Riot's apex lists: a player may be on both for a moment). Only what changed is written, and
+   * a rank that would otherwise get older than half of `enrichmentRankFreshMs`. A failure here
+   * never fails the sweep.
+   */
+  private async storeSweptRanks(players: readonly DiamondEntry[], seenAt: number): Promise<void> {
+    try {
+      this.diamond.ranksWritten += await updateKnownPlayerRanks(
+        this.db,
+        this.platform,
+        players.filter((e) => !this.apexPuuids.has(e.puuid)),
+        new Date(seenAt),
+        new Date(seenAt - this.opts.enrichmentRankFreshMs / 2),
+      );
+    } catch (err) {
+      this.log.warn('ranks of a Diamond page not stored', { error: errorMessage(err) });
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1484,12 +1622,14 @@ export class PlatformWorker {
 
   /**
    * The player to list next whose tier may be listed now: an apex player always, a Diamond
-   * player (or one who left the tracked ladder) only when it is tier 3's turn.
+   * player seen in a Master+ game only when it is tier 3's turn, a Diamond I player (or one who
+   * left the tracked ladder) only when those have nothing waiting either.
    */
   private async peekListablePlayer(): Promise<string | null> {
     const next = this.peekPlayedPlayer();
     if (next === null || this.isApex(next)) return next;
-    return (await this.diamondTurn()) ? next : null;
+    const turn = this.isDiamondWithMaster(next) ? this.diamondTurn() : this.diamondOneTurn();
+    return (await turn) ? next : null;
   }
 
   private async nextPlayedPlayer(): Promise<string | null> {
@@ -1560,6 +1700,31 @@ export class PlatformWorker {
 
   /**
    * Lists a tracked player the ladder says played, unless the skip rule says their new games are
+   * all stored already (`listWithSkipRule`).
+   */
+  async listTrackedPlayer(puuid: string, signal?: AbortSignal): Promise<'listed' | 'skipped'> {
+    // This listing answers the player's request (the loops have taken it out already).
+    this.played.delete(puuid);
+    return this.listWithSkipRule(puuid, this.isApex(puuid) ? 'apex' : 'diamond', signal);
+  }
+
+  /**
+   * Lists a Master outside Riot's list whose counter moved (tier 2), unless the skip rule says
+   * their new games are all stored already. Same rule as for a tracked player, on the counters
+   * of their checks: the snapshot of a counter is the moment the check that first saw it was
+   * answered.
+   */
+  async listOutsideMaster(puuid: string, signal?: AbortSignal): Promise<'listed' | 'skipped'> {
+    try {
+      return await this.listWithSkipRule(puuid, 'outsideMaster', signal);
+    } finally {
+      // One fewer is waiting: read again whether anyone is left.
+      this.outsideDue = null;
+    }
+  }
+
+  /**
+   * Lists a player whose counter says they played, unless the skip rule says their new games are
    * all stored already (`listingSkip`):
    *
    * - 'off': always listed.
@@ -1569,27 +1734,30 @@ export class PlatformWorker {
    * - 'shadow': always listed. When the rule holds the baseline stays, as in 'on', and if the
    *   listing queued new match ids they are recorded in `listing_skip_misses`.
    *
-   * A real listing the rule did not hold for sets the baseline: the ladder counters it was decided
-   * on, and now.
+   * A real listing the rule did not hold for sets the baseline: the counters it was decided on,
+   * and now.
    */
-  async listTrackedPlayer(puuid: string, signal?: AbortSignal): Promise<'listed' | 'skipped'> {
-    // This listing answers the player's request (the loops have taken it out already).
-    this.played.delete(puuid);
+  private async listWithSkipRule(
+    puuid: string,
+    group: ListingGroup,
+    signal?: AbortSignal,
+  ): Promise<'listed' | 'skipped'> {
+    const outside = group === 'outsideMaster';
     const mode = this.opts.listingSkip;
     if (mode === 'off') {
-      await this.listPlayerMatches(puuid, signal);
+      await this.listPlayerMatches(puuid, signal, outside);
       return 'listed';
     }
     const checkedAt = this.clock.now();
-    const check = await this.checkListingSkip(puuid, checkedAt);
+    const check = await this.checkListingSkip(puuid, group, checkedAt);
     if (check.explained && mode === 'on') {
       await clearListingRequest(this.db, puuid, check.state.snapshotAt);
       this.counters.listingsSkipped++;
-      this.log.debug('listing skipped', { expected: check.expected, stored: check.stored });
+      this.log.debug('listing skipped', { group, expected: check.expected, stored: check.stored });
       return 'skipped';
     }
     const newIds: string[] = [];
-    await this.listPlayerMatches(puuid, signal, false, newIds);
+    await this.listPlayerMatches(puuid, signal, outside, newIds);
     if (check.explained) {
       this.counters.listingsSkipped++;
       if (newIds.length > 0) {
@@ -1606,29 +1774,34 @@ export class PlatformWorker {
         this.counters.listingSkipMisses++;
       }
     } else if (check.state) {
-      await setListingBaseline(this.db, puuid, {
+      const baseline = {
         games: check.state.gamesNow,
         snapshotAt: check.state.snapshotAt,
         listedAt: new Date(checkedAt),
-      });
+      };
+      if (outside) await setOutsideMasterBaseline(this.db, puuid, baseline);
+      else await setListingBaseline(this.db, puuid, baseline);
     }
     return 'listed';
   }
 
   /**
-   * The skip rule for a tracked player about to be listed. With `games_now` the player's wins +
-   * losses on the ladder, `snapshot` the ladder refresh that produced them, and the baseline of
-   * their last real listing (`listed_games` at `listed_snapshot_at`, run at `listed_at`):
-   * `explained` when `expected = games_now - listed_games` is positive and at least that many
-   * stored non-remake matches of the player ended after `listed_snapshot_at` and at least
-   * `listingSkipLadderLagMs` before `snapshot`. Never without a baseline, when the counters went down (season reset), or when
-   * `listed_at` is `listingSkipSafetyMs` old (a game Riot never counted would otherwise hide a
-   * later one for ever). A game that ended after the snapshot, or too shortly before it for Riot's
-   * ladder to have counted it, may not be in `games_now`, so it must not stand for an older
-   * missing one; counting too few only costs a listing.
+   * The skip rule for a player about to be listed. With `games_now` the player's wins + losses,
+   * `snapshot` when they were first seen (the ladder refresh that produced them; for an outside
+   * Master, the answer of the check that did), and the baseline of their last real listing
+   * (`listed_games` at `listed_snapshot_at`, run at `listed_at`): `explained` when
+   * `expected = games_now - listed_games` is positive and at least that many stored non-remake
+   * matches of the player ended after `listed_snapshot_at` and at least `listingSkipLadderLagMs`
+   * before `snapshot`. Never without a baseline, when the counters went down (season reset), or
+   * when `listed_at` is as old as the safety interval of the player's group
+   * (`listingSkipSafetyMs`: a game Riot never counted would otherwise hide a later one for ever).
+   * A game that ended after the snapshot, or too shortly before it for Riot to have counted it,
+   * may not be in `games_now`, so it must not stand for an older missing one; counting too few
+   * only costs a listing.
    */
   private async checkListingSkip(
     puuid: string,
+    group: ListingGroup,
     now: number,
   ): Promise<
     | { explained: false; state: ListingSkipState | null }
@@ -1640,18 +1813,21 @@ export class PlatformWorker {
         stored: number;
       }
   > {
-    const state = await getListingSkipState(this.db, puuid);
+    const state =
+      group === 'outsideMaster'
+        ? await getOutsideMasterSkipState(this.db, puuid)
+        : await getListingSkipState(this.db, puuid);
     if (state === null) return { explained: false, state };
     const { gamesNow, snapshotAt, listedGames, listedSnapshotAt, listedAt } = state;
     if (listedGames === null || listedSnapshotAt === null || listedAt === null) {
       return { explained: false, state };
     }
-    if (listedAt.getTime() <= now - this.opts.listingSkipSafetyMs) {
+    if (listedAt.getTime() <= now - this.opts.listingSkipSafetyMs[group]) {
       return { explained: false, state };
     }
     const expected = gamesNow - listedGames;
     if (expected <= 0) return { explained: false, state };
-    // Games that ended in the last minutes before the ladder refresh may not be in its counters.
+    // Games that ended in the last minutes before the snapshot may not be in its counters.
     const countedBy = new Date(snapshotAt.getTime() - this.opts.listingSkipLadderLagMs);
     const stored = await countStoredGamesEndedBetween(this.db, puuid, listedSnapshotAt, countedBy);
     if (stored < expected) return { explained: false, state };
@@ -1662,7 +1838,7 @@ export class PlatformWorker {
    * Lists a player's ranked match ids since `matches_synced_until`; returns how many were new
    * (and adds them to `newIds`). The request and the matches it queues take the priority of the
    * player's tier: an apex player's ladder position, then the Masters outside Riot's list
-   * (`extra`), then the Diamond players.
+   * (`extra`), then the Diamond players seen in a Master+ game, then the Diamond I players.
    */
   async listPlayerMatches(
     puuid: string,
@@ -1680,7 +1856,9 @@ export class PlatformWorker {
       ? PRIORITY.EXTRA_MATCH_IDS
       : this.isApex(puuid)
         ? undefined
-        : PRIORITY.DIAMOND_MATCH_IDS;
+        : this.isDiamondWithMaster(puuid)
+          ? PRIORITY.DIAMOND_MATCH_IDS
+          : PRIORITY.DIAMOND_ONE_MATCH_IDS;
     let added = 0;
     for (let start = 0; ; start += 100) {
       const ids = await this.riot.getMatchIds(
@@ -1948,9 +2126,128 @@ export class PlatformWorker {
   }
 
   // -------------------------------------------------------------------------
-  // Daily refresh of tracked players
+  // The Masters outside Riot's list: checks of their own entry (platform host)
   // -------------------------------------------------------------------------
 
+  /** Checks an hour's allowance can hold at most: half an hour's worth. */
+  private checkBudgetCapacity(): number {
+    return Math.max(
+      this.opts.outsideCheckMaxPerHour > 0 ? 1 : 0,
+      this.opts.outsideCheckMaxPerHour / 2,
+    );
+  }
+
+  /** What is left of the allowance of checks now (it fills at `outsideCheckMaxPerHour`). */
+  private checksAllowed(): number {
+    const now = this.clock.now();
+    const budget = this.checkBudget;
+    const earned = (Math.max(0, now - budget.at) * this.opts.outsideCheckMaxPerHour) / HOUR;
+    budget.tokens = Math.min(this.checkBudgetCapacity(), budget.tokens + earned);
+    budget.at = now;
+    return budget.tokens;
+  }
+
+  /**
+   * The next outside Master to check: the least recently checked (never checked first), once
+   * every Master of Riot's list is tracked, while the allowance of the hour is not used up.
+   */
+  private async nextOutsideCheck(): Promise<string | null> {
+    if (!this.apexComplete() || this.checksAllowed() < 1) return null;
+    // Taken before waiting for the database, so two loops never share one; given back if unused.
+    this.checkBudget.tokens -= 1;
+    const next = await this.outsideCheckSource.next();
+    if (next === null) this.checkBudget.tokens += 1;
+    return next;
+  }
+
+  /**
+   * Asks for the solo queue entry of a Master outside Riot's list (platform host, after the
+   * ladder lists and the Diamond sweep, before masteries and enrichment) and stores what it says
+   * (`recordOutsideMasterCheck`): their rank, and whether their wins + losses moved since the
+   * last check, in which case a listing is requested (tier 2). A first check has nothing to
+   * compare: it is the starting counter when the player's match ids were listed within the
+   * safety interval of the skip rule (by the daily pass of the previous version, or as a tracked
+   * player), and asks for one listing otherwise. A player who is no longer Master or above
+   * leaves the set.
+   *
+   * The snapshot of the counter is the moment Riot answered, not when the request was made (it
+   * may have waited for the host's budget): a game that ended before it may still be missing
+   * from the counter, never one that ended after. A failed check sends the player to the back
+   * of the rotation, a 401/403 included: alone it is that player's failure, not a rejected key
+   * (three in a row, or a key another request has seen rejected, pause the platform as usual).
+   */
+  async checkOutsideMaster(puuid: string, signal?: AbortSignal): Promise<OutsideMasterCheck> {
+    let entries: LeagueEntryDto[] | null;
+    try {
+      entries = await this.riot.getLeagueEntries(
+        this.platform,
+        puuid,
+        PRIORITY.OUTSIDE_MASTER_CHECK,
+        signal,
+      );
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      await deferOutsideMasterCheck(this.db, puuid, new Date(this.clock.now()));
+      // Riot answers 403 for some players whatever the key: that fails this check, it must not
+      // pause the platform every time the rotation comes back to them. A key that is really
+      // rejected shows on every request: another kind of work has seen it already, or the checks
+      // are refused one after the other.
+      if (err instanceof RiotAuthError) {
+        this.checksRefused += 1;
+        const keyRejected = this.authState === 'rejected' || this.checksRefused >= 3;
+        if (!keyRejected) {
+          throw new Error(`league entry of an outside Master refused (HTTP ${err.status})`);
+        }
+      }
+      throw err;
+    }
+    this.checksRefused = 0;
+    const now = this.clock.now();
+    const safety = this.opts.listingSkipSafetyMs.outsideMaster;
+    const outcome = await recordOutsideMasterCheck(this.db, puuid, toSoloRank(entries ?? []), {
+      now: new Date(now),
+      // `matches_synced_until` is `listingOverlapMs` before the listing itself.
+      listedSince: new Date(now - safety - this.opts.listingOverlapMs),
+    });
+    this.counters.outsideMasterChecks++;
+    if (outcome === 'played' || outcome === 'first-listing') this.outsideDue = null;
+    this.log.debug('outside Master checked', { outcome });
+    return outcome;
+  }
+
+  /**
+   * The next outside Master to list, when it is tier 2's turn. With the skip rule (`afterMatches`)
+   * the player is only handed out once the matches queued by the apex players and by the outside
+   * Masters listed before are fetched (at most `listingGateMaxWaitMs` later), so that whether
+   * their new games are stored is decided on everything those brought.
+   */
+  private async nextOutsideListing(
+    signal: AbortSignal,
+    afterMatches: boolean,
+  ): Promise<string | null> {
+    let waitingSince: number | null = null;
+    for (;;) {
+      if (!(await this.canListOutsideMasters())) return null;
+      if (!afterMatches) return this.outsideListSource.next();
+      if (!(await this.outsideListingWaiting())) return null;
+      const now = this.clock.now();
+      waitingSince ??= now;
+      const open =
+        now - waitingSince >= this.opts.listingGateMaxWaitMs ||
+        !(await hasPendingMatchBefore(this.db, this.platform, DIAMOND_FETCH_RANK));
+      if (open) return this.outsideListSource.next();
+      await Promise.race([
+        this.matchSettled.promise,
+        this.clock.sleep(this.opts.listingGatePollMs, signal),
+      ]);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Mastery refresh of tracked players
+  // -------------------------------------------------------------------------
+
+  /** Fetches a tracked player's masteries again (due every `masteryRefreshIntervalMs`). */
   async dailyRefresh(c: DailyRefreshCandidate, signal?: AbortSignal): Promise<void> {
     const masteries = await this.riot.getMasteries(
       this.platform,
@@ -1971,6 +2268,11 @@ export class PlatformWorker {
   // Enrichment of non-ladder players
   // -------------------------------------------------------------------------
 
+  /**
+   * Masteries of a queued player, and their rank unless the stored one was refreshed less than
+   * `enrichmentRankFreshMs` ago (by the Diamond sweep, a check, a ladder or a previous
+   * enrichment): one request instead of two for most players.
+   */
   async enrich(e: QueuedEnrichment, signal?: AbortSignal): Promise<void> {
     try {
       const masteries = await this.riot.getMasteries(
@@ -1979,21 +2281,22 @@ export class PlatformWorker {
         PRIORITY.ENRICHMENT,
         signal,
       );
-      const entries = await this.riot.getLeagueEntries(
-        this.platform,
-        e.puuid,
-        PRIORITY.ENRICHMENT,
-        signal,
-      );
+      const rankAt = await getRankRefreshedAt(this.db, e.puuid);
+      const rankFresh =
+        rankAt !== null && this.clock.now() - rankAt.getTime() < this.opts.enrichmentRankFreshMs;
+      const entries = rankFresh
+        ? null
+        : await this.riot.getLeagueEntries(this.platform, e.puuid, PRIORITY.ENRICHMENT, signal);
       const now = new Date(this.clock.now());
       // One transaction: a match of this player stored meanwhile waits for it (the player's row)
       // and, if it brings a champion without a mastery row, queues the player again.
       await inTransaction(this.db, async (tx) => {
         await replaceMasteries(tx, e.puuid, toMasteries(masteries ?? []), now);
-        await updatePlayerRank(tx, e.puuid, toSoloRank(entries ?? []), now);
+        if (!rankFresh) await updatePlayerRank(tx, e.puuid, toSoloRank(entries ?? []), now);
         await completeEnrichment(tx, e.puuid);
       });
       this.counters.enriched++;
+      if (rankFresh) this.counters.enrichedRankFresh++;
     } catch (err) {
       if (isAbortError(err) || err instanceof RiotAuthError) throw err;
       await failEnrichment(this.db, e.puuid, errorMessage(err));
@@ -2079,25 +2382,38 @@ export class PlatformWorker {
         ),
       );
     }
-    for (let i = 0; i < c.extraListing; i++) {
+    for (let i = 0; i < c.outsideCheck; i++) {
       loops.push(
         this.workLoop(
-          'extra listing',
+          'outside check',
           signal,
-          async () => ((await this.canListExtraPlayers()) ? this.extraSource.next() : null),
+          () => this.nextOutsideCheck(),
+          async (p) => {
+            await this.checkOutsideMaster(p, signal);
+            return 'ok';
+          },
+          (p) => this.outsideCheckSource.release(p),
+        ),
+      );
+    }
+    for (let i = 0; i < c.outsideListing; i++) {
+      loops.push(
+        this.workLoop(
+          'outside listing',
+          signal,
+          () => this.nextOutsideListing(signal, afterMatches),
           async (p) => {
             try {
-              await this.listPlayerMatches(p, signal, true);
+              await this.listOutsideMaster(p, signal);
               return 'ok';
             } catch (err) {
-              if (!isAbortError(err)) this.extraCooldown.set(p, this.clock.now() + HOUR);
+              if (!isAbortError(err)) this.outsideListCooldown.set(p, this.clock.now() + HOUR);
               throw err;
             }
           },
           (p) => {
-            this.extraSource.release(p);
-            // One fewer is due: read again whether anyone is left.
-            this.extraDue = null;
+            this.outsideListSource.release(p);
+            this.outsideDue = null;
           },
         ),
       );
@@ -2109,8 +2425,9 @@ export class PlatformWorker {
 
   /**
    * The next queued match for a match loop. A Diamond player's match is only handed out when it
-   * is tier 3's turn (checked again here: what was claimed a moment ago may have to wait now);
-   * otherwise the queue is read again without them.
+   * is its turn: tier 3's, and for a Diamond I player's when the players seen in a Master+ game
+   * have nothing waiting either (checked again here: what was claimed a moment ago may have to
+   * wait now); otherwise the queue is read again without them.
    */
   private async nextMatch(): Promise<QueuedMatch | null> {
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -2118,26 +2435,28 @@ export class PlatformWorker {
       if (m === null || this.probe.inFlight === m.matchId) return m;
       const rank = m.fetchRank ?? 0;
       if (rank < DIAMOND_FETCH_RANK || rank >= QUEUE_BACK_RANK) return m;
-      if (await this.diamondTurn()) return m;
+      const turn = rank < DIAMOND_ONE_FETCH_RANK ? this.diamondTurn() : this.diamondOneTurn();
+      if (await turn) return m;
       this.matchSource.release(m);
       this.matchSource.clear();
     }
     return null;
   }
 
-  /** Tier 2 for the `progress` log: today's pass, how many players are due, their matches. */
-  private async extraPassProgress(): Promise<ExtraPassProgress | null> {
-    if (this.opts.concurrency.extraListing <= 0) return null;
+  /** Tier 2 for the `progress` log: the outside Masters, their checks and who waits for a listing. */
+  private async outsideMastersProgress(): Promise<OutsideMastersProgress | null> {
+    if (!this.followsOutsideMasters()) return null;
     const now = this.clock.now();
-    const remaining = await countExtraListingCandidates(this.db, this.platform, {
-      minTier: this.opts.extraMinTier,
-      syncedBefore: this.extraDueBefore(now),
-    });
-    if (remaining === 0) this.extraPass.done = true;
+    const stats = await outsideMasterStats(this.db, this.platform, new Date(now - HOUR));
     return {
-      open: !this.extraPass.done,
-      openedAt: new Date(this.extraPass.openedAt).toISOString(),
-      remaining,
+      followed: stats.followed,
+      checkedLastHour: stats.checkedSince,
+      neverChecked: stats.neverChecked,
+      oldestCheckMinutes:
+        stats.oldestCheckAt === null
+          ? null
+          : Math.round((now - stats.oldestCheckAt.getTime()) / 60_000),
+      toList: stats.toList,
       matchesWaiting: await countPendingMatchesInBand(
         this.db,
         this.platform,
@@ -2180,7 +2499,7 @@ export class PlatformWorker {
       enrichmentQueue: await countEnrichmentQueue(this.db, this.platform),
       latestPatchLive: this.latestLive,
       ...this.counters,
-      extraPass: await this.extraPassProgress(),
+      outsideMasters: await this.outsideMastersProgress(),
       diamond: await this.diamondProgress(),
     };
   }

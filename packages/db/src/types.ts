@@ -170,6 +170,8 @@ export interface LadderOrderRow {
   /** 1..4 for DIAMOND, null for the apex tiers. */
   division: number | null;
   leaguePoints: number;
+  /** `players.last_seen_with_master_at`. */
+  lastSeenWithMasterAt: Date | null;
 }
 
 /** A tracked Diamond player as stored (`trackedDiamondEntries`). */
@@ -181,11 +183,14 @@ export interface TrackedDiamondEntry {
   seenAt: Date;
 }
 
-/** What the listing skip rule reads about a tracked player (`getListingSkipState`). */
+/**
+ * What the listing skip rule reads about a tracked player (`getListingSkipState`) or an outside
+ * Master (`getOutsideMasterSkipState`).
+ */
 export interface ListingSkipState {
-  /** Current wins + losses on the ladder. */
+  /** Current wins + losses: on the ladder, or at the player's last check. */
   gamesNow: number;
-  /** The ladder refresh that produced them. */
+  /** The ladder refresh, or the check, that first saw them. */
   snapshotAt: Date;
   /** Baseline set by the last real listing (all null before the first one). */
   listedGames: number | null;
@@ -221,6 +226,39 @@ export interface SoloRankInput {
   losses: number;
 }
 
+/** A Diamond player's rank as a sweep page gave it (`updateKnownPlayerRanks`). */
+export interface SweptRankInput {
+  puuid: string;
+  /** 1..4 */
+  division: number;
+  leaguePoints: number;
+  wins: number;
+  losses: number;
+}
+
+/** Outcome of a check of an outside Master (`recordOutsideMasterCheck`). */
+export type OutsideMasterCheck =
+  | 'unchanged'
+  | 'played'
+  | 'first'
+  | 'first-listing'
+  | 'left'
+  | 'gone';
+
+/** The outside Masters of a platform (`outsideMasterStats`). */
+export interface OutsideMasterStats {
+  /** Players followed (rows of `outside_masters`). */
+  followed: number;
+  /** Of them, checked since the given time. */
+  checkedSince: number;
+  /** Not checked yet. */
+  neverChecked: number;
+  /** The oldest last check among those checked; null when none was. */
+  oldestCheckAt: Date | null;
+  /** Waiting for a match-id listing. */
+  toList: number;
+}
+
 export interface QueuedMatch {
   matchId: string;
   platform: Platform;
@@ -235,8 +273,7 @@ export interface DiamondTracking {
   target: number;
   /**
    * Outcome of the ladder cycles since the target last changed, oldest first, one letter each:
-   * K kept up, P daily Master pass running, R recovering from it, W waiting for patch data,
-   * M missed.
+   * K kept up, W waiting for patch data, M missed.
    */
   cycles: string;
   /** Start of the last cycle in `cycles`. */
@@ -255,7 +292,7 @@ export interface QueuedEnrichment {
   attempts: number;
 }
 
-/** A tracked player whose masteries are due (champion-mastery-v4). */
+/** A tracked player whose masteries are due for their periodic refresh (champion-mastery-v4). */
 export interface DailyRefreshCandidate {
   puuid: string;
 }
