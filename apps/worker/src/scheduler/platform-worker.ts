@@ -321,7 +321,9 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
     daily: 1,
     enrichment: 2,
     outsideCheck: 2,
-    outsideListing: 1,
+    // Three at a time: with one, the listings of the outside Masters (1.2 new matches each on
+    // KR on 2026-11-23) left a sixth of the regional budget unused while thousands waited.
+    outsideListing: 3,
   },
   outsideCheckMaxPerHour: 1_500,
   outsideCheckIntervalMs: HOUR,
