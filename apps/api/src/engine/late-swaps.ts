@@ -18,14 +18,20 @@ interface Pair {
 }
 
 /**
- * The most frequent swaps of `rows` (one champion+role, every patch given summed, unweighted):
- * pairs seen in at least `lateSwaps.minGames` games, most frequent first (ties: lowest item ids),
- * at most `lateSwaps.maxShown`. Pairs with an item unknown to `items` (the current patch's: an
- * item removed since the previous patch has no name or icon) are left out.
+ * The swaps of `rows` (one champion+role, every patch given summed, unweighted) the build can
+ * show: pairs seen in at least `lateSwaps.minGames` games whose sold item the reader has already
+ * seen, i.e. an item of the core builds shown (`shownItemIds`) or the item bought by a swap listed
+ * before. Without that, a champion's three most frequent swaps could all sell an item its builds
+ * never mention (Xayah's sold Guardian Angel, which she only gets through a swap): the swap that
+ * buys it comes first. Picked one at a time, the most frequent showable pair first (ties: lowest
+ * item ids), at most `lateSwaps.maxShown`; the list is in that order. Pairs with an item unknown
+ * to `items` (the current patch's: an item removed since the previous patch has no name or icon)
+ * are left out.
  */
 export function lateSwaps(
   rows: readonly ItemSwapRow[],
   items: ReadonlyMap<number, ItemInfo>,
+  shownItemIds: Iterable<number>,
 ): LateSwap[] {
   const pairs = new Map<string, Pair>();
   for (const r of rows) {
@@ -41,14 +47,21 @@ export function lateSwaps(
     pair.games += r.games;
     pair.minutes += r.minuteSum;
   }
-  return [...pairs.values()]
+  const candidates = [...pairs.values()]
     .filter((p) => p.games >= LS.minGames)
-    .sort((a, b) => b.games - a.games || a.sold - b.sold || a.bought - b.bought)
-    .slice(0, LS.maxShown)
-    .map((p) => ({
-      sellItemId: p.sold,
-      buyItemId: p.bought,
-      games: p.games,
-      minute: round(p.minutes / p.games, 1),
-    }));
+    .sort((a, b) => b.games - a.games || a.sold - b.sold || a.bought - b.bought);
+  const known = new Set(shownItemIds);
+  const shown: Pair[] = [];
+  while (shown.length < LS.maxShown) {
+    const next = candidates.find((p) => known.has(p.sold) && !shown.includes(p));
+    if (!next) break;
+    shown.push(next);
+    known.add(next.bought);
+  }
+  return shown.map((p) => ({
+    sellItemId: p.sold,
+    buyItemId: p.bought,
+    games: p.games,
+    minute: round(p.minutes / p.games, 1),
+  }));
 }

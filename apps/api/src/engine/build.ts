@@ -387,7 +387,15 @@ export function recommendBuild(req: BuildRequest, data: BuildData): BuildRespons
     patchesUsed: data.patch.patches,
     games: baseline.games,
     confidence: round(sampleConfidence(baseline.games, B.confidenceK), 3),
-    items: { ...items, lateSwaps: lateSwaps(data.itemSwaps ?? [], data.items) },
+    items: {
+      ...items,
+      // Only swaps selling an item of the core builds shown, or bought by an earlier swap.
+      lateSwaps: lateSwaps(
+        data.itemSwaps ?? [],
+        data.items,
+        [items.core, ...items.coreBuilds.map((c) => c.items)].flat().map((item) => item.itemId),
+      ),
+    },
     runes,
     summonerSpells,
     skillOrder,

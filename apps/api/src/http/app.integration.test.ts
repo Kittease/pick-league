@@ -226,18 +226,40 @@ function expectedSwaps(patches: readonly string[]) {
   return { byChampion: out, undoneSales };
 }
 
-/** The swaps of a champion + role as the build shows them (thresholds of `ENGINE_CONFIG`). */
-function shownSwaps(patches: readonly string[], championId: number, position: Position) {
+/**
+ * The swaps of a champion + role as the build shows them (thresholds of `ENGINE_CONFIG`): one at a
+ * time, the most frequent whose sold item is one of `shownItemIds` (the build's core items; every
+ * item when omitted) or was bought by a swap picked before.
+ */
+function shownSwaps(
+  patches: readonly string[],
+  championId: number,
+  position: Position,
+  shownItemIds?: readonly number[],
+) {
   const pairs = expectedSwaps(patches).byChampion.get(`${position}|${championId}`) ?? new Map();
-  return [...pairs]
+  const candidates = [...pairs]
     .map(([pair, acc]) => {
       const [sellItemId = 0, buyItemId = 0] = pair.split('|').map(Number);
       return { sellItemId, buyItemId, games: acc.games, minute: acc.atMs / acc.games / 60_000 };
     })
     .filter((x) => x.games >= ENGINE_CONFIG.lateSwaps.minGames)
-    .sort((x, y) => y.games - x.games || x.sellItemId - y.sellItemId || x.buyItemId - y.buyItemId)
-    .slice(0, ENGINE_CONFIG.lateSwaps.maxShown);
+    .sort((x, y) => y.games - x.games || x.sellItemId - y.sellItemId || x.buyItemId - y.buyItemId);
+  if (!shownItemIds) return candidates.slice(0, ENGINE_CONFIG.lateSwaps.maxShown);
+  const known = new Set(shownItemIds);
+  const shown: typeof candidates = [];
+  while (shown.length < ENGINE_CONFIG.lateSwaps.maxShown) {
+    const next = candidates.find((x) => known.has(x.sellItemId) && !shown.includes(x));
+    if (!next) break;
+    shown.push(next);
+    known.add(next.buyItemId);
+  }
+  return shown;
 }
+
+/** Item ids of the core builds a build response shows. */
+const coreItemIds = (b: BuildResponse) =>
+  [b.items.core, ...b.items.coreBuilds.map((c) => c.items)].flat().map((item) => item.itemId);
 
 describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
   let db: Db;
@@ -1195,12 +1217,13 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
 
   test('build: late-game swaps of the champion, both patches summed, most frequent first', async () => {
     const championId = PLANTED.runeMatchup.championId;
-    const want = shownSwaps([CUR, PREV], championId, 'UTILITY');
+    const body = { championId, role: 'UTILITY', allies: [], enemies: [] };
+    const b = (await (await post('/recommendations/build', body)).json()) as BuildResponse;
+    // Only swaps selling an item of the core builds shown, or bought by a swap before.
+    const want = shownSwaps([CUR, PREV], championId, 'UTILITY', coreItemIds(b));
     // Not vacuous: Leona's supports swap their boots both ways, and the previous patch counts.
     expect(want.length).toBeGreaterThanOrEqual(2);
     expect(want[0]?.games).toBeGreaterThan(shownSwaps([CUR], championId, 'UTILITY')[0]?.games ?? 0);
-    const body = { championId, role: 'UTILITY', allies: [], enemies: [] };
-    const b = (await (await post('/recommendations/build', body)).json()) as BuildResponse;
     expect(b.items.lateSwaps.map(({ minute: _, ...x }) => x)).toEqual(
       want.map(({ minute: _, ...x }) => x),
     );
@@ -1210,19 +1233,30 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       expect(swap.minute).toBeCloseTo(want[i]?.minute ?? Number.NaN, 1);
       expect(swap.minute).toBe(Math.round(swap.minute * 10) / 10);
     }
-    // The draft changes nothing; a forced patch reads that patch only.
+    // The draft only matters through the core builds it shows; a forced patch reads that patch
+    // only.
     const drafted = (await (
       await post('/recommendations/build', {
         ...body,
         enemies: [{ championId: PLANTED.runeMatchup.opponentId, role: 'UTILITY' }],
       })
     ).json()) as BuildResponse;
-    expect(drafted.items.lateSwaps).toEqual(b.items.lateSwaps);
+    expect(drafted.items.lateSwaps.map((x) => [x.sellItemId, x.buyItemId, x.games])).toEqual(
+      shownSwaps([CUR, PREV], championId, 'UTILITY', coreItemIds(drafted)).map((x) => [
+        x.sellItemId,
+        x.buyItemId,
+        x.games,
+      ]),
+    );
     const forced = (await (
       await post('/recommendations/build', { ...body, patch: PREV })
     ).json()) as BuildResponse;
     expect(forced.items.lateSwaps.map((x) => [x.sellItemId, x.buyItemId, x.games])).toEqual(
-      shownSwaps([PREV], championId, 'UTILITY').map((x) => [x.sellItemId, x.buyItemId, x.games]),
+      shownSwaps([PREV], championId, 'UTILITY', coreItemIds(forced)).map((x) => [
+        x.sellItemId,
+        x.buyItemId,
+        x.games,
+      ]),
     );
   });
 
