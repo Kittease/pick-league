@@ -111,6 +111,12 @@ describe('lateSwaps', () => {
       [3047, 3065],
       [3065, 3075],
     ]);
+    // Boots are always known, whichever pair the build shows: 3047 is not in the build here.
+    expect(pairs([3190], rows)).toEqual([
+      [3047, 3065],
+      [3065, 3075],
+      [3065, 3109],
+    ]);
     // An item shown by the build needs no swap before it.
     expect(pairs([3065], rows)).toEqual([
       [3065, 3075],

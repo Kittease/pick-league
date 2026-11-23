@@ -519,8 +519,8 @@ export interface ItemsRecommendation {
   situational: RecommendedItem[];
   /**
    * Late-game swaps of the champion + role (at most 3, each seen in at least 10 games), in
-   * reading order: a swap only sells an item of the core builds above or the item bought by a
-   * swap before it; among those, the most frequent first. Empty for most rarely played champions.
+   * reading order: a swap only sells an item of the core builds above, a pair of boots, or the
+   * item bought by a swap before it; among those, the most frequent first. Empty for most rarely played champions.
    */
   lateSwaps: LateSwap[];
   /**

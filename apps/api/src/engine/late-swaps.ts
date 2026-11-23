@@ -20,8 +20,9 @@ interface Pair {
 /**
  * The swaps of `rows` (one champion+role, every patch given summed, unweighted) the build can
  * show: pairs seen in at least `lateSwaps.minGames` games whose sold item the reader has already
- * seen, i.e. an item of the core builds shown (`shownItemIds`) or the item bought by a swap listed
- * before. Without that, a champion's three most frequent swaps could all sell an item its builds
+ * seen, i.e. an item of the core builds shown (`shownItemIds`), any pair of boots (the build
+ * shows one, and players wearing another swap theirs the same way) or the item bought by a swap
+ * listed before. Without that, a champion's three most frequent swaps could all sell an item its builds
  * never mention (Xayah's sold Guardian Angel, which she only gets through a swap): the swap that
  * buys it comes first. Picked one at a time, the most frequent showable pair first (ties: lowest
  * item ids), at most `lateSwaps.maxShown`; the list is in that order. Pairs with an item unknown
@@ -53,7 +54,9 @@ export function lateSwaps(
   const known = new Set(shownItemIds);
   const shown: Pair[] = [];
   while (shown.length < LS.maxShown) {
-    const next = candidates.find((p) => known.has(p.sold) && !shown.includes(p));
+    const next = candidates.find(
+      (p) => (known.has(p.sold) || items.get(p.sold)?.isBoots === true) && !shown.includes(p),
+    );
     if (!next) break;
     shown.push(next);
     known.add(next.bought);

@@ -249,13 +249,18 @@ function shownSwaps(
   const known = new Set(shownItemIds);
   const shown: typeof candidates = [];
   while (shown.length < ENGINE_CONFIG.lateSwaps.maxShown) {
-    const next = candidates.find((x) => known.has(x.sellItemId) && !shown.includes(x));
+    const next = candidates.find(
+      (x) => (known.has(x.sellItemId) || BOOTS.has(x.sellItemId)) && !shown.includes(x),
+    );
     if (!next) break;
     shown.push(next);
     known.add(next.buyItemId);
   }
   return shown;
 }
+
+/** The boots of the synthetic loadouts: a pair of boots is always a known item for the swaps. */
+const BOOTS = new Set([3006, 3020, 3047, 3111, 3158]);
 
 /** Item ids of the core builds a build response shows. */
 const coreItemIds = (b: BuildResponse) =>
