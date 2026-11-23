@@ -52,8 +52,11 @@ export const STATS_REFRESH_ORDER: readonly {
   // Results per side, for the draft evaluation (0016_side_wins.sql).
   { view: 'stats_side_wins', concurrent: true },
   // Win rate by the player's mastery of the champion, for the picks' mastery term
-  // (0018_mastery_curve.sql).
-  { view: 'stats_champion_mastery', concurrent: true },
+  // (0018_mastery_curve.sql). Since champion_masteries only keeps the champions of stored games
+  // (0027), the planner reads each mastery row's player through the puuid index of participants,
+  // expecting one row where a tracked player has hundreds: over 6 minutes on 2026-11-23, against
+  // 7 s with hash joins.
+  { view: 'stats_champion_mastery', concurrent: true, noNestedLoops: true },
   // Tier list filters by server and rank (0006_tierlist_filters.sql).
   { view: 'stats_tierlist_participants', concurrent: false, analyze: true },
   // Results by game length, for the early / late profile (0019_game_length.sql).
