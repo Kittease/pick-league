@@ -299,13 +299,13 @@ describe.skipIf(!URL_)('stats_item_swaps (Postgres)', () => {
     await db?.end();
   });
 
-  test('refreshed concurrently, after the participants it reads', () => {
-    const names = STATS_REFRESH_ORDER.map((s) => s.view);
-    const step = STATS_REFRESH_ORDER.find((s) => s.view === 'stats_item_swaps');
-    expect(step?.concurrent).toBe(true);
-    expect(names.indexOf('stats_item_swaps')).toBeGreaterThan(
-      names.indexOf('stats_tierlist_participants'),
+  test('refreshed concurrently, after the swaps of the new matches were added', () => {
+    const swaps = STATS_REFRESH_ORDER.findIndex(
+      (s) => 'view' in s && s.view === 'stats_item_swaps' && s.concurrent,
     );
+    const tables = STATS_REFRESH_ORDER.findIndex((s) => 'incremental' in s);
+    expect(tables).toBeGreaterThanOrEqual(0);
+    expect(swaps).toBeGreaterThan(tables);
   });
 
   test('every scenario: what counts as a swap and what does not', async () => {
@@ -323,6 +323,12 @@ describe.skipIf(!URL_)('stats_item_swaps (Postgres)', () => {
   test('a second refresh (concurrent, on a populated view) gives the same rows', async () => {
     const before = await viewRows();
     expect((await refreshStats(db, { force: true })).views).toHaveProperty('stats_item_swaps');
+    expect(await viewRows()).toEqual(before);
+    // And so does computing the swaps of every match again.
+    const rebuilt = await refreshStats(db, { rebuild: true });
+    const [stored] = await db<{ n: number }[]>`SELECT count(*)::int AS n FROM matches`;
+    expect(rebuilt.matchesComputed).toBe(stored?.n ?? -1);
+    expect(rebuilt.views).toHaveProperty('stats_participant_swaps');
     expect(await viewRows()).toEqual(before);
   });
 

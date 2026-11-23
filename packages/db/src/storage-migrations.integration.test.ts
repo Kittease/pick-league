@@ -131,7 +131,10 @@ async function populateOldLayout(db: Db): Promise<void> {
         CASE WHEN n = 10 THEN '{3869,0,0,0,0,0,3340}'::int[] ELSE '{0,0,0,0,0,0,3340}'::int[] END,
         15, 3, 2, 7, 150, 10, 11000, 10500,
         15000, 9000, 5000, 1000, 18000, 9000, 2000, 4000, 1500, 0, 0, 20, 25, 10, 3, 2,
-        '{500,900}', '{0,280}', '{0,6}', '{1,2}', '{0,120}', '{554,3000}', '{581,9000}'
+        (SELECT array_agg(500 * g + 10 * n ORDER BY g) FROM generate_series(1, 12) g),
+        (SELECT array_agg(280 * (g - 1) ORDER BY g) FROM generate_series(1, 12) g),
+        (SELECT array_agg((6 * (g - 1))::smallint ORDER BY g) FROM generate_series(1, 12) g),
+        '{1,2}', '{0,120}', '{554,3000}', '{581,9000}'
       FROM generate_series(1, 10) n`;
   }
   for (const [participantId, events] of Object.entries(ITEM_EVENTS)) {
@@ -212,16 +215,21 @@ async function schemaOf(db: Db) {
   };
 }
 
-/** The stats views the storage migrations rewrite or change the source of, read whole. */
-async function rewrittenViews(db: Db) {
+/**
+ * The stats views the storage migrations rewrite or change the source of, read whole.
+ * `participants`: the materialized view stats_participants until 0029, since 0030 the plain view
+ * with the same columns (the table and the composition traits it no longer holds).
+ */
+async function rewrittenViews(db: Db, participants = 'stats_participant_traits') {
   return {
     participants: [
-      ...(await db`SELECT * FROM stats_participants ORDER BY match_id, participant_id`),
+      ...(await db.unsafe(`SELECT * FROM ${participants} ORDER BY match_id, participant_id`)),
     ],
     questItems: [...(await db`SELECT * FROM stats_quest_items ORDER BY match_id, participant_id`)],
     swaps: [...(await db`SELECT * FROM stats_item_swaps ORDER BY 1, 2, 3, 4, 5`)],
     choices: [...(await db`SELECT * FROM stats_choices ORDER BY 1, 2, 3, 4, 5`)],
     mastery: [...(await db`SELECT * FROM stats_champion_mastery ORDER BY 1, 2, 3, 4`)],
+    lanePhase: [...(await db`SELECT * FROM stats_champion_lane_phase ORDER BY 1, 2, 3, 4, 5`)],
   };
 }
 
@@ -259,10 +267,11 @@ describe.skipIf(!TEST_DATABASE_URL)('storage migrations on a populated database'
       'stats_item_swaps',
       'stats_choices',
       'stats_champion_mastery',
+      'stats_champion_lane_phase',
     ]) {
       await db.unsafe(`REFRESH MATERIALIZED VIEW ${view}`);
     }
-    const old = await rewrittenViews(db);
+    const old = await rewrittenViews(db, 'stats_participants');
     const [counts] = await db`
       SELECT (SELECT count(*)::int FROM (
                 SELECT match_id, participant_id FROM item_events WHERE type <> 'DESTROYED'
@@ -362,13 +371,105 @@ describe.skipIf(!TEST_DATABASE_URL)('storage migrations on a populated database'
       },
     ]);
 
-    // A refresh, as the API runs it, computes the same rows again.
-    for (const view of ['stats_participants', 'stats_quest_items']) {
-      await db.unsafe(`REFRESH MATERIALIZED VIEW ${view}`);
-    }
-    for (const view of ['stats_choices', 'stats_item_swaps', 'stats_champion_mastery']) {
-      await db.unsafe(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${view}`);
-    }
+    // 0030: the per-participant rows are tables, filled by the migration from what the views
+    // held. The remake has no row anywhere and is left to the first refresh.
+    expect([...(await db`SELECT match_id FROM stats_matches`)]).toEqual([{ match_id: MATCH }]);
+    expect([...(await db`SELECT * FROM stats_patch_items`)]).toEqual([
+      { patch: PATCH, signature: expect.stringMatching(/^[0-9a-f]{32}$/) },
+    ]);
+    // Every lane of the match is complete: 1v1 in the three solo lanes, 2v2 in the bot lane.
+    expect([...(await db`SELECT * FROM stats_lanes ORDER BY lane`)]).toEqual([
+      {
+        match_id: MATCH,
+        lane: 'BOT',
+        patch: PATCH,
+        blue_ids: [4, 5],
+        blue_positions: ['BOTTOM', 'UTILITY'],
+        red_ids: [9, 10],
+        red_positions: ['BOTTOM', 'UTILITY'],
+        has_15: false,
+        gold_10: -100, // blue minus red at 10 min: (4 + 5 - 9 - 10) x 10 gold
+        xp_10: 0,
+        cs_10: 0,
+        gold_15: null,
+        xp_15: null,
+        cs_15: null,
+      },
+      ...[
+        ['JUNGLE', 2, 7],
+        ['MIDDLE', 3, 8],
+        ['TOP', 1, 6],
+      ].map(([lane, blue, red]) => ({
+        match_id: MATCH,
+        lane,
+        patch: PATCH,
+        blue_ids: [blue],
+        blue_positions: [lane],
+        red_ids: [red],
+        red_positions: [lane],
+        has_15: false,
+        gold_10: -50,
+        xp_10: 0,
+        cs_10: 0,
+        gold_15: null,
+        xp_15: null,
+        cs_15: null,
+      })),
+    ]);
+    expect([...(await db`SELECT * FROM stats_participant_swaps`)]).toEqual([
+      {
+        match_id: MATCH,
+        participant_id: 1,
+        patch: PATCH,
+        position: 'TOP',
+        champion_id: 1,
+        sold_item_id: 3006,
+        bought_item_id: 3047,
+        at_ms: 1_800_000,
+      },
+    ]);
+
+    // A refresh, as the API runs it: the remake is taken, nothing else changes. Then every match
+    // computed again from nothing gives the same rows.
+    const fill = async () =>
+      Object.fromEntries(
+        (
+          await db<{ step: string; row_count: string }[]>`
+            SELECT step, row_count FROM pl_stats_fill(1000)`
+        ).map((r) => [r.step, Number(r.row_count)]),
+      );
+    const refreshViews = async () => {
+      await db.unsafe('REFRESH MATERIALIZED VIEW stats_team_traits');
+      for (const view of [
+        'stats_choices',
+        'stats_item_swaps',
+        'stats_champion_mastery',
+        'stats_champion_lane_phase',
+      ]) {
+        await db.unsafe(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${view}`);
+      }
+    };
+    expect(await fill()).toEqual({
+      stats_patch_items: 0,
+      stats_matches: 1,
+      stats_participants: 0,
+      stats_quest_items: 0,
+      stats_lanes: 0,
+      stats_participant_swaps: 0,
+    });
+    await refreshViews();
+    expect(await rewrittenViews(db)).toEqual(old);
+    await db.unsafe('TRUNCATE stats_matches CASCADE');
+    expect([...(await db`SELECT 1 FROM stats_participants`)]).toEqual([]);
+    expect(await fill()).toEqual({
+      stats_patch_items: 0,
+      stats_matches: 2,
+      stats_participants: 10,
+      stats_quest_items: 2,
+      stats_lanes: 4,
+      stats_participant_swaps: 1,
+    });
+    await refreshViews();
     expect(await rewrittenViews(db)).toEqual(old);
     expect(now.mastery).toEqual([
       { patch: PATCH, position: 'TOP', champion_id: 1, bucket: 5, games: 1, wins: 1 },
@@ -446,9 +547,9 @@ describe.skipIf(!TEST_DATABASE_URL)('storage migrations on a populated database'
       damage_self_mitigated: 9000,
       healing_done: 1500,
       cc_time_on_others_s: 20,
-      gold_by_minute: [500, 900],
-      xp_by_minute: [0, 280],
-      cs_by_minute: [0, 6],
+      gold_by_minute: Array.from({ length: 12 }, (_, minute) => 500 * (minute + 1) + 100),
+      xp_by_minute: Array.from({ length: 12 }, (_, minute) => 280 * minute),
+      cs_by_minute: Array.from({ length: 12 }, (_, minute) => 6 * minute),
     });
     for (const view of ['stats_champion_traits', 'stats_champion_lane_phase']) {
       await db.unsafe(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${view}`);
@@ -505,12 +606,43 @@ describe.skipIf(!TEST_DATABASE_URL)('storage migrations on a populated database'
     await populateOldLayout(db);
     await migrate(db);
     const populated = await schemaOf(db);
-    // Nothing keeps a name of the transition.
+    // Nothing keeps a name of the transition (*_0026, *_0030, *_old).
     const names = [
       ...populated.columns.map((c) => c.relname),
       ...populated.indexes.map((i) => i.indexname),
+      ...populated.constraints.map((c) => c.conname),
+      ...populated.functions.map((f) => f.proname),
     ];
-    expect(names.filter((n) => /_\d{4}(_|$)/.test(n))).toEqual([]);
+    expect(names.filter((n) => /_(\d{4}|old)(_|$)/.test(n))).toEqual([]);
+    // The stats layer of 0030: the per-participant rows are tables, each hanging from stats_matches.
+    const kinds = Object.fromEntries(populated.columns.map((c) => [c.relname, c.relkind]));
+    expect(kinds).toMatchObject({
+      stats_matches: 'r',
+      stats_patch_items: 'r',
+      stats_participants: 'r',
+      stats_quest_items: 'r',
+      stats_lanes: 'r',
+      stats_participant_swaps: 'r',
+      stats_team_traits: 'm',
+      stats_participant_traits: 'v',
+      stats_participant_choices: 'v',
+      stats_choices: 'm',
+      stats_champion_lane_phase: 'm',
+      stats_item_swaps: 'm',
+    });
+    expect(
+      populated.constraints
+        .filter((c) => c.def.includes('REFERENCES stats_matches'))
+        .map((c) => `${c.on_table}: ${c.def}`)
+        .sort(),
+    ).toEqual(
+      ['stats_lanes', 'stats_participant_swaps', 'stats_participants', 'stats_quest_items']
+        .map(
+          (t) =>
+            `${t}: FOREIGN KEY (match_id) REFERENCES stats_matches(match_id) ON DELETE CASCADE`,
+        )
+        .sort(),
+    );
 
     await db.end();
     db = testDb();

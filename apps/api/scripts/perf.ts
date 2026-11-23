@@ -43,8 +43,16 @@ await db`
     WHEN abs(hashtext(puuid)) % 100 < 99 THEN 'MASTER'
     ELSE 'DIAMOND' END)::solo_tier`;
 const first = await time('first refresh (force)', () => refreshStats(db, { force: true }));
-console.log('per view (ms):', first.views);
+console.log('per step (ms):', first.views);
 await time('second refresh (unchanged, skipped)', () => refreshStats(db));
+// 1 % more matches: only those are added to the per-participant tables, the views are recomputed.
+await seedSyntheticPatch(
+  db,
+  { patch: '15.22', count: Math.round(total * 0.01), seed: 3, idPrefix: 'SYN_PERF_NEW' },
+  12,
+);
+const next = await time('refresh after 1 % new matches', () => refreshStats(db));
+console.log(`per step (ms), ${next.matchesComputed} matches computed:`, next.views);
 
 const app = createApp({ db, cache: new TtlCache(0), limiter: null, log: silentLogger });
 const post = (path: string, body: unknown) =>
@@ -108,11 +116,13 @@ for (const f of ['', '&platform=KR', '&rank=GRANDMASTER', '&platform=EUW1&rank=C
 const sizes = await db<{ view: string; rows: number; size: string }[]>`
   SELECT c.relname AS view, c.reltuples::bigint::int AS rows,
          pg_size_pretty(pg_total_relation_size(c.oid)) AS size
-  FROM pg_class c WHERE c.relkind = 'm'
+  FROM pg_class c WHERE c.relkind IN ('m', 'r')
     AND c.relname IN ('stats_champion_vs', 'stats_champion_with', 'stats_champion_lane_phase',
       'stats_choice_matchups', 'stats_choice_traits', 'stats_choice_duos',
       'stats_choice_ally_traits', 'stats_tierlist_participants',
-      'stats_tierlist_vs', 'stats_tierlist_with', 'stats_tierlist_roles')
+      'stats_tierlist_vs', 'stats_tierlist_with', 'stats_tierlist_roles',
+      'stats_matches', 'stats_participants', 'stats_quest_items', 'stats_lanes',
+      'stats_participant_swaps', 'stats_team_traits')
   ORDER BY c.relname`;
 console.table(sizes);
 await db.end();
