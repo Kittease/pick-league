@@ -33,6 +33,7 @@ match_fetch_queue                     (worker backlog, survives restarts)
 listing_skip_misses                   (LISTING_SKIP=shadow: what a skipped listing would have missed)
 worker_runs                           (monitoring)
 worker_status                         (health of each platform loop)
+diamond_tracking                      (how many Diamond players each platform tracks: a target the worker sizes by itself)
 ```
 
 ## Enums
@@ -150,7 +151,7 @@ CREATE TABLE players (
   solo_losses           integer,
   rank_refreshed_at     timestamptz,
   masteries_refreshed_at timestamptz,         -- last mastery answer stored; set back to NULL for a tracked player when a stored match shows them on a champion without a mastery row (0027)
-  matches_synced_until  timestamptz,         -- listed players (tracked, or untracked Master+ ones): newest match already listed → `startTime` for match ids
+  matches_synced_until  timestamptz,         -- listed players (tracked, or Masters outside Riot's list): newest match already listed → `startTime` for match ids; a listing sets it 1 h before its own time, which is also how the daily pass over the outside Masters knows who was listed since it opened
   listing_requested_at  timestamptz,         -- tracked players only: "played" (ladder wins+losses changed), match ids not listed yet (0009)
   last_seen_in_match_at timestamptz,         -- used by cleanup and by the low-priority refresh rule
   last_seen_with_master_at timestamptz,      -- start of the newest stored match shared with a Master+ player (0024)
@@ -193,7 +194,10 @@ CREATE TABLE ladder_entries (
 -- their baseline; their players row and the matches they appear in are kept.
 -- Ladder order (listings, fetch_rank): tier, division NULLS FIRST, league_points DESC.
 -- A tracked Diamond player a complete sweep did not see keeps their row untouched, and loses it
--- once updated_at is 24 h old; one who shows up on an apex list becomes an apex row.
+-- once updated_at is 24 h old; one who shows up on an apex list becomes an apex row. The DIAMOND
+-- rows are the best candidates of a sweep, as many as diamond_tracking.target: a player who is
+-- no longer among them (the target shrank, others passed them) loses their row like any player
+-- leaving the ladder.
 -- Skip rule: with expected = wins + losses - listed_games, a player about to be listed is skipped
 -- when expected > 0 and at least that many of their stored non-remake matches ended after
 -- listed_snapshot_at and at least 15 minutes before games_changed_at (Riot's ladder counts a
@@ -350,13 +354,19 @@ CREATE TABLE match_fetch_queue (
   attempts      smallint     NOT NULL DEFAULT 0,  -- deterministic errors (404, parse, other 4xx: FAILED at 2) and unknown ones (FAILED at 5)
   transient_errors smallint  NOT NULL DEFAULT 0,  -- Riot 429/5xx, network, DB connection: deferred without an attempt, FAILED at 10 (0009)
   last_error    text,
-  fetch_rank    integer      NOT NULL DEFAULT 1000000,  -- best ladder position among the players who listed it (0 = first Challenger); 1000000 = back of the queue (retried/deferred) (0011)
+  fetch_rank    integer      NOT NULL DEFAULT 1000000,  -- best rank among the players who listed it, a band per tier (0011, bands since 0031): an apex player's ladder position (0 = first Challenger, < 100000); 100000 = a Master outside Riot's list; 200000 + position among the tracked Diamond players; 1000000 = back of the queue (retried/deferred)
   discovered_at timestamptz  NOT NULL DEFAULT now(),
   updated_at    timestamptz  NOT NULL DEFAULT now()
 );
 CREATE INDEX match_fetch_queue_pending_idx
   ON match_fetch_queue (platform, fetch_rank, discovered_at, match_id) WHERE status = 'PENDING';
--- Claimed lowest fetch_rank first, so better-placed players' matches are fetched first.
+-- Claimed lowest fetch_rank first, so better-placed players' matches are fetched first: apex
+-- players', then outside Masters', then Diamond players' (that band only when the first two are
+-- nearly empty and nobody of the daily Master pass is due: docs/architecture.md, Worker). A match
+-- that fails or is deferred leaves its band for the back of the queue at once.
+-- 0031 moved the PENDING rows the previous version had queued for Diamond players (number of apex
+-- players + position) and outside Masters (size of the tracked ladder) into the Diamond band, in
+-- the same order: every PENDING row at or after the platform's number of apex players.
 -- DONE / SKIPPED_OLD_PATCH rows are kept as a "seen" set and purged with their patch.
 -- Once a match turns out to be from a patch no longer collected (older than the previous one, or
 -- the previous one once the platform has stored a match of the latest), every PENDING row of that
@@ -419,6 +429,25 @@ CREATE TABLE worker_status (
   last_error          text,                  -- last non-abort error (kind: message), truncated to 500 chars
   last_error_at       timestamptz
 );
+```
+
+```sql
+-- The Diamond target of a platform (0031): how many Diamond players the worker tracks, under
+-- DIAMOND_MAX_TRACKED. One row per platform, written by the worker: created at its first start
+-- with the number of Diamond players tracked then, read back at every start.
+CREATE TABLE diamond_tracking (
+  platform           platform    PRIMARY KEY,
+  target             integer     NOT NULL,
+  cycles             text        NOT NULL DEFAULT '',  -- outcome of the ladder cycles since the target last changed, oldest first, one letter each (96 at most): K kept up, P daily Master pass running, R recovering from it, W waiting for patch data, M missed
+  last_cycle_at      timestamptz,                      -- start of the last cycle in `cycles` (a cycle starting less than a ladder interval later is the same one: restart)
+  settle_cycles_left smallint    NOT NULL DEFAULT 0,   -- after a growth step, the first start or a long stop: cycles left to absorb the burst; none is recorded meanwhile
+  changed_at         timestamptz,                      -- last change of the target
+  changed_from       integer,
+  change_reason      text,
+  updated_at         timestamptz NOT NULL DEFAULT now()
+);
+-- +1 step (500) when the last 24 cycles hold no M and at least 6 K; -1 step once 6 M since the
+-- last K; `cycles` starts over at each change (docs/architecture.md, Worker, the Diamond target).
 ```
 
 ## Removed tables and columns

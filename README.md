@@ -50,7 +50,18 @@ caught up with their matches, it adds the next 500 Master players by LP, down to
 Master. Matches of better-placed players are always fetched first. The `masterTracked` and
 `masterTotal` fields of its `progress` log lines show how far down it got.
 
-Worker settings (in `.env`, applied with `docker compose up -d worker`; both are off by default):
+Riot's budget for match requests (3,000 an hour per region) is spent in three strict tiers:
+
+1. the tracked Master+ players: those who played are listed and their matches fetched first;
+2. the Masters outside Riot's list (it stops at 10,000 players), found in stored matches: once a
+   day, from 04:00 local time of the server (after the evening peak), each of them is listed once
+   and the games found are fetched, whenever tier 1 has nothing waiting. `extraPass` in the
+   `progress` log shows whether the pass is still open, when it opened, how many players are left
+   and how many of their matches are waiting;
+3. Diamond players, with what is left (see `DIAMOND_MAX_TRACKED`): nothing of theirs is listed or
+   fetched while tier 1 has work or tier 2 is not done.
+
+Worker settings (in `.env`, applied with `docker compose up -d worker`):
 
 - `LISTING_SKIP` = `off` | `shadow` | `on`. A stored match holds about 6 tracked players, and each
   of them is asked for their match ids only to find that match again. With `on`, a tracked player
@@ -60,15 +71,26 @@ Worker settings (in `.env`, applied with `docker compose up -d worker`; both are
   `listing_skip_misses` table the skipped listings that would have brought new match ids
   (`listingSkipMisses`): run it first, then read that table. In both modes a player is listed only
   after the matches brought by better-placed players are stored.
-- `DIAMOND_MAX_TRACKED` = how many Diamond players to track at most per server (0 = none). With
-  each hourly ladder refresh the worker reads the Diamond divisions (a few hundred requests on the
-  server's platform host, which is mostly idle) and tracks, after every Master+ player: first the
-  Diamond players seen in a Master+ game in the last 7 days (by division, then LP), then Diamond I
-  players by LP, 500 more each time it has caught up and has nothing else to list. Their matches
-  are collected like everyone's, so Diamond lobbies enter the statistics, and each newly tracked
-  player first brings their matches of the patch: start with a small number and watch
-  `pendingMatches` and the disk. `diamond` in the `progress` log shows the players seen per
-  division, those tracked and the cap.
+- `DIAMOND_MAX_TRACKED` = the most Diamond players the worker may track per server (0, the
+  default: none, Diamond is not read). It is a ceiling, there to protect the disk: how many are
+  tracked under it is a target the worker sizes by itself. With each hourly ladder refresh the
+  worker reads the Diamond divisions (a few hundred requests on the server's platform host, which
+  is mostly idle) and tracks the best candidates, as many as the target: first the Diamond players
+  seen in a Master+ game in the last 7 days, then all the others, each group by division (I down
+  to IV) then LP. The target grows by 500 after a full day (24 hourly cycles) in which the worker
+  kept up, that is, in which everything of the three tiers was listed and fetched at least once
+  in each hour, the hours of the daily Master pass and the three after it aside; it shrinks by 500
+  (the last candidates leave, their stored matches stay) once six hours were missed since the
+  last one kept up with. A step up first brings the new players' matches of the patch: until that
+  burst is absorbed (a day at most) hours are not counted. Their matches are collected like
+  everyone's, so Diamond lobbies enter the statistics. `diamond` in the `progress` log shows the
+  players seen per division, the target, those tracked, the ceiling, the last hours (`cycles`:
+  `K` kept up, `P` Master pass, `R` recovering from it, `W` waiting for patch data, `M` missed)
+  and the last change of the target with its reason.
+- `UNTRACKED_MASTER_LISTING_START_HOUR` = the local hour (0 to 23, default 4) at which the daily
+  pass over the Masters outside Riot's list opens on each server. Local time is a fixed offset
+  from UTC (KR +9, VN2 +7, EUW1 +1, NA1 -6): no daylight saving, so the pass opens an hour later
+  by the clock in summer on EUW1 and NA1.
 
 ### Operations
 
