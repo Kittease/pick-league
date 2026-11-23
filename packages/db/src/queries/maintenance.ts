@@ -203,10 +203,11 @@ export async function getDiamondTracking(
       changed_at: Date | null;
       changed_from: number | null;
       change_reason: string | null;
+      shrunk_at: Date | null;
     }[]
   >`
     SELECT target, cycles, last_cycle_at, settle_cycles_left, changed_at, changed_from,
-           change_reason
+           change_reason, shrunk_at
     FROM diamond_tracking WHERE platform = ${platform}`;
   if (!row) return null;
   return {
@@ -217,6 +218,7 @@ export async function getDiamondTracking(
     changedAt: row.changed_at,
     changedFrom: row.changed_from,
     changeReason: row.change_reason,
+    shrunkAt: row.shrunk_at,
   };
 }
 
@@ -235,6 +237,7 @@ export async function saveDiamondTracking(
     changed_at: state.changedAt,
     changed_from: state.changedFrom,
     change_reason: state.changeReason,
+    shrunk_at: state.shrunkAt,
     updated_at: now,
   };
   await q`
@@ -247,5 +250,6 @@ export async function saveDiamondTracking(
       changed_at = EXCLUDED.changed_at,
       changed_from = EXCLUDED.changed_from,
       change_reason = EXCLUDED.change_reason,
+      shrunk_at = EXCLUDED.shrunk_at,
       updated_at = EXCLUDED.updated_at`;
 }

@@ -274,6 +274,15 @@ export interface SchedulerOptions {
   diamondGrowCycles: number;
   diamondGrowMinKeptCycles: number;
   /**
+   * Fast start: while the target has never shrunk, or not for `diamondFastGrowAfterShrinkMs`
+   * (default 7 days), it grows a step after only `diamondFastGrowCycles` kept cycles in a row
+   * (default 2; 0 switches the fast start off). A platform with spare budget then finds what it carries in a day or two instead
+   * of weeks; the first shrink says the peak hours are reached, and the slow rule above takes
+   * over.
+   */
+  diamondFastGrowCycles: number;
+  diamondFastGrowAfterShrinkMs: number;
+  /**
    * The target shrinks a step once `diamondShrinkMissedCycles` cycles (default 6) were missed
    * since the last kept one.
    */
@@ -325,10 +334,12 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   listingGateMaxWaitMs: 5 * 60_000,
   listingGatePollMs: 1_000,
   diamondMaxTracked: 0,
-  diamondStep: 500,
+  diamondStep: 1_000,
   diamondWithMasterWindowMs: 7 * DAY,
   diamondGrowCycles: 24,
   diamondGrowMinKeptCycles: 6,
+  diamondFastGrowCycles: 2,
+  diamondFastGrowAfterShrinkMs: 7 * DAY,
   diamondShrinkMissedCycles: 6,
   diamondSettleCycles: 24,
   diamondKeepMs: DAY,
@@ -918,7 +929,18 @@ export class PlatformWorker {
     ]);
     const masters = byLp(toLadderEntries(master, 'MASTER'));
     this.masterTotal = masters.length;
-    const tracked = masters.slice(0, Math.max(0, masterPlayers ?? this.masterTracked));
+    // A restart counts the MASTER rows it finds, a few short of Riot's list when tracked Masters
+    // moved up a tier meanwhile; until the next expansion step (which waits for the Diamond sweep,
+    // half an hour on EUW1) the outside Masters and Diamond players then had no turn at all. Less
+    // than 1 % short of the whole list: track it all now.
+    const wanted = Math.max(0, masterPlayers ?? this.masterTracked);
+    const short = masters.length - wanted;
+    const tracked = masters.slice(
+      0,
+      masterPlayers === undefined && short > 0 && short <= Math.floor(masters.length / 100)
+        ? masters.length
+        : wanted,
+    );
     const entries = [
       ...byLp(toLadderEntries(challenger, 'CHALLENGER')),
       ...byLp(toLadderEntries(grandmaster, 'GRANDMASTER')),
@@ -1229,6 +1251,7 @@ export class PlatformWorker {
         changedAt: new Date(now),
         changedFrom: null,
         changeReason: `first start: ${tracked} Diamond players were tracked`,
+        shrunkAt: null,
       };
       changed = true;
     } else {
@@ -1339,25 +1362,35 @@ export class PlatformWorker {
   /** Grows or shrinks the Diamond target a step when its history says so. */
   private async adjustDiamondTarget(): Promise<void> {
     const state = await this.diamondState();
+    const now = this.clock.now();
+    const fast =
+      this.opts.diamondFastGrowCycles > 0 &&
+      (state.shrunkAt === null ||
+        now - state.shrunkAt.getTime() >= this.opts.diamondFastGrowAfterShrinkMs);
     const next = nextDiamondTarget(
       state.cycles,
       { target: state.target, tracked: this.diamond.tracked.length },
       {
         cap: this.opts.diamondMaxTracked,
         step: this.opts.diamondStep,
-        growCycles: this.opts.diamondGrowCycles,
-        growMinKeptCycles: this.opts.diamondGrowMinKeptCycles,
+        // Fast start until the first shrink (and again long after the last one).
+        growCycles: fast ? this.opts.diamondFastGrowCycles : this.opts.diamondGrowCycles,
+        growMinKeptCycles: fast
+          ? this.opts.diamondFastGrowCycles
+          : this.opts.diamondGrowMinKeptCycles,
         shrinkMissedCycles: this.opts.diamondShrinkMissedCycles,
       },
     );
     if (next === null) return;
     const from = state.target;
     const grows = next.target > from;
+    if (!grows) state.shrunkAt = new Date(now);
     this.log.info(grows ? 'diamond target grows' : 'diamond target shrinks', {
       from,
       to: next.target,
       reason: next.reason,
       cycles: state.cycles.slice(-this.opts.diamondGrowCycles),
+      fastStart: fast,
     });
     state.target = next.target;
     state.cycles = '';

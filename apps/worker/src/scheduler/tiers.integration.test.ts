@@ -78,7 +78,8 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
       riot,
       patches,
       clock,
-      options: { idleMs: 10, expansionCheckMs: 10, ...options },
+      // The fast start is off unless a test asks for it: these tests are about the slow rule.
+      options: { idleMs: 10, expansionCheckMs: 10, diamondFastGrowCycles: 0, ...options },
     });
   /** One listing, one match and one outside Master at a time: the requests come in work order. */
   const serial = {
@@ -126,6 +127,7 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
         changedAt: null,
         changedFrom: null,
         changeReason: null,
+        shrunkAt: null,
       },
       new Date(t),
     );
@@ -629,6 +631,31 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
     // Back at a size it keeps up with: it takes a whole new window to try again.
     await hours(w, 2);
     expect(await diamond(w)).toMatchObject({ target: 1, tracked: 1, cycles: 'KK' });
+  });
+
+  test('fast start: the target grows after two kept cycles until it has shrunk once, then only after a full day', async () => {
+    const quick = {
+      diamondStep: 1,
+      diamondFastGrowCycles: 2,
+      diamondSettleCycles: 1,
+      diamondShrinkMissedCycles: 2,
+    };
+    const w = await tracking(1, ['d-90'], quick);
+    // Two kept cycles are enough while it has never shrunk.
+    await hours(w, 3);
+    expect(await diamond(w)).toMatchObject({ target: 2, cycles: '' });
+    const [before] = await db<{ shrunk_at: Date | null }[]>`
+      SELECT shrunk_at FROM diamond_tracking WHERE platform = 'EUW1'`;
+    expect(before?.shrunk_at).toBeNull();
+    // 'd-80' is never listed: one cycle of settling, two missed ones, and the step is undone.
+    await hours(w, 3);
+    expect(await diamond(w)).toMatchObject({ target: 1, tracked: 1, cycles: '' });
+    const [after] = await db<{ shrunk_at: Date | null }[]>`
+      SELECT shrunk_at FROM diamond_tracking WHERE platform = 'EUW1'`;
+    expect(after?.shrunk_at).not.toBeNull();
+    // It has shrunk: two kept cycles no longer grow it (the slow rule wants a full day).
+    await hours(w, 4);
+    expect(await diamond(w)).toMatchObject({ target: 1, cycles: 'KKKK' });
   });
 
   test('an outside Master waiting for a listing is tier 2 work like any other: the cycle is missed until they are listed', async () => {

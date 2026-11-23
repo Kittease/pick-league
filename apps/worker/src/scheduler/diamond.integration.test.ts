@@ -111,6 +111,7 @@ d('PlatformWorker: Diamond players (Postgres)', () => {
         changedAt: null,
         changedFrom: null,
         changeReason: null,
+        shrunkAt: null,
       },
       new Date(t),
     );

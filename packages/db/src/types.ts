@@ -282,6 +282,8 @@ export interface DiamondTracking {
   settleCyclesLeft: number;
   /** Last change of the target. */
   changedAt: Date | null;
+  /** When the target last shrank (null: never): it grows fast until then, see the worker. */
+  shrunkAt: Date | null;
   changedFrom: number | null;
   changeReason: string | null;
 }

@@ -121,6 +121,7 @@ d('PlatformWorker: Masters outside the ladder lists (Postgres)', () => {
         changedAt: null,
         changedFrom: null,
         changeReason: null,
+        shrunkAt: null,
       },
       new Date(t),
     );

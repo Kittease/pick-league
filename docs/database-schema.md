@@ -481,6 +481,7 @@ CREATE TABLE diamond_tracking (
   cycles             text        NOT NULL DEFAULT '',  -- outcome of the ladder cycles since the target last changed, oldest first, one letter each (96 at most): K kept up, W waiting for patch data, M missed (P and R, the cycles of the daily Master pass until 0032, are no longer written; read as neither)
   last_cycle_at      timestamptz,                      -- start of the last cycle in `cycles` (a cycle starting less than a ladder interval later is the same one: restart)
   settle_cycles_left smallint    NOT NULL DEFAULT 0,   -- after a growth step, the first start or a long stop: cycles left to absorb the burst; none is recorded meanwhile
+  shrunk_at          timestamptz,           -- last shrink (0033); NULL = never: the target grows fast until then
   changed_at         timestamptz,                      -- last change of the target
   changed_from       integer,
   change_reason      text,

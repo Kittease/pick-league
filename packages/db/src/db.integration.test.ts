@@ -1167,6 +1167,7 @@ describe.skipIf(!TEST_DATABASE_URL)('@pick-league/db (Postgres)', () => {
         changedAt: at,
         changedFrom: 1000,
         changeReason: 'kept up for 24 cycles (11 kept, none missed)',
+        shrunkAt: null,
       };
       await saveDiamondTracking(db, 'KR', state, at);
       expect(await getDiamondTracking(db, 'KR')).toEqual(state);
