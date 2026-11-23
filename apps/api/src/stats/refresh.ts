@@ -10,13 +10,14 @@ import { readCollectionStatus } from './collection.ts';
 
 /**
  * Refresh order (dependencies first). `concurrent` = read by requests. `noNestedLoops` = refreshed
- * with `enable_nestloop = off`.
+ * with `enable_nestloop = off`. `serial` = refreshed without parallel workers.
  */
 export const STATS_REFRESH_ORDER: readonly {
   view: string;
   concurrent: boolean;
   analyze?: boolean;
   noNestedLoops?: boolean;
+  serial?: boolean;
 }[] = [
   { view: 'stats_champion_traits', concurrent: true },
   { view: 'stats_team_comp', concurrent: false, analyze: true },
@@ -30,7 +31,17 @@ export const STATS_REFRESH_ORDER: readonly {
   // It is no longer a protection: the sets the planner got wrong by a factor of 100 million when
   // the events were rows (the day it picked a nested loop between two of them the refresh ran
   // 33 h) do not exist any more.
-  { view: 'stats_participants', concurrent: false, analyze: true, noNestedLoops: true },
+  // Serial: with parallel workers its hash joins are parallel hash joins, each allowed
+  // work_mem x 2 x (workers + 1) of Postgres's 1 GB /dev/shm, and several of them at once did not
+  // fit ("could not resize shared memory segment", every other refresh on 2026-11-23). The
+  // per-participant passes cannot run in workers anyway.
+  {
+    view: 'stats_participants',
+    concurrent: false,
+    analyze: true,
+    noNestedLoops: true,
+    serial: true,
+  },
   // Support quest upgrades (0007_support_quest_items.sql, on participant_events since 0026), read
   // by stats_participant_choices.
   { view: 'stats_quest_items', concurrent: false, analyze: true },
@@ -234,12 +245,16 @@ export async function refreshStats(db: Db, options: RefreshOptions = {}): Promis
         for (const step of options.views ?? STATS_REFRESH_ORDER) {
           const t = performance.now();
           if (step.noNestedLoops) await conn.unsafe('SET enable_nestloop = off');
+          if (step.serial) await conn.unsafe('SET max_parallel_workers_per_gather = 0');
           try {
             await conn.unsafe(
               `REFRESH MATERIALIZED VIEW ${step.concurrent ? 'CONCURRENTLY ' : ''}${step.view}`,
             );
           } finally {
             if (step.noNestedLoops) await conn.unsafe('RESET enable_nestloop');
+            if (step.serial) {
+              await conn.unsafe(`SET max_parallel_workers_per_gather = ${workers}`);
+            }
           }
           if (step.analyze) await conn.unsafe(`ANALYZE ${step.view}`);
           views[step.view] = Math.round(performance.now() - t);

@@ -182,6 +182,27 @@ describe.skipIf(!URL_)('stats refresh (Postgres)', () => {
     expect(b?.nested_loops).toBe('on');
   }, 60_000);
 
+  test('a view marked serial is refreshed without parallel workers, the next ones with them', async () => {
+    for (const name of ['stats_test_workers_a', 'stats_test_workers_b']) {
+      await db.unsafe(`
+        CREATE MATERIALIZED VIEW IF NOT EXISTS ${name} AS
+        SELECT current_setting('max_parallel_workers_per_gather') AS workers WITH NO DATA`);
+    }
+    const result = await refreshStats(db, {
+      force: true,
+      parallelWorkers: 2,
+      views: [
+        { view: 'stats_test_workers_a', concurrent: false, serial: true },
+        { view: 'stats_test_workers_b', concurrent: false },
+      ],
+    });
+    expect(result.reason).toBe('refreshed');
+    const [a] = await db<{ workers: string }[]>`SELECT workers FROM stats_test_workers_a`;
+    const [b] = await db<{ workers: string }[]>`SELECT workers FROM stats_test_workers_b`;
+    expect(a?.workers).toBe('0');
+    expect(b?.workers).toBe('2');
+  }, 60_000);
+
   test('a view running past the statement timeout fails the refresh and frees the lock', async () => {
     await db.unsafe(`
       CREATE MATERIALIZED VIEW IF NOT EXISTS stats_test_slow AS
