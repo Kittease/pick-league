@@ -566,7 +566,9 @@ banned matches / matches when every participant of a server is counted.
 
 ## Size estimate
 
-**An estimate, not a production measurement**: per match with indexes, from a synthetic database of 8,000 matches in the layout of 0028 (24 item events and 15 skill points per participant, as on production), the stats views excepted: participants ~7 KB, participant events ~4 KB, bans + teams + match ~1.5 KB, masteries ~0.7 KB (about 3 rows per match: one per (player, champion played)), plus ~9 KB of stats views (measured on production on 16.22, unchanged; `stats_participants` alone is ~4 KB) → **~22 KB/match**.
+**Measured on production on 2026-11-23**, right after 0025–0028 and a `VACUUM FULL participants`: 453k matches in 10 GB (participants 3.2 GB, participant events 1.8 GB, stats views 3.6 GB of which `stats_participants` 1.7 GB, players 0.5 GB, bans 0.5 GB, masteries 0.4 GB) → **~22 KB/match**, down from 48 GB. A full stats refresh takes 22 min 44 s (44–46 min before; `stats_participants` 8.4 min instead of 26.6, `stats_champion_mastery` 6 s). The synthetic estimate below gave the same per-match figure.
+
+**The estimate made before the migration**: per match with indexes, from a synthetic database of 8,000 matches in the layout of 0028 (24 item events and 15 skill points per participant, as on production), the stats views excepted: participants ~7 KB, participant events ~4 KB, bans + teams + match ~1.5 KB, masteries ~0.7 KB (about 3 rows per match: one per (player, champion played)), plus ~9 KB of stats views (measured on production on 16.22, unchanged; `stats_participants` alone is ~4 KB) → **~22 KB/match**.
 
 Before 0025–0028 it was ~62 KB/match plus ~8 GB of masteries whatever the number of matches (measured on 16.22, Nov 2026: item events ~26 KB and skill events ~16 KB per match — 46 KB and 16 KB on disk at 442k matches, with the space of the deleted `DESTROYED` rows —, participants ~12 KB, bans ~1 KB, stats views ~9 KB).
 
