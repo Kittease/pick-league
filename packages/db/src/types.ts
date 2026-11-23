@@ -225,6 +225,28 @@ export interface QueuedMatch {
   matchId: string;
   platform: Platform;
   attempts: number;
+  /** `match_fetch_queue.fetch_rank` when claimed (absent: taken as an apex player's match). */
+  fetchRank?: number;
+}
+
+/** A `diamond_tracking` row: the Diamond target of a platform and how it has kept up. */
+export interface DiamondTracking {
+  /** Diamond players to track (at most `DIAMOND_MAX_TRACKED`). */
+  target: number;
+  /**
+   * Outcome of the ladder cycles since the target last changed, oldest first, one letter each:
+   * K kept up, P daily Master pass running, R recovering from it, W waiting for patch data,
+   * M missed.
+   */
+  cycles: string;
+  /** Start of the last cycle in `cycles`. */
+  lastCycleAt: Date | null;
+  /** Cycles left to absorb a burst (growth step, long stop) before they count. */
+  settleCyclesLeft: number;
+  /** Last change of the target. */
+  changedAt: Date | null;
+  changedFrom: number | null;
+  changeReason: string | null;
 }
 
 export interface QueuedEnrichment {

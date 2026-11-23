@@ -7,8 +7,18 @@ import type { QueuedEnrichment, QueuedMatch } from '../types.ts';
 // ---------------------------------------------------------------------------
 
 /**
+ * `fetch_rank` is a band per tier, fetched in that order: an apex player's ladder position (below
+ * `EXTRA_FETCH_RANK`), then the matches listed by a Master outside Riot's list
+ * (`EXTRA_FETCH_RANK`), then a tracked Diamond player's (`DIAMOND_FETCH_RANK` + their position
+ * among the Diamond players).
+ */
+export const EXTRA_FETCH_RANK = 100_000;
+export const DIAMOND_FETCH_RANK = 200_000;
+
+/**
  * `fetch_rank` of retried and deferred matches (and of matches queued without a rank): after
- * every match listed by a tracked player.
+ * every match listed by a player. They may be anyone's, so the worker takes them as the first
+ * tier's (never held back with the Diamond band).
  */
 export const QUEUE_BACK_RANK = 1_000_000;
 
@@ -67,15 +77,39 @@ export async function hasPendingMatchBefore(
 }
 
 /**
+ * How many PENDING matches of a platform have a `fetch_rank` from `band.from` to below
+ * `band.below` (no upper bound without it), counted up to `limit` (an index range of at most that
+ * many rows).
+ */
+export async function countPendingMatchesInBand(
+  q: Queryable,
+  platform: Platform,
+  band: { from: number; below?: number },
+  limit: number,
+): Promise<number> {
+  const [row] = await q<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM (
+      SELECT 1 FROM match_fetch_queue
+      WHERE platform = ${platform} AND status = 'PENDING'
+        AND fetch_rank >= ${Math.trunc(band.from)}
+        ${band.below === undefined ? q`` : q`AND fetch_rank < ${Math.trunc(band.below)}`}
+      LIMIT ${Math.max(0, Math.trunc(limit))}
+    ) s`;
+  return row?.n ?? 0;
+}
+
+/**
  * Next PENDING matches of a platform: lowest `fetch_rank` first (top of the ladder), then oldest
  * discovery. Rows are locked with
  * `FOR UPDATE SKIP LOCKED` and their `updated_at` bumped, so concurrent claimers don't get the
  * same ids within a transaction; the status stays PENDING until marked done/skipped/failed.
+ * `withoutDiamond` leaves out the matches of the Diamond band (it is not that tier's turn).
  */
 export async function claimPendingMatches(
   q: Queryable,
   platform: Platform,
   limit: number,
+  options: { withoutDiamond?: boolean } = {},
 ): Promise<QueuedMatch[]> {
   const rows = await q<
     {
@@ -90,6 +124,11 @@ export async function claimPendingMatches(
     WHERE match_id IN (
       SELECT match_id FROM match_fetch_queue
       WHERE platform = ${platform} AND status = 'PENDING'
+        ${
+          options.withoutDiamond
+            ? q`AND (fetch_rank < ${DIAMOND_FETCH_RANK} OR fetch_rank >= ${QUEUE_BACK_RANK})`
+            : q``
+        }
       ORDER BY fetch_rank, discovered_at, match_id
       LIMIT ${limit}
       FOR UPDATE SKIP LOCKED
@@ -102,7 +141,12 @@ export async function claimPendingMatches(
         a.discovered_at.getTime() - b.discovered_at.getTime() ||
         a.match_id.localeCompare(b.match_id),
     )
-    .map((r) => ({ matchId: r.match_id, platform: r.platform, attempts: r.attempts }));
+    .map((r) => ({
+      matchId: r.match_id,
+      platform: r.platform,
+      attempts: r.attempts,
+      fetchRank: r.fetch_rank,
+    }));
 }
 
 export async function markMatchDone(q: Queryable, matchId: string): Promise<void> {
@@ -165,10 +209,12 @@ export async function pickProbeMatch(
 ): Promise<QueuedMatch | null> {
   const order = probe.pick === 'highest' ? q`gid DESC` : q`gid`;
   const offset = probe.pick === 'highest' ? q`0` : q`(SELECT count(*) FROM candidates) / 2`;
-  const [row] = await q<{ match_id: string; platform: Platform; attempts: number }[]>`
+  const [row] = await q<
+    { match_id: string; platform: Platform; attempts: number; fetch_rank: number }[]
+  >`
     WITH candidates AS (
-      SELECT match_id, platform, attempts, gid FROM (
-        SELECT match_id, platform, attempts, ${gameIdExpr(q)} AS gid
+      SELECT match_id, platform, attempts, fetch_rank, gid FROM (
+        SELECT match_id, platform, attempts, fetch_rank, ${gameIdExpr(q)} AS gid
         FROM match_fetch_queue
         WHERE platform = ${platform} AND status = 'PENDING'
           AND NOT (match_id = ANY(${[...probe.exclude]}::text[]))
@@ -176,10 +222,17 @@ export async function pickProbeMatch(
       WHERE gid > ${probe.aboveGameId}::bigint
         AND (${probe.belowGameId}::bigint IS NULL OR gid < ${probe.belowGameId}::bigint)
     )
-    SELECT match_id, platform, attempts FROM candidates
+    SELECT match_id, platform, attempts, fetch_rank FROM candidates
     ORDER BY ${order}, match_id
     OFFSET ${offset} LIMIT 1`;
-  return row ? { matchId: row.match_id, platform: row.platform, attempts: row.attempts } : null;
+  return row
+    ? {
+        matchId: row.match_id,
+        platform: row.platform,
+        attempts: row.attempts,
+        fetchRank: row.fetch_rank,
+      }
+    : null;
 }
 
 /**

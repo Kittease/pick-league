@@ -1,6 +1,6 @@
 import { type PatchId, type Platform, sortPatchesDesc } from '@pick-league/shared';
 import { inTransaction, type Queryable } from '../client.ts';
-import type { WorkerRunStats, WorkerStatus } from '../types.ts';
+import type { DiamondTracking, WorkerRunStats, WorkerStatus } from '../types.ts';
 
 export interface CleanupResult {
   deletedPatches: PatchId[];
@@ -183,4 +183,69 @@ export async function listWorkerStatus(q: Queryable): Promise<WorkerStatus[]> {
     lastError: r.last_error,
     lastErrorAt: r.last_error_at,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// diamond_tracking (the Diamond target of each platform)
+// ---------------------------------------------------------------------------
+
+/** The Diamond target of a platform and how it has kept up; null before the worker first wrote it. */
+export async function getDiamondTracking(
+  q: Queryable,
+  platform: Platform,
+): Promise<DiamondTracking | null> {
+  const [row] = await q<
+    {
+      target: number;
+      cycles: string;
+      last_cycle_at: Date | null;
+      settle_cycles_left: number;
+      changed_at: Date | null;
+      changed_from: number | null;
+      change_reason: string | null;
+    }[]
+  >`
+    SELECT target, cycles, last_cycle_at, settle_cycles_left, changed_at, changed_from,
+           change_reason
+    FROM diamond_tracking WHERE platform = ${platform}`;
+  if (!row) return null;
+  return {
+    target: row.target,
+    cycles: row.cycles,
+    lastCycleAt: row.last_cycle_at,
+    settleCyclesLeft: row.settle_cycles_left,
+    changedAt: row.changed_at,
+    changedFrom: row.changed_from,
+    changeReason: row.change_reason,
+  };
+}
+
+export async function saveDiamondTracking(
+  q: Queryable,
+  platform: Platform,
+  state: DiamondTracking,
+  now: Date = new Date(),
+): Promise<void> {
+  const row = {
+    platform,
+    target: state.target,
+    cycles: state.cycles,
+    last_cycle_at: state.lastCycleAt,
+    settle_cycles_left: state.settleCyclesLeft,
+    changed_at: state.changedAt,
+    changed_from: state.changedFrom,
+    change_reason: state.changeReason,
+    updated_at: now,
+  };
+  await q`
+    INSERT INTO diamond_tracking ${q(row)}
+    ON CONFLICT (platform) DO UPDATE SET
+      target = EXCLUDED.target,
+      cycles = EXCLUDED.cycles,
+      last_cycle_at = EXCLUDED.last_cycle_at,
+      settle_cycles_left = EXCLUDED.settle_cycles_left,
+      changed_at = EXCLUDED.changed_at,
+      changed_from = EXCLUDED.changed_from,
+      change_reason = EXCLUDED.change_reason,
+      updated_at = EXCLUDED.updated_at`;
 }

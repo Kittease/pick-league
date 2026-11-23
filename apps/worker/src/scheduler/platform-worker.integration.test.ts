@@ -2,6 +2,8 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import {
   createDb,
   type Db,
+  DIAMOND_FETCH_RANK,
+  EXTRA_FETCH_RANK,
   enqueueMatchIds,
   getMatchesSyncedUntil,
   listWorkerStatus,
@@ -242,8 +244,12 @@ d('PlatformWorker (Postgres)', () => {
     expect(await idle.canTrackMoreMasters()).toBe(false);
     expect(await idle.canListExtraPlayers()).toBe(true);
 
-    // Too many matches waiting: the tracked players' matches come first.
-    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000001', 'EUW1_7000000002']);
+    // Matches of Diamond players, and retried ones at the back of the queue, hold nothing back.
+    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000011', 'EUW1_7000000012'], DIAMOND_FETCH_RANK);
+    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000021', 'EUW1_7000000022']);
+    expect(await idle.canListExtraPlayers()).toBe(true);
+    // Too many matches of the tracked apex players waiting: they come first.
+    await enqueueMatchIds(db, 'EUW1', ['EUW1_7000000001', 'EUW1_7000000002'], 1);
     expect(await idle.canListExtraPlayers()).toBe(false);
   });
 
@@ -256,13 +262,14 @@ d('PlatformWorker (Postgres)', () => {
     await untracked('fake-extra-diamond', 'DIAMOND', 90, 1);
     await untracked('fake-extra-recent', 'MASTER', 70, null);
     await untracked('fake-extra-ladder-dropout', 'MASTER', 60, null);
-    // Listed less than `extraListingIntervalMs` ago: not again yet.
-    await db`
-      UPDATE players SET matches_synced_until = ${new Date(NOW - 3_600_000)}
-      WHERE puuid = 'fake-extra-recent'`;
-    // Listed long ago: due again.
+    // NOW is 13:00 on EUW1: today's pass opened at 04:00 local time, nine hours ago.
+    // Listed since then: not again today.
     await db`
       UPDATE players SET matches_synced_until = ${new Date(NOW - 7 * 3_600_000)}
+      WHERE puuid = 'fake-extra-recent'`;
+    // Last listed yesterday evening: due.
+    await db`
+      UPDATE players SET matches_synced_until = ${new Date(NOW - 12 * 3_600_000)}
       WHERE puuid = 'fake-extra-ladder-dropout'`;
     riot.matchIds.set(ladderPuuid(0), ['EUW1_7000000900']);
     riot.matchIds.set('fake-extra-gm', ['EUW1_7000000910', 'EUW1_7000000900']);
@@ -305,14 +312,23 @@ d('PlatformWorker (Postgres)', () => {
       PRIORITY.EXTRA_MATCH_IDS,
       PRIORITY.EXTRA_MATCH_IDS,
     ]);
-    // A match an untracked player shares with a tracked one keeps the tracked player's rank.
+    // A match an untracked player shares with a tracked one keeps the tracked player's rank; their
+    // other matches go to the band after every apex player's.
     const queued = await db<{ match_id: string; fetch_rank: number }[]>`
       SELECT match_id, fetch_rank FROM match_fetch_queue ORDER BY match_id`;
     expect([...queued]).toEqual([
       { match_id: 'EUW1_7000000900', fetch_rank: 0 },
-      { match_id: 'EUW1_7000000910', fetch_rank: 2 },
+      { match_id: 'EUW1_7000000910', fetch_rank: EXTRA_FETCH_RANK },
     ]);
-    expect((await w.progress()).extraPlayersPolled).toBe(4);
+    expect(await w.progress()).toMatchObject({
+      extraPlayersPolled: 4,
+      extraPass: {
+        open: false,
+        openedAt: '2026-11-13T03:00:00.000Z',
+        remaining: 0,
+        matchesWaiting: 1,
+      },
+    });
   });
 
   test('first listing goes back 14 days, paginates, then continues from matches_synced_until', async () => {

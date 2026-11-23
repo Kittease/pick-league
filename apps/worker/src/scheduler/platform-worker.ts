@@ -1,22 +1,26 @@
 /**
- * One platform's crawler. Five kinds of work run concurrently and all wait on the same per-host
- * rate limiters, which serve the highest priority first (docs/architecture.md, "Worker"):
+ * One platform's crawler. Several kinds of work run concurrently and all wait on the same per-host
+ * rate limiters, which serve the highest priority first (docs/architecture.md, "Worker").
  *
- * 1. ladder refresh (hourly, and when Master grows) → platform host, priority 5
- *    (with Diamond tracking: then the Diamond sweep → platform host, priority 4)
- * 2. match-id listing of "played" players → match cluster, priority 4
- * 3. match + timeline fetch             → match cluster, priority 3
- * 4. daily account + mastery refresh    → account cluster + platform host, priority 2
- * 5. enrichment (mastery + rank)        → platform host, priority 1
- * 6. listing of untracked players       → match cluster, priority 0
+ * Platform host: ladder refresh (hourly, and when Master grows; priority 5), the Diamond sweep
+ * (4), the daily mastery refresh (2), enrichment (mastery + rank, 1).
  *
- * So a level only gets a host's budget when nothing of a higher level is waiting for it.
+ * Match cluster (the scarce budget), three strict tiers:
+ *
+ * 1. the tracked apex players (Challenger, Grandmaster, Riot's Master list): listings of those
+ *    who played (priority 4), then their matches (3);
+ * 2. the Masters outside Riot's list (it stops at 10,000 players), listed blind, one pass a day
+ *    that opens at a fixed local hour: only once tier 1 has caught up (their matches 0, their
+ *    listings -1);
+ * 3. the tracked Diamond players: only once tier 1 has caught up and tier 2 has nobody due
+ *    (listings -2, matches -3). How many are tracked is a target the worker sizes by itself.
+ *
+ * A tier is held back twice: its work is not handed out before its turn (below), and its requests
+ * wait behind those of the tiers above in the limiter.
  *
  * Players are tracked from the top of the ladder down: Challenger and Grandmaster, then Master by
- * LP, `masterStep` more each time the queues are nearly empty. Listings and match fetches follow
- * the ladder order too, so the best players' matches always come first. Riot's Master list stops
- * at 10,000 players: once all of them are tracked and the queues are nearly empty, the highest
- * ranked players seen in stored matches but not on the tracked ladder are listed too (level 6).
+ * LP, `masterStep` more each time tier 1 has caught up. Listings and match fetches follow the
+ * ladder order too, so the best players' matches always come first.
  *
  * Listing skip rule (`listingSkip` 'shadow' | 'on'): a tracked player whose new games are all
  * stored already (found through other players) needs no listing. For that the matches a listing
@@ -24,8 +28,10 @@
  * for a listing once no match queued by a better-placed player is still to be fetched.
  *
  * Diamond tracking (`diamondMaxTracked` > 0): after each hourly ladder refresh the four Diamond
- * divisions are read page by page, and up to that many Diamond players are tracked after the apex
- * players: first those seen in a Master+ game lately, then Diamond I by LP when budget remains.
+ * divisions are read page by page, and the best Diamond players are tracked, as many as the
+ * target says: first those seen in a Master+ game lately, then everyone else, each group by
+ * division then LP. The target grows a step after a full day of keeping up and shrinks a step
+ * when the platform has not kept up for several cycles (`startBudgetCycle`).
  */
 import {
   claimEnrichment,
@@ -34,17 +40,23 @@ import {
   clearWorkerAuthRejected,
   completeEnrichment,
   countEnrichmentQueue,
+  countExtraListingCandidates,
   countPendingMatches,
+  countPendingMatchesInBand,
   countStoredGamesEndedBetween,
   type DailyRefreshCandidate,
   type Db,
+  DIAMOND_FETCH_RANK,
+  type DiamondTracking,
   deferMatch,
   deferMatchAfterError,
+  EXTRA_FETCH_RANK,
   enqueueNewMatchIds,
   extraListingCandidates,
   failEnrichment,
   finishListing,
   finishWorkerRun,
+  getDiamondTracking,
   getListingSkipState,
   getMatchesSyncedUntil,
   hasPendingMatchBefore,
@@ -53,6 +65,7 @@ import {
   type LadderEntryInput,
   type ListingSkipState,
   ladderOrder,
+  listWorkerStatus,
   type MasteryInput,
   markMatchFailed,
   markMatchSkipped,
@@ -62,11 +75,13 @@ import {
   playersNeedingDailyRefresh,
   playersSeenWithMasterSince,
   playersWithListingRequested,
+  QUEUE_BACK_RANK,
   type QueuedEnrichment,
   type QueuedMatch,
   recordListingSkipMiss,
   recordWorkerError,
   replaceMasteries,
+  saveDiamondTracking,
   setListingBaseline,
   skipPendingMatchesUpTo,
   startWorkerRun,
@@ -94,7 +109,7 @@ import { abortError, type Clock, isAbortError, systemClock } from '../clock.ts';
 import { errorMessage, type Logger, silentLogger } from '../log.ts';
 import { MatchParseError, parseMatch } from '../parser/parse-match.ts';
 import type { PatchVerdict } from '../patches.ts';
-import { PRIORITY, type RiotApi, RiotAuthError } from '../riot/client.ts';
+import { PRIORITY, type Priority, type RiotApi, RiotAuthError } from '../riot/client.ts';
 import { toSoloRank } from '../riot/ranks.ts';
 import { classifyError, DeterministicError } from './errors.ts';
 import { WorkSource } from './work-source.ts';
@@ -118,10 +133,13 @@ export interface SchedulerOptions {
   ladderIntervalMs: number;
   /**
    * Master players added to the tracked set (top of the Master tier by LP first) each time the
-   * queues are nearly empty (default 500). Challenger and Grandmaster are always tracked.
+   * first tier has caught up (default 500). Challenger and Grandmaster are always tracked.
    */
   masterStep: number;
-  /** "Nearly empty": no listing waiting and at most this many PENDING matches (default 50). */
+  /**
+   * "Nearly empty": a tier has caught up when none of its listings is waiting and at most this
+   * many of its matches are PENDING (default 50).
+   */
   expandBelowPendingMatches: number;
   /** How often the ladder loop checks whether it can track more Master players (default 1 min). */
   expansionCheckMs: number;
@@ -161,13 +179,17 @@ export interface SchedulerOptions {
     extraListing: number;
   };
   /**
-   * Untracked players (seen in stored matches, ranked by enrichment) are listed once every
-   * Master player of Riot's list is tracked and the queues are nearly empty: those of at least
-   * this tier (default MASTER), highest ranked first, each at most once per
-   * `extraListingIntervalMs` (default 6 h).
+   * Tier 2. Untracked players (seen in stored matches, ranked by enrichment) of at least this
+   * tier (default MASTER: the Masters outside Riot's list) are listed once every Master player of
+   * Riot's list is tracked and tier 1 has caught up, highest ranked first, in one pass a day.
+   * The pass opens at `extraPassStartHour` (default 4: after the evening peak) in the platform's
+   * local time, a fixed UTC offset in hours (`extraPassUtcOffsetHours`, default KR +9, VN2 +7,
+   * EUW1 +1, NA1 -6; no daylight saving). From then on every such player not listed since is
+   * due, once, however long the pass takes.
    */
   extraMinTier: SoloTier;
-  extraListingIntervalMs: number;
+  extraPassStartHour: number;
+  extraPassUtcOffsetHours: Partial<Record<Platform, number>>;
   /**
    * Keep collecting the previous patch after the latest one is live (default false). For a
    * backfill of the previous patch by hand; while it is on, first listings go back up to
@@ -194,15 +216,39 @@ export interface SchedulerOptions {
   listingGateMaxWaitMs: number;
   listingGatePollMs: number;
   /**
-   * Diamond players tracked at most, after the apex players (default 0: none, and no Diamond
-   * request is made). First those seen in a Master+ game during `diamondWithMasterWindowMs`
-   * (default 7 days), by division then LP; then Diamond I players by LP, `diamondStep` more
-   * (default 500) each time the platform has caught up, every Master player of Riot's list is
-   * tracked and no untracked player is due for a listing.
+   * Tier 3. Ceiling of the Diamond target (default 0: no Diamond player is tracked and no
+   * Diamond request is made). The target itself is sized by the worker, `diamondStep` players
+   * at a time (default 500), and kept in `diamond_tracking`. Tracked first: those seen in a
+   * Master+ game during `diamondWithMasterWindowMs` (default 7 days), then every other Diamond
+   * player, each group by division then LP.
    */
   diamondMaxTracked: number;
   diamondStep: number;
   diamondWithMasterWindowMs: number;
+  /**
+   * The target grows a step when the last `diamondGrowCycles` ladder cycles (default 24: a full
+   * day, evening peak included) hold no missed cycle and at least `diamondGrowMinKeptCycles`
+   * (default 6) kept ones. A cycle is kept when the three tiers had nothing waiting at least
+   * once during it; missed otherwise, unless the daily pass of tier 2 was still running (players
+   * left to list, or their matches to fetch, while tier 1 had caught up), or it is one of the
+   * first `diamondPassRecoveryCycles` (default 3) after that pass, or patch data was missing:
+   * those are neither.
+   */
+  diamondGrowCycles: number;
+  diamondGrowMinKeptCycles: number;
+  diamondPassRecoveryCycles: number;
+  /**
+   * The target shrinks a step once `diamondShrinkMissedCycles` cycles (default 6) were missed
+   * since the last kept one.
+   */
+  diamondShrinkMissedCycles: number;
+  /**
+   * A growth step brings a burst of first listings: until the three tiers have nothing waiting
+   * again, cycles are not recorded at all, for at most this many cycles that would have been
+   * missed ones (default 24; the cycles of the daily pass do not use them up). The same after a
+   * stop of more than one ladder interval.
+   */
+  diamondSettleCycles: number;
   /**
    * A tracked Diamond player missing from complete sweeps is kept as is, and dropped once the
    * last sweep that saw them is older than this (default 24 h).
@@ -227,7 +273,8 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   maxTransientErrors: 10,
   concurrency: { listing: 2, match: 3, daily: 1, enrichment: 2, extraListing: 1 },
   extraMinTier: 'MASTER',
-  extraListingIntervalMs: 6 * HOUR,
+  extraPassStartHour: 4,
+  extraPassUtcOffsetHours: { KR: 9, VN2: 7, EUW1: 1, NA1: -6 },
   collectPreviousPatch: false,
   listingSkip: 'off',
   listingSkipSafetyMs: DAY,
@@ -237,6 +284,11 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   diamondMaxTracked: 0,
   diamondStep: 500,
   diamondWithMasterWindowMs: 7 * DAY,
+  diamondGrowCycles: 24,
+  diamondGrowMinKeptCycles: 6,
+  diamondPassRecoveryCycles: 3,
+  diamondShrinkMissedCycles: 6,
+  diamondSettleCycles: 24,
   diamondKeepMs: DAY,
 };
 
@@ -291,7 +343,7 @@ export interface PlatformProgress {
   matchesRetried: number;
   enriched: number;
   dailyRefreshed: number;
-  /** Listings of untracked players (also counted in `playersPolled`). */
+  /** Listings of Masters outside Riot's list (also counted in `playersPolled`). */
   extraPlayersPolled: number;
   /**
    * Listing skip rule: listings not made because the player's new games were all stored
@@ -300,8 +352,21 @@ export interface PlatformProgress {
   listingsSkipped: number;
   /** 'shadow': would-be-skipped listings that queued new match ids (`listing_skip_misses` rows). */
   listingSkipMisses: number;
+  /** Tier 2, the daily pass over the Masters outside Riot's list; null when they are not listed. */
+  extraPass: ExtraPassProgress | null;
   /** Diamond tracking; null when it is off (`diamondMaxTracked` = 0). */
   diamond: DiamondProgress | null;
+}
+
+export interface ExtraPassProgress {
+  /** Whether the pass that opened at `openedAt` still has players to list. */
+  open: boolean;
+  /** When today's pass opened (ISO time). */
+  openedAt: string;
+  /** Players due for a listing now. */
+  remaining: number;
+  /** Matches their listings queued that are still to be fetched (tier 3 waits for them too). */
+  matchesWaiting: number;
 }
 
 export interface DiamondProgress {
@@ -309,11 +374,23 @@ export interface DiamondProgress {
   seen: [number, number, number, number] | null;
   /** Diamond players tracked. */
   tracked: number;
-  /** Of them, as of the last complete sweep: seen in a Master+ game lately / Diamond I by LP. */
+  /** Of them, as of the last complete sweep: seen in a Master+ game lately. */
   trackedWithMaster: number | null;
-  trackedDiamondOne: number | null;
+  /** Diamond players to track: sized by the worker, at most `cap`. */
+  target: number;
   /** `diamondMaxTracked`. */
   cap: number;
+  /**
+   * The last ladder cycles since the target changed (at most `diamondGrowCycles`), oldest first:
+   * K kept up, P daily Master pass running, R recovering from it, W waiting for patch data,
+   * M missed; and how many of them were kept up with.
+   */
+  cycles: string;
+  keptCycles: number;
+  /** Cycles left to absorb a growth step (or a long stop); they are not recorded meanwhile. */
+  settleCyclesLeft: number;
+  /** The last grow / shrink of the target and why. */
+  lastChange: { at: string; from: number | null; reason: string | null } | null;
 }
 
 /** Numeric part of 'EUW1_7234567890' (game ids grow with time on a platform). */
@@ -382,35 +459,138 @@ function toDiamondLadderEntry(e: DiamondEntry): LadderEntryInput {
 }
 
 export interface DiamondSelection {
-  /** Seen in a Master+ game lately, top down, at most `cap`. */
-  withMaster: DiamondEntry[];
-  /** Diamond I players by LP, at most `extra` and the room left under `cap`. */
-  diamondOne: DiamondEntry[];
-  /** The next Diamond I players by LP, not tracked. */
-  reserve: DiamondEntry[];
+  /** The players to track, best candidate first. */
+  tracked: DiamondEntry[];
+  /** How many of them were seen in a Master+ game lately. */
+  withMaster: number;
 }
 
 /**
- * Which Diamond players to track: those of `seenWithMaster` first (division, then LP), then
- * Diamond I players by LP, at most `extra` of them; `cap` players in all.
+ * Which Diamond players to track, `target` at most. One order for every candidate: those of
+ * `seenWithMaster` first, then all the others, each group by division (I first, down to IV)
+ * then LP.
  */
 export function selectDiamondPlayers(
   candidates: readonly DiamondEntry[],
   seenWithMaster: ReadonlySet<string>,
-  cap: number,
-  extra: number,
+  target: number,
 ): DiamondSelection {
   const first: DiamondEntry[] = [];
   const others: DiamondEntry[] = [];
-  for (const c of candidates) {
-    if (seenWithMaster.has(c.puuid)) first.push(c);
-    else if (c.division === 1) others.push(c);
-  }
+  for (const c of candidates) (seenWithMaster.has(c.puuid) ? first : others).push(c);
   first.sort(byDivisionThenLp);
   others.sort(byDivisionThenLp);
-  const withMaster = first.slice(0, Math.max(0, cap));
-  const room = Math.max(0, Math.min(extra, cap - withMaster.length));
-  return { withMaster, diamondOne: others.slice(0, room), reserve: others.slice(room) };
+  const tracked = [...first, ...others].slice(0, Math.max(0, target));
+  return { tracked, withMaster: Math.min(first.length, tracked.length) };
+}
+
+/**
+ * The best `limit` Diamond entries (division, then LP) of those added, without holding them all:
+ * a sweep is up to 140,000 entries a platform.
+ */
+export class BestDiamonds {
+  private entries: DiamondEntry[] = [];
+
+  constructor(private readonly limit: number) {}
+
+  add(e: DiamondEntry): void {
+    if (this.limit <= 0) return;
+    this.entries.push(e);
+    if (this.entries.length >= 2 * this.limit + 1024) this.trim();
+  }
+
+  values(): DiamondEntry[] {
+    this.trim();
+    return this.entries;
+  }
+
+  private trim(): void {
+    this.entries.sort(byDivisionThenLp);
+    if (this.entries.length > this.limit) this.entries.length = this.limit;
+  }
+}
+
+/**
+ * When the daily pass of tier 2 last opened: the latest `startHour` o'clock, at or before `now`,
+ * of a local time that is UTC + `utcOffsetHours` (a fixed offset: no daylight saving).
+ */
+export function passOpenedAt(now: number, startHour: number, utcOffsetHours: number): number {
+  const offset = utcOffsetHours * HOUR;
+  const local = now + offset;
+  let opened = Math.floor(local / DAY) * DAY + startHour * HOUR;
+  if (opened > local) opened -= DAY;
+  return opened - offset;
+}
+
+/**
+ * Outcome of a ladder cycle, as recorded in `diamond_tracking.cycles`: K kept up (the three tiers
+ * had nothing waiting at least once), P the daily Master pass still had players to list, R one of
+ * the first cycles after that pass (its backlog is being absorbed), W waiting for patch data,
+ * M missed.
+ */
+export type CycleOutcome = 'K' | 'P' | 'R' | 'W' | 'M';
+
+/** Outcome of a cycle that was not kept up with, after the cycles of `history`. */
+export function classifyMissedCycle(
+  history: string,
+  seen: { pass: boolean; patch: boolean },
+  recoveryCycles: number,
+): Exclude<CycleOutcome, 'K'> {
+  if (seen.patch) return 'W';
+  if (seen.pass) return 'P';
+  const lastPass = history.lastIndexOf('P');
+  if (lastPass >= 0) {
+    const since = history.slice(lastPass + 1);
+    const recovering = since.replaceAll('W', '');
+    if (/^R*$/.test(recovering) && recovering.length < recoveryCycles) return 'R';
+  }
+  return 'M';
+}
+
+export interface DiamondTargetRules {
+  /** `diamondMaxTracked`. */
+  cap: number;
+  step: number;
+  growCycles: number;
+  growMinKeptCycles: number;
+  shrinkMissedCycles: number;
+}
+
+/**
+ * The next Diamond target after the cycles of `history` (those since it last changed), or null
+ * to keep it. Shrinks a step once `shrinkMissedCycles` cycles were missed since the last kept
+ * one; grows a step, up to the ceiling, when the last `growCycles` cycles hold no missed one and
+ * at least `growMinKeptCycles` kept ones, and `tracked` players fill the target.
+ */
+export function nextDiamondTarget(
+  history: string,
+  current: { target: number; tracked: number },
+  rules: DiamondTargetRules,
+): { target: number; reason: string } | null {
+  const { target } = current;
+  const sinceKept = history.slice(history.lastIndexOf('K') + 1);
+  const missed = sinceKept.split('M').length - 1;
+  if (missed >= rules.shrinkMissedCycles && target > 0) {
+    return {
+      target: Math.max(0, target - rules.step),
+      reason: `not kept up: ${missed} cycles missed since the last kept one`,
+    };
+  }
+  const window = history.slice(-rules.growCycles);
+  const kept = window.split('K').length - 1;
+  if (
+    window.length >= rules.growCycles &&
+    !window.includes('M') &&
+    kept >= rules.growMinKeptCycles &&
+    target < rules.cap &&
+    current.tracked >= target
+  ) {
+    return {
+      target: Math.min(rules.cap, target + rules.step),
+      reason: `kept up for ${window.length} cycles (${kept} kept, none missed)`,
+    };
+  }
+  return null;
 }
 
 export function toLadderEntries(list: LeagueListDto, tier: ApexLadderTier): LadderEntryInput[] {
@@ -435,6 +615,29 @@ export function byLp(entries: readonly LadderEntryInput[]): LadderEntryInput[] {
 
 /** Ladder position of a player not on the tracked ladder (listed after every tracked player). */
 const UNRANKED = Number.MAX_SAFE_INTEGER;
+
+/** Cycles kept in `diamond_tracking.cycles` at most. */
+const MAX_RECORDED_CYCLES = 96;
+
+/** A ladder cycle in progress, as far as the Diamond target is concerned. */
+interface BudgetCycle {
+  startedAt: number;
+  /** The three tiers had nothing waiting at least once (recorded at once). */
+  kept: boolean;
+  /** The daily pass of tier 2 still had players to list. */
+  pass: boolean;
+  /** Matches were waiting for patch data. */
+  patch: boolean;
+}
+
+/** Rate-limit priority of the match request of a queued match: its tier's. */
+function matchPriority(fetchRank: number | undefined): Priority {
+  if (fetchRank === undefined || fetchRank < EXTRA_FETCH_RANK) return PRIORITY.MATCH;
+  if (fetchRank < DIAMOND_FETCH_RANK) return PRIORITY.EXTRA_MATCH;
+  if (fetchRank < QUEUE_BACK_RANK) return PRIORITY.DIAMOND_MATCH;
+  // Retried and deferred matches may be anyone's.
+  return PRIORITY.MATCH;
+}
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve = () => {};
@@ -468,8 +671,9 @@ export class PlatformWorker {
   /** Players to list (best ladder position first). Durable copy: `players.listing_requested_at`. */
   private readonly played = new Set<string>();
   /**
-   * Ladder position of each tracked player (0 = first Challenger), from the last refresh: the
-   * apex players (`apexOrder`), then the tracked Diamond players (`diamond.tracked`).
+   * `fetch_rank` of each tracked player, from the last refresh: the ladder position of the apex
+   * players (`apexOrder`, 0 = first Challenger), `DIAMOND_FETCH_RANK` + their position for the
+   * tracked Diamond players (`diamond.tracked`). Listings follow it too.
    */
   private ladderRank = new Map<string, number>();
   private apexOrder: string[] = [];
@@ -481,19 +685,21 @@ export class PlatformWorker {
     tracked: [] as DiamondRank[],
     /** Players per division of the last complete sweep. */
     seen: null as [number, number, number, number] | null,
-    /** Tracked players of each group at the last complete sweep. */
+    /** Tracked players seen in a Master+ game lately, at the last complete sweep. */
     withMaster: null as number | null,
-    diamondOne: null as number | null,
-    /**
-     * Diamond I players that may be tracked beyond those seen in a Master+ game: grows by
-     * `diamondStep` when budget remains (null until the first complete sweep, which reads it
-     * back from the stored rows).
-     */
-    extra: null as number | null,
-    /** The next Diamond I players by LP, from the last complete sweep. */
-    reserve: [] as DiamondEntry[],
+    /** The target and its history (`diamond_tracking`), once read. */
+    state: null as DiamondTracking | null,
+    loading: null as Promise<DiamondTracking> | null,
+    /** The ladder cycle in progress. */
+    cycle: null as BudgetCycle | null,
   };
-  /** Master players tracked: grows by `masterStep` when the queues are nearly empty. */
+  /** Tier 2: the pass that opened at `openedAt`, and whether nobody was left to list since. */
+  private extraPass = { openedAt: 0, done: false };
+  /** Whether a player of tier 2 could be listed, as last read (null: read again). */
+  private extraDue: { checkedAt: number; due: boolean } | null = null;
+  /** Whether a ladder refresh succeeded in this process. */
+  private ladderRefreshed = false;
+  /** Master players tracked: grows by `masterStep` when tier 1 has caught up. */
   private masterTracked = 0;
   /** Players in the whole Master tier at the last ladder refresh (0 = not refreshed yet). */
   private masterTotal = 0;
@@ -589,7 +795,11 @@ export class PlatformWorker {
           if (until <= now) this.deferredUntil.delete(id);
         const probe = await this.nextProbe(exclude);
         if (probe !== undefined) return probe ? [probe] : [];
-        const rows = await claimPendingMatches(this.db, this.platform, 50 + exclude.size);
+        // The Diamond players' matches only when it is their tier's turn.
+        const withoutDiamond = !(await this.diamondTurn());
+        const rows = await claimPendingMatches(this.db, this.platform, 50 + exclude.size, {
+          withoutDiamond,
+        });
         return rows.filter((r) => !exclude.has(r.matchId) && !this.deferredUntil.has(r.matchId));
       },
       (m) => m.matchId,
@@ -622,7 +832,7 @@ export class PlatformWorker {
         for (const [p, until] of this.extraCooldown) if (until <= now) this.extraCooldown.delete(p);
         const rows = await extraListingCandidates(this.db, this.platform, {
           minTier: this.opts.extraMinTier,
-          syncedBefore: new Date(now - this.opts.extraListingIntervalMs),
+          syncedBefore: this.extraDueBefore(now),
           limit: 20 + exclude.size + this.extraCooldown.size,
         });
         return rows.filter((p) => !exclude.has(p) && !this.extraCooldown.has(p));
@@ -632,7 +842,7 @@ export class PlatformWorker {
   }
 
   // -------------------------------------------------------------------------
-  // Level 1: ladder
+  // Ladder
   // -------------------------------------------------------------------------
 
   /**
@@ -669,6 +879,9 @@ export class PlatformWorker {
     else this.diamond.tracked = [];
     this.applyLadderOrder();
     this.masterTracked = tracked.length;
+    this.ladderRefreshed = true;
+    // Players who left the tracked ladder may be due in tier 2.
+    this.extraDue = null;
     for (const p of result.played) this.played.add(p);
     await this.loadPendingListings();
     this.log.info('ladder refreshed', {
@@ -684,18 +897,28 @@ export class PlatformWorker {
   }
 
   /**
-   * Ladder positions, top down: every apex player, then the tracked Diamond players (a player in
-   * both keeps the apex position).
+   * The `fetch_rank` of every tracked player, top down: the apex players by ladder position, then
+   * the tracked Diamond players in their own band (a player in both keeps the apex position).
    */
   private applyLadderOrder(): void {
     const rank = new Map<string, number>();
-    for (const p of this.apexOrder) if (!rank.has(p)) rank.set(p, rank.size);
-    for (const d of this.diamond.tracked) if (!rank.has(d.puuid)) rank.set(d.puuid, rank.size);
+    for (const p of this.apexOrder) {
+      if (!rank.has(p)) rank.set(p, Math.min(rank.size, EXTRA_FETCH_RANK - 1));
+    }
+    let position = DIAMOND_FETCH_RANK;
+    for (const d of this.diamond.tracked) {
+      if (!rank.has(d.puuid)) rank.set(d.puuid, Math.min(position++, QUEUE_BACK_RANK - 1));
+    }
     this.ladderRank = rank;
   }
 
   private rankOf(puuid: string): number {
     return this.ladderRank.get(puuid) ?? UNRANKED;
+  }
+
+  /** A tracked apex player (tier 1); anyone else to list is of tier 3. */
+  private isApex(puuid: string): boolean {
+    return this.rankOf(puuid) < EXTRA_FETCH_RANK;
   }
 
   /** The tracked ladder as stored, before this process refreshes it (at startup). */
@@ -710,38 +933,133 @@ export class PlatformWorker {
     this.ladderLoaded = true;
   }
 
+  // -------------------------------------------------------------------------
+  // The three tiers of the match cluster's budget
+  // -------------------------------------------------------------------------
+
   /**
-   * Whether to track `masterStep` more Master players now: some are not tracked yet, no listing is
-   * waiting (players cooling down after a failed listing don't count) and at most
-   * `expandBelowPendingMatches` matches are PENDING.
+   * Whether to track `masterStep` more Master players now: some are not tracked yet and tier 1
+   * has caught up.
    */
   async canTrackMoreMasters(): Promise<boolean> {
     if (this.masterTotal <= this.masterTracked) return false;
-    return this.caughtUp();
+    return this.apexCaughtUp();
+  }
+
+  /** Every Master player of Riot's list is tracked (it stops at 10,000). */
+  private apexComplete(): boolean {
+    return this.ladderRefreshed && this.masterTracked >= this.masterTotal;
   }
 
   /**
-   * Whether to list untracked players now: every Master player of Riot's list is tracked (it
-   * stops at 10,000) and the queues are nearly empty, as for `canTrackMoreMasters`.
+   * Tier 1 has caught up: no listing of a tracked apex player is waiting or running (players
+   * cooling down after a failed listing don't count) and at most `expandBelowPendingMatches` of
+   * their matches are PENDING. Nothing of the tiers below is looked at: a backlog of Diamond
+   * matches never holds tier 2 back. Neither are the retried and deferred matches at the back of
+   * the queue: they must not hold anything for long.
+   */
+  private async apexCaughtUp(): Promise<boolean> {
+    if (!this.patches.ready) return false;
+    for (const p of this.listingInFlight) if (this.isApex(p)) return false;
+    const next = this.peekPlayedPlayer();
+    if (next !== null && this.isApex(next)) return false;
+    return this.fewPendingMatchesBefore(EXTRA_FETCH_RANK);
+  }
+
+  /** At most `expandBelowPendingMatches` PENDING matches have a `fetch_rank` below `rank`. */
+  private async fewPendingMatchesBefore(rank: number): Promise<boolean> {
+    const limit = this.opts.expandBelowPendingMatches + 1;
+    const pending = await countPendingMatchesInBand(
+      this.db,
+      this.platform,
+      { from: 0, below: rank },
+      limit,
+    );
+    return pending < limit;
+  }
+
+  /**
+   * Tier 2's turn: whether to list the Masters outside Riot's list now. Every Master player of
+   * that list is tracked and tier 1 has caught up.
    */
   async canListExtraPlayers(): Promise<boolean> {
-    if (this.masterTotal === 0 || this.masterTracked < this.masterTotal) return false;
-    return this.caughtUp();
+    return this.apexComplete() && (await this.apexCaughtUp());
+  }
+
+  /** When today's pass of tier 2 opened (the pass of a new day starts over). */
+  private extraPassOpenedAt(now: number): number {
+    const offset = this.opts.extraPassUtcOffsetHours[this.platform] ?? 0;
+    const openedAt = passOpenedAt(now, this.opts.extraPassStartHour, offset);
+    if (openedAt !== this.extraPass.openedAt) {
+      this.extraPass = { openedAt, done: false };
+      this.extraDue = null;
+    }
+    return openedAt;
   }
 
   /**
-   * No listing of a tracked player is waiting (players cooling down after a failed listing don't
-   * count) and at most `expandBelowPendingMatches` matches are PENDING.
+   * A player of tier 2 is due when their last listing is older than the opening of today's pass.
+   * A listing sets `matches_synced_until` to `listingOverlapMs` before its own time.
    */
-  private async caughtUp(): Promise<boolean> {
-    if (!this.patches.ready || this.listingInFlight.size > 0) return false;
+  private extraDueBefore(now: number): Date {
+    return new Date(this.extraPassOpenedAt(now) - this.opts.listingOverlapMs);
+  }
+
+  /**
+   * Whether a player of tier 2 is due and could be listed now (those cooling down after a failed
+   * listing could not). Read at most every `idleMs`, and again after each of their listings.
+   */
+  private async extraListingDue(): Promise<boolean> {
+    if (this.opts.concurrency.extraListing <= 0) return false;
     const now = this.clock.now();
-    for (const p of this.played) {
-      const until = this.listingCooldown.get(p);
-      if (until === undefined || until <= now) return false;
-    }
-    const pending = await countPendingMatches(this.db, this.platform);
-    return pending <= this.opts.expandBelowPendingMatches;
+    const before = this.extraDueBefore(now);
+    const last = this.extraDue;
+    if (last !== null && now - last.checkedAt < this.opts.idleMs) return last.due;
+    const coolingDown = (p: string) => (this.extraCooldown.get(p) ?? 0) > now;
+    const rows = await extraListingCandidates(this.db, this.platform, {
+      minTier: this.opts.extraMinTier,
+      syncedBefore: before,
+      limit: 1 + [...this.extraCooldown.keys()].filter(coolingDown).length,
+    });
+    const due = rows.some((p) => !coolingDown(p));
+    this.extraDue = { checkedAt: now, due };
+    // Nobody left: today's pass is over (players who turn up later are listed as they come).
+    if (!due) this.extraPass.done = true;
+    return due;
+  }
+
+  /**
+   * Tier 2 is done: nobody of it is due (and could be listed), none of their listings is running,
+   * and the matches queued by tiers 1 and 2 are fetched, all but `expandBelowPendingMatches` at
+   * most. A match that fails or is deferred goes to the back of the queue at once, out of these
+   * bands, so one that cannot be fetched never keeps tier 2 open.
+   */
+  private async extraTierDone(): Promise<boolean> {
+    if (await this.extraListingDue()) return false;
+    if (this.extraSource.active > 0) return false;
+    return this.fewPendingMatchesBefore(DIAMOND_FETCH_RANK);
+  }
+
+  /**
+   * Tier 3's turn: whether a tracked Diamond player may be listed, or one of their matches
+   * fetched, now. Tier 1 has caught up and tier 2 is done: every Master outside Riot's list is
+   * listed and their games are stored.
+   */
+  private async diamondTurn(): Promise<boolean> {
+    if (!this.apexComplete() || !(await this.apexCaughtUp())) return false;
+    return this.extraTierDone();
+  }
+
+  /**
+   * The three tiers have nothing waiting: no listing waiting or running, tier 2 done, at most
+   * `expandBelowPendingMatches` matches PENDING (retried and deferred ones aside).
+   */
+  private async nothingWaiting(): Promise<boolean> {
+    if (!this.patches.ready || !this.apexComplete()) return false;
+    if (this.listingInFlight.size > 0) return false;
+    if (this.peekPlayedPlayer() !== null) return false;
+    if (!(await this.extraTierDone())) return false;
+    return this.fewPendingMatchesBefore(QUEUE_BACK_RANK);
   }
 
   /** Tracks the next `masterStep` Master players (by LP): refreshes the ladder with them. */
@@ -756,25 +1074,212 @@ export class PlatformWorker {
   }
 
   // -------------------------------------------------------------------------
-  // Level 1, continued: Diamond players (`diamondMaxTracked` > 0)
+  // Tier 3: the Diamond target (`diamondMaxTracked` > 0)
   // -------------------------------------------------------------------------
 
   /**
-   * Reads the four Diamond divisions page by page and tracks at most `diamondMaxTracked` Diamond
-   * players: first those seen in a Master+ game during `diamondWithMasterWindowMs` (division,
-   * then LP), then as many Diamond I players by LP as the budget allowed so far (`diamond.extra`,
-   * see `trackMoreDiamonds`). Marks who played; returns how many (null: tracking is off, or Riot
+   * The Diamond target of this platform and its history (`diamond_tracking`), read once. On the
+   * very first start it is the number of Diamond players tracked so far. A target above the
+   * ceiling comes down to it. After a stop of more than one ladder interval, the backlog of the
+   * stop is given `diamondSettleCycles` cycles before cycles count again.
+   */
+  private diamondState(): Promise<DiamondTracking> {
+    this.diamond.loading ??= this.loadDiamondState().catch((err) => {
+      this.diamond.loading = null;
+      throw err;
+    });
+    return this.diamond.loading;
+  }
+
+  private async loadDiamondState(): Promise<DiamondTracking> {
+    if (!this.ladderLoaded) await this.loadLadderOrder();
+    const cap = this.opts.diamondMaxTracked;
+    const now = this.clock.now();
+    const settle = this.opts.diamondSettleCycles;
+    const stored = await getDiamondTracking(this.db, this.platform);
+    let state: DiamondTracking;
+    let changed = false;
+    if (stored === null) {
+      const tracked = this.diamond.tracked.length;
+      state = {
+        target: Math.min(tracked, cap),
+        cycles: '',
+        lastCycleAt: null,
+        // Their first listings may still be waiting.
+        settleCyclesLeft: tracked > 0 ? settle : 0,
+        changedAt: new Date(now),
+        changedFrom: null,
+        changeReason: `first start: ${tracked} Diamond players were tracked`,
+      };
+      changed = true;
+    } else {
+      state = stored;
+      if (state.target > cap) {
+        state = {
+          ...state,
+          target: cap,
+          cycles: '',
+          changedAt: new Date(now),
+          changedFrom: stored.target,
+          changeReason: 'above the ceiling (DIAMOND_MAX_TRACKED)',
+        };
+        changed = true;
+      }
+      const status = (await listWorkerStatus(this.db)).find((w) => w.platform === this.platform);
+      const stoppedFor = status ? now - status.heartbeatAt.getTime() : 0;
+      if (stoppedFor > this.opts.ladderIntervalMs && state.settleCyclesLeft < settle) {
+        state = { ...state, settleCyclesLeft: settle };
+        changed = true;
+        this.log.info('diamond target: settling after a stop', { stoppedForMs: stoppedFor });
+      }
+    }
+    if (changed) await saveDiamondTracking(this.db, this.platform, state, new Date(now));
+    this.diamond.state = state;
+    return state;
+  }
+
+  /**
+   * Start of a ladder cycle (before the hourly refresh and sweep): the cycle that ends is
+   * recorded, and the Diamond target grows or shrinks a step when its history says so
+   * (`nextDiamondTarget`); the sweep that follows applies it.
+   *
+   * Growing brings a burst of first listings. So that it is not taken for "not keeping up", the
+   * history starts over at each change and, after a growth step, cycles are not recorded until
+   * the three tiers have nothing waiting again (at most `diamondSettleCycles` cycles that would
+   * have been missed ones): the next change is decided on cycles that ran at the new size, after
+   * the burst.
+   */
+  async startBudgetCycle(): Promise<void> {
+    if (this.opts.diamondMaxTracked <= 0) return;
+    const state = await this.diamondState();
+    const cycle = this.diamond.cycle;
+    if (cycle !== null) {
+      await this.noteKeepingUp();
+      if (!cycle.kept) {
+        const outcome = classifyMissedCycle(
+          state.cycles,
+          cycle,
+          this.opts.diamondPassRecoveryCycles,
+        );
+        if (state.settleCyclesLeft === 0) {
+          await this.recordCycle(cycle, outcome);
+        } else if (outcome === 'M') {
+          // Settling: not recorded. A cycle of the daily pass does not use up the time to settle.
+          state.settleCyclesLeft -= 1;
+          await this.saveDiamondState();
+        }
+      }
+    }
+    await this.adjustDiamondTarget();
+    this.diamond.cycle = { startedAt: this.clock.now(), kept: false, pass: false, patch: false };
+  }
+
+  /**
+   * Looks at the cycle in progress (every `expansionCheckMs`): the first time the three tiers
+   * have nothing waiting, the cycle is recorded as kept up with. Also notes what excuses a cycle
+   * that is not: the daily pass of tier 2 still running, matches waiting for patch data.
+   */
+  async noteKeepingUp(): Promise<void> {
+    const cycle = this.diamond.cycle;
+    if (this.opts.diamondMaxTracked <= 0 || cycle === null || cycle.kept) return;
+    await this.diamondState();
+    if (!this.patches.ready || this.tooNewMinGameId !== null) {
+      cycle.patch = true;
+      return;
+    }
+    if (!this.apexComplete()) return;
+    if (await this.extraListingDue()) {
+      // Strays listed after the pass was over don't make it a pass cycle.
+      if (!this.extraPass.done) cycle.pass = true;
+      return;
+    }
+    if (!(await this.nothingWaiting())) {
+      // The games the pass found are still being fetched: tier 3 is still waiting for it.
+      if ((await this.apexCaughtUp()) && !(await this.extraTierDone())) cycle.pass = true;
+      return;
+    }
+    cycle.kept = true;
+    await this.recordCycle(cycle, 'K');
+  }
+
+  /**
+   * Adds a cycle to the history. A cycle that started less than a ladder interval after the last
+   * recorded one is the same cycle (the worker restarted, or the refresh was retried): it only
+   * turns that one into a kept cycle. A kept cycle ends the settling after a growth step.
+   */
+  private async recordCycle(cycle: BudgetCycle, outcome: CycleOutcome): Promise<void> {
+    const state = await this.diamondState();
+    if (outcome === 'K') state.settleCyclesLeft = 0;
+    const sameCycle =
+      state.cycles !== '' &&
+      state.lastCycleAt !== null &&
+      cycle.startedAt - state.lastCycleAt.getTime() < this.opts.ladderIntervalMs;
+    if (sameCycle) {
+      if (outcome !== 'K' || state.cycles.endsWith('K')) return;
+      state.cycles = `${state.cycles.slice(0, -1)}K`;
+    } else {
+      state.cycles = (state.cycles + outcome).slice(-MAX_RECORDED_CYCLES);
+      state.lastCycleAt = new Date(cycle.startedAt);
+    }
+    await this.saveDiamondState();
+  }
+
+  private async saveDiamondState(): Promise<void> {
+    const state = await this.diamondState();
+    await saveDiamondTracking(this.db, this.platform, state, new Date(this.clock.now()));
+  }
+
+  /** Grows or shrinks the Diamond target a step when its history says so. */
+  private async adjustDiamondTarget(): Promise<void> {
+    const state = await this.diamondState();
+    const next = nextDiamondTarget(
+      state.cycles,
+      { target: state.target, tracked: this.diamond.tracked.length },
+      {
+        cap: this.opts.diamondMaxTracked,
+        step: this.opts.diamondStep,
+        growCycles: this.opts.diamondGrowCycles,
+        growMinKeptCycles: this.opts.diamondGrowMinKeptCycles,
+        shrinkMissedCycles: this.opts.diamondShrinkMissedCycles,
+      },
+    );
+    if (next === null) return;
+    const from = state.target;
+    const grows = next.target > from;
+    this.log.info(grows ? 'diamond target grows' : 'diamond target shrinks', {
+      from,
+      to: next.target,
+      reason: next.reason,
+      cycles: state.cycles.slice(-this.opts.diamondGrowCycles),
+    });
+    state.target = next.target;
+    state.cycles = '';
+    state.settleCyclesLeft = grows ? this.opts.diamondSettleCycles : 0;
+    state.changedAt = new Date(this.clock.now());
+    state.changedFrom = from;
+    state.changeReason = next.reason;
+    await this.saveDiamondState();
+  }
+
+  /**
+   * Reads the four Diamond divisions page by page and tracks the best Diamond players, as many
+   * as the target says (`diamond_tracking`, at most `diamondMaxTracked`): first those seen in a
+   * Master+ game during `diamondWithMasterWindowMs`, then every other Diamond player, each group
+   * by division then LP. Marks who played; returns how many (null: tracking is off, or Riot
    * answered with no player at all and nothing was changed).
    *
    * A page that fails throws and nothing is changed: nobody is removed nor taken as "did not
    * play". A tracked player the sweep did not see (moved between pages meanwhile, promoted,
    * decayed) is kept as is, until the last sweep that saw them is `diamondKeepMs` old; one who is
-   * on Riot's apex lists now is left to the apex ladder.
+   * on Riot's apex lists now is left to the apex ladder. A player who is no longer among the
+   * best (the target shrank, others passed them) leaves `ladder_entries` like any player leaving
+   * the ladder, and is no longer waiting for a listing.
    */
   async refreshDiamonds(signal?: AbortSignal): Promise<number | null> {
     const cap = this.opts.diamondMaxTracked;
     if (cap <= 0) return null;
     if (!this.ladderLoaded) await this.loadLadderOrder();
+    const target = Math.min((await this.diamondState()).target, cap);
     // Read before the sweep (nothing else writes the Diamond rows meanwhile; a player marked
     // during the sweep is taken by the next one).
     const [stored, withMaster] = await Promise.all([
@@ -787,13 +1292,17 @@ export class PlatformWorker {
     ]);
     const seenWithMaster = new Set(withMaster);
     const storedPuuids = new Set(stored.map((r) => r.puuid));
-    // A sweep is up to 140,000 entries: only those that can be tracked (Diamond I, or seen in a
-    // Master+ game) or are tracked are kept in memory, the others are counted as their page is read.
-    const sweep = await this.sweepDiamond(
-      (e) => e.division === 1 || seenWithMaster.has(e.puuid) || storedPuuids.has(e.puuid),
-      signal,
-    );
-    const seen = sweep.seen;
+    // A sweep is up to 140,000 entries. Every Diamond player is a candidate, but only those who
+    // can end up tracked are kept in memory: the players seen in a Master+ game and the tracked
+    // ones, and of all the others the best by division then LP, as many as the target (and a
+    // margin for players seen twice).
+    const first: DiamondEntry[] = [];
+    const others = new BestDiamonds(target + this.opts.diamondStep);
+    const seen = await this.sweepDiamond((e) => {
+      if (this.apexPuuids.has(e.puuid)) return;
+      if (seenWithMaster.has(e.puuid) || storedPuuids.has(e.puuid)) first.push(e);
+      else others.add(e);
+    }, signal);
     if (seen.every((n) => n === 0)) {
       this.log.warn('empty Diamond sweep from Riot, not applied');
       return null;
@@ -801,8 +1310,7 @@ export class PlatformWorker {
     const now = this.clock.now();
     // A player seen twice (moved between pages or divisions meanwhile) keeps the latest entry.
     const swept = new Map<string, DiamondEntry>();
-    for (const e of sweep.entries) {
-      if (this.apexPuuids.has(e.puuid)) continue;
+    for (const e of [...first, ...others.values()]) {
       const other = swept.get(e.puuid);
       if (!other || other.seenAt <= e.seenAt) swept.set(e.puuid, e);
     }
@@ -823,10 +1331,8 @@ export class PlatformWorker {
         seenAt: row.seenAt.getTime(),
       });
     }
-    // After a restart: as many Diamond I players as were tracked beyond the first group.
-    this.diamond.extra ??= stored.filter((r) => !seenWithMaster.has(r.puuid)).length;
-    const selection = selectDiamondPlayers(candidates, seenWithMaster, cap, this.diamond.extra);
-    const tracked = [...selection.withMaster, ...selection.diamondOne];
+    const selection = selectDiamondPlayers(candidates, seenWithMaster, target);
+    const tracked = selection.tracked;
 
     const result = await upsertDiamondLadder(
       this.db,
@@ -834,20 +1340,25 @@ export class PlatformWorker {
       tracked.filter((e) => !missing.has(e.puuid)).map(toDiamondLadderEntry),
       { keep: tracked.filter((e) => missing.has(e.puuid)).map((e) => e.puuid), now: new Date(now) },
     );
-    this.diamond.tracked = tracked.sort(byDivisionThenLp);
+    const before = this.diamond.tracked;
+    this.diamond.tracked = [...tracked].sort(byDivisionThenLp);
     this.diamond.seen = seen;
-    this.diamond.withMaster = selection.withMaster.length;
-    this.diamond.diamondOne = selection.diamondOne.length;
-    this.diamond.extra = selection.diamondOne.length;
-    this.diamond.reserve = selection.reserve.filter((e) => !missing.has(e.puuid));
+    this.diamond.withMaster = selection.withMaster;
     this.applyLadderOrder();
+    // Players who are no longer tracked are not listed any more.
+    for (const d of before) {
+      if (this.ladderRank.has(d.puuid)) continue;
+      this.played.delete(d.puuid);
+      this.listingCooldown.delete(d.puuid);
+      this.listingFailures.delete(d.puuid);
+    }
     for (const p of result.played) this.played.add(p);
     await this.loadPendingListings();
     this.log.info('diamond sweep applied', {
       seen,
       tracked: tracked.length,
-      withMaster: selection.withMaster.length,
-      diamondOne: selection.diamondOne.length,
+      withMaster: selection.withMaster,
+      target,
       cap,
       notSeenKept: missing.size,
       played: result.played.length,
@@ -859,20 +1370,19 @@ export class PlatformWorker {
   }
 
   /**
-   * Reads the four Diamond divisions, side by side: the entries `keep` holds for, and how many
-   * each division has. Throws as soon as one page fails.
+   * Reads the four Diamond divisions, side by side: hands every entry to `collect`, returns how
+   * many each division has. Throws as soon as one page fails.
    */
   private async sweepDiamond(
-    keep: (e: DiamondEntry) => boolean,
+    collect: (e: DiamondEntry) => void,
     signal?: AbortSignal,
-  ): Promise<{ entries: DiamondEntry[]; seen: [number, number, number, number] }> {
+  ): Promise<[number, number, number, number]> {
     const stop = new AbortController();
     const linked = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
-    const entries: DiamondEntry[] = [];
     const results = await Promise.allSettled(
       DIVISIONS.map(async (division, i) => {
         try {
-          return await this.sweepDivision(division, i + 1, keep, entries, linked);
+          return await this.sweepDivision(division, i + 1, collect, linked);
         } catch (err) {
           // The sweep is lost: the other divisions stop asking.
           stop.abort();
@@ -887,18 +1397,17 @@ export class PlatformWorker {
       throw failures.find((reason) => !isAbortError(reason)) ?? failures[0];
     }
     const seen = results.map((r) => (r.status === 'fulfilled' ? r.value : 0));
-    return { entries, seen: [seen[0] ?? 0, seen[1] ?? 0, seen[2] ?? 0, seen[3] ?? 0] };
+    return [seen[0] ?? 0, seen[1] ?? 0, seen[2] ?? 0, seen[3] ?? 0];
   }
 
   /**
-   * The pages of one division, from 1 until an empty one: adds the entries `keep` holds for to
-   * `out`, returns how many entries the division has.
+   * The pages of one division, from 1 until an empty one: hands the entries to `collect`,
+   * returns how many entries the division has.
    */
   private async sweepDivision(
     division: Division,
     number: number,
-    keep: (e: DiamondEntry) => boolean,
-    out: DiamondEntry[],
+    collect: (e: DiamondEntry) => void,
     signal: AbortSignal,
   ): Promise<number> {
     let seen = 0;
@@ -908,70 +1417,14 @@ export class PlatformWorker {
       if (entries.length === 0) return seen;
       for (const e of toDiamondEntries(entries, number, this.clock.now())) {
         seen++;
-        if (keep(e)) out.push(e);
+        collect(e);
       }
     }
     throw new Error(`Diamond ${division} did not end after ${MAX_DIAMOND_PAGES} pages`);
   }
 
-  /**
-   * Whether to track `diamondStep` more Diamond I players now ("with remaining budget"): the last
-   * sweep has some left under the cap, every Master player of Riot's list is tracked, the queues
-   * are nearly empty (as for `canTrackMoreMasters`) and no untracked player is due for a listing.
-   */
-  async canTrackMoreDiamonds(): Promise<boolean> {
-    const cap = this.opts.diamondMaxTracked;
-    if (cap <= 0 || this.diamond.reserve.length === 0) return false;
-    if (this.diamond.tracked.length >= cap) return false;
-    if (this.masterTotal === 0 || this.masterTracked < this.masterTotal) return false;
-    if (!(await this.caughtUp())) return false;
-    return !(await this.extraListingDue());
-  }
-
-  /** Whether an untracked player is due for a listing (level 6) and could be listed now. */
-  private async extraListingDue(): Promise<boolean> {
-    if (this.opts.concurrency.extraListing <= 0) return false;
-    const now = this.clock.now();
-    const coolingDown = (p: string) => (this.extraCooldown.get(p) ?? 0) > now;
-    const rows = await extraListingCandidates(this.db, this.platform, {
-      minTier: this.opts.extraMinTier,
-      syncedBefore: new Date(now - this.opts.extraListingIntervalMs),
-      limit: 1 + [...this.extraCooldown.keys()].filter(coolingDown).length,
-    });
-    return rows.some((p) => !coolingDown(p));
-  }
-
-  /**
-   * Tracks the next `diamondStep` Diamond I players by LP of the last sweep (as that sweep saw
-   * them; the next one refreshes them).
-   */
-  async trackMoreDiamonds(): Promise<void> {
-    const room = this.opts.diamondMaxTracked - this.diamond.tracked.length;
-    const next = this.diamond.reserve.slice(0, Math.max(0, Math.min(this.opts.diamondStep, room)));
-    if (next.length === 0) return;
-    const result = await upsertDiamondLadder(
-      this.db,
-      this.platform,
-      next.map(toDiamondLadderEntry),
-      { keep: 'all', now: new Date(this.clock.now()) },
-    );
-    this.diamond.reserve = this.diamond.reserve.slice(next.length);
-    const from = this.diamond.diamondOne ?? 0;
-    this.diamond.diamondOne = from + next.length;
-    this.diamond.extra = (this.diamond.extra ?? 0) + next.length;
-    this.diamond.tracked = [...this.diamond.tracked, ...next].sort(byDivisionThenLp);
-    this.applyLadderOrder();
-    for (const p of result.played) this.played.add(p);
-    this.log.info('tracking more Diamond I players', {
-      from,
-      to: this.diamond.diamondOne,
-      tracked: this.diamond.tracked.length,
-      cap: this.opts.diamondMaxTracked,
-    });
-  }
-
   // -------------------------------------------------------------------------
-  // Level 2: match ids
+  // Listings: match ids
   // -------------------------------------------------------------------------
 
   /**
@@ -1029,8 +1482,18 @@ export class PlatformWorker {
     return true;
   }
 
-  private nextPlayedPlayer(): string | null {
+  /**
+   * The player to list next whose tier may be listed now: an apex player always, a Diamond
+   * player (or one who left the tracked ladder) only when it is tier 3's turn.
+   */
+  private async peekListablePlayer(): Promise<string | null> {
     const next = this.peekPlayedPlayer();
+    if (next === null || this.isApex(next)) return next;
+    return (await this.diamondTurn()) ? next : null;
+  }
+
+  private async nextPlayedPlayer(): Promise<string | null> {
+    const next = await this.peekListablePlayer();
     return next !== null && this.takePlayedPlayer(next) ? next : null;
   }
 
@@ -1038,14 +1501,16 @@ export class PlatformWorker {
    * `nextPlayedPlayer` for the skip rule ('shadow' and 'on'): the player is only handed out once
    * no match queued by a better-placed player is still to be fetched, so that whether their new
    * games are stored is decided on everything the players before them brought. Matches queued by
-   * players below them, by untracked players, and retried or deferred ones (all with a higher
-   * `fetch_rank`) are not waited for: a backlog of those never delays a listing. Neither does a
-   * match that stays unfetched: after `listingGateMaxWaitMs` the player is listed anyway.
+   * players below them and retried or deferred ones (all with a higher `fetch_rank`) are not
+   * waited for: a backlog of those never delays a listing. An apex player never waits for a match
+   * of tier 2 or 3 (their bands come after every apex position); a Diamond player waits for the
+   * matches of the tiers above too. Neither does a match that stays unfetched hold anyone: after
+   * `listingGateMaxWaitMs` the player is listed anyway.
    */
   private async nextPlayedPlayerAfterMatches(signal: AbortSignal): Promise<string | null> {
     let waitingSince: number | null = null;
     for (;;) {
-      const next = this.peekPlayedPlayer();
+      const next = await this.peekListablePlayer();
       if (next === null) return null;
       const now = this.clock.now();
       waitingSince ??= now;
@@ -1054,7 +1519,7 @@ export class PlatformWorker {
         !(await hasPendingMatchBefore(
           this.db,
           this.platform,
-          Math.min(this.rankOf(next), this.ladderRank.size),
+          Math.min(this.rankOf(next), QUEUE_BACK_RANK),
         ));
       if (open) {
         if (this.takePlayedPlayer(next)) return next;
@@ -1108,6 +1573,8 @@ export class PlatformWorker {
    * on, and now.
    */
   async listTrackedPlayer(puuid: string, signal?: AbortSignal): Promise<'listed' | 'skipped'> {
+    // This listing answers the player's request (the loops have taken it out already).
+    this.played.delete(puuid);
     const mode = this.opts.listingSkip;
     if (mode === 'off') {
       await this.listPlayerMatches(puuid, signal);
@@ -1193,8 +1660,9 @@ export class PlatformWorker {
 
   /**
    * Lists a player's ranked match ids since `matches_synced_until`; returns how many were new
-   * (and adds them to `newIds`). Untracked players (`extra`) are listed at the lowest priority
-   * and their matches are queued after every tracked player's.
+   * (and adds them to `newIds`). The request and the matches it queues take the priority of the
+   * player's tier: an apex player's ladder position, then the Masters outside Riot's list
+   * (`extra`), then the Diamond players.
    */
   async listPlayerMatches(
     puuid: string,
@@ -1208,6 +1676,11 @@ export class PlatformWorker {
       since !== null
         ? since.getTime()
         : Math.max(now - this.opts.firstListingMaxMs, this.oldPatchCutoffMs);
+    const priority = extra
+      ? PRIORITY.EXTRA_MATCH_IDS
+      : this.isApex(puuid)
+        ? undefined
+        : PRIORITY.DIAMOND_MATCH_IDS;
     let added = 0;
     for (let start = 0; ; start += 100) {
       const ids = await this.riot.getMatchIds(
@@ -1217,7 +1690,7 @@ export class PlatformWorker {
           startTime: Math.floor(startMs / 1000),
           start,
           count: 100,
-          ...(extra ? { priority: PRIORITY.EXTRA_MATCH_IDS } : {}),
+          ...(priority !== undefined ? { priority } : {}),
         },
         signal,
       );
@@ -1227,15 +1700,14 @@ export class PlatformWorker {
       const own = ids.filter((id) => platformFromMatchId(id) === this.platform);
       const oldAt = own.findIndex((id) => this.isKnownOldPatch(gameIdOf(id)));
       const kept = oldAt >= 0 ? own.slice(0, oldAt) : own;
-      const fetchRank = extra ? this.ladderRank.size : this.rankOf(puuid);
+      const fetchRank = extra ? EXTRA_FETCH_RANK : this.rankOf(puuid);
       const queued = await enqueueNewMatchIds(this.db, this.platform, kept, fetchRank);
       added += queued.length;
       newIds?.push(...queued);
-      // Skip rule: these matches are wanted before the next players are decided, so the match
-      // loops must not first work through what they had already claimed (a probe is left alone).
-      if (queued.length > 0 && !extra && this.opts.listingSkip !== 'off' && !this.probe.active) {
-        this.matchSource.clear();
-      }
+      // The match loops must not first work through what they had already claimed: these may be
+      // of a better tier, and the skip rule wants a tracked player's matches before the next
+      // players are decided (a probe is left alone).
+      if (queued.length > 0 && !this.probe.active) this.matchSource.clear();
       if (oldAt >= 0 || ids.length < 100) break;
     }
     // Clears the player's listing request, unless they played again since `now`.
@@ -1248,7 +1720,7 @@ export class PlatformWorker {
   }
 
   // -------------------------------------------------------------------------
-  // Level 3: match + timeline
+  // Matches: match + timeline
   // -------------------------------------------------------------------------
 
   /**
@@ -1289,7 +1761,11 @@ export class PlatformWorker {
       return 'deferred';
     }
 
-    const match = await this.riot.getMatch(this.platform, matchId, signal);
+    // The match request waits behind the tiers above; once it is granted the match is finished
+    // (the timeline keeps the first tier's priority), so the loop is soon free again.
+    const priority =
+      this.probe.inFlight === matchId ? PRIORITY.MATCH : matchPriority(queued.fetchRank);
+    const match = await this.riot.getMatch(this.platform, matchId, signal, priority);
     if (match === null) throw new DeterministicError('match not found (404)');
     let patch: string;
     try {
@@ -1472,7 +1948,7 @@ export class PlatformWorker {
   }
 
   // -------------------------------------------------------------------------
-  // Level 4: daily refresh of tracked players
+  // Daily refresh of tracked players
   // -------------------------------------------------------------------------
 
   async dailyRefresh(c: DailyRefreshCandidate, signal?: AbortSignal): Promise<void> {
@@ -1492,7 +1968,7 @@ export class PlatformWorker {
   }
 
   // -------------------------------------------------------------------------
-  // Level 5: enrichment of non-ladder players
+  // Enrichment of non-ladder players
   // -------------------------------------------------------------------------
 
   async enrich(e: QueuedEnrichment, signal?: AbortSignal): Promise<void> {
@@ -1532,6 +2008,8 @@ export class PlatformWorker {
   /** Runs every loop until `signal` aborts; resolves once in-flight work has finished. */
   async start(signal: AbortSignal): Promise<void> {
     await this.loadLadderOrder();
+    // Before the first heartbeat: it reads how long the worker was stopped.
+    if (this.opts.diamondMaxTracked > 0) await this.diamondState();
     await this.loadPendingListings();
     await this.openRun();
     const c = this.opts.concurrency;
@@ -1558,7 +2036,7 @@ export class PlatformWorker {
         this.workLoop(
           'match',
           signal,
-          () => this.matchSource.next(),
+          () => this.nextMatch(),
           async (m) => ((await this.processMatch(m, signal)) === 'retry' ? 'retry' : 'ok'),
           (m) => {
             this.matchSource.release(m);
@@ -1616,13 +2094,80 @@ export class PlatformWorker {
               throw err;
             }
           },
-          (p) => this.extraSource.release(p),
+          (p) => {
+            this.extraSource.release(p);
+            // One fewer is due: read again whether anyone is left.
+            this.extraDue = null;
+          },
         ),
       );
     }
     await Promise.all(loops);
     await this.closeRun();
     await this.statusWrites;
+  }
+
+  /**
+   * The next queued match for a match loop. A Diamond player's match is only handed out when it
+   * is tier 3's turn (checked again here: what was claimed a moment ago may have to wait now);
+   * otherwise the queue is read again without them.
+   */
+  private async nextMatch(): Promise<QueuedMatch | null> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const m = await this.matchSource.next();
+      if (m === null || this.probe.inFlight === m.matchId) return m;
+      const rank = m.fetchRank ?? 0;
+      if (rank < DIAMOND_FETCH_RANK || rank >= QUEUE_BACK_RANK) return m;
+      if (await this.diamondTurn()) return m;
+      this.matchSource.release(m);
+      this.matchSource.clear();
+    }
+    return null;
+  }
+
+  /** Tier 2 for the `progress` log: today's pass, how many players are due, their matches. */
+  private async extraPassProgress(): Promise<ExtraPassProgress | null> {
+    if (this.opts.concurrency.extraListing <= 0) return null;
+    const now = this.clock.now();
+    const remaining = await countExtraListingCandidates(this.db, this.platform, {
+      minTier: this.opts.extraMinTier,
+      syncedBefore: this.extraDueBefore(now),
+    });
+    if (remaining === 0) this.extraPass.done = true;
+    return {
+      open: !this.extraPass.done,
+      openedAt: new Date(this.extraPass.openedAt).toISOString(),
+      remaining,
+      matchesWaiting: await countPendingMatchesInBand(
+        this.db,
+        this.platform,
+        { from: EXTRA_FETCH_RANK, below: DIAMOND_FETCH_RANK },
+        1_000_000,
+      ),
+    };
+  }
+
+  private async diamondProgress(): Promise<DiamondProgress | null> {
+    if (this.opts.diamondMaxTracked <= 0) return null;
+    const state = await this.diamondState();
+    const cycles = state.cycles.slice(-this.opts.diamondGrowCycles);
+    return {
+      seen: this.diamond.seen,
+      tracked: this.diamond.tracked.length,
+      trackedWithMaster: this.diamond.withMaster,
+      target: state.target,
+      cap: this.opts.diamondMaxTracked,
+      cycles,
+      keptCycles: cycles.split('K').length - 1,
+      settleCyclesLeft: state.settleCyclesLeft,
+      lastChange: state.changedAt
+        ? {
+            at: state.changedAt.toISOString(),
+            from: state.changedFrom,
+            reason: state.changeReason,
+          }
+        : null,
+    };
   }
 
   async progress(): Promise<PlatformProgress> {
@@ -1635,23 +2180,16 @@ export class PlatformWorker {
       enrichmentQueue: await countEnrichmentQueue(this.db, this.platform),
       latestPatchLive: this.latestLive,
       ...this.counters,
-      diamond:
-        this.opts.diamondMaxTracked > 0
-          ? {
-              seen: this.diamond.seen,
-              tracked: this.diamond.tracked.length,
-              trackedWithMaster: this.diamond.withMaster,
-              trackedDiamondOne: this.diamond.diamondOne,
-              cap: this.opts.diamondMaxTracked,
-            }
-          : null,
+      extraPass: await this.extraPassProgress(),
+      diamond: await this.diamondProgress(),
     };
   }
 
   /**
    * Refreshes the ladder every `ladderIntervalMs` (5 min after a failure), then sweeps the Diamond
-   * divisions when they are tracked, and in between checks every `expansionCheckMs` whether to
-   * track more Master players, then more Diamond I players.
+   * divisions when they are tracked (a cycle; the Diamond target is adjusted at its start), and in
+   * between checks every `expansionCheckMs` whether the platform is keeping up and whether to
+   * track more Master players.
    */
   private async ladderLoop(signal: AbortSignal): Promise<void> {
     let first = true;
@@ -1663,12 +2201,12 @@ export class PlatformWorker {
           if (!first) await this.rotateRun();
           first = false;
           refreshAt = this.clock.now() + this.opts.ladderIntervalMs;
+          await this.startBudgetCycle();
           await this.refreshLadder(signal);
           await this.refreshDiamondsOfCycle(signal);
-        } else if (await this.canTrackMoreMasters()) {
-          await this.trackMoreMasters(signal);
-        } else if (await this.canTrackMoreDiamonds()) {
-          await this.trackMoreDiamonds();
+        } else {
+          await this.noteKeepingUp();
+          if (await this.canTrackMoreMasters()) await this.trackMoreMasters(signal);
         }
       } catch (err) {
         if (isAbortError(err)) break;

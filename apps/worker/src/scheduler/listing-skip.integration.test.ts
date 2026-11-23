@@ -2,6 +2,8 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import {
   createDb,
   type Db,
+  DIAMOND_FETCH_RANK,
+  EXTRA_FETCH_RANK,
   enqueueMatchIds,
   getMatchesSyncedUntil,
   migrate,
@@ -457,8 +459,9 @@ d('PlatformWorker: listing skip rule (Postgres)', () => {
       };
       const first = hanging('EUW1_7000000200', [P]); // brought by P's listing: rank 0
       const mine = hanging('EUW1_7000000201'); // listed by P1: rank 1
-      const untracked = hanging('EUW1_7000000202'); // listed by an untracked player: rank 3
+      const untracked = hanging('EUW1_7000000202'); // listed by a Master outside Riot's list
       const retried = hanging('EUW1_7000000203'); // at the back of the queue
+      const diamond = 'EUW1_7000000204'; // listed by a tracked Diamond player
       riot.matchIds.set(P, [first.id]);
       // P's listing is held while the three other matches are queued and claimed.
       let openIds = () => {};
@@ -473,7 +476,8 @@ d('PlatformWorker: listing skip rule (Postgres)', () => {
       await waitFor(() => riot.calls.includes(`ids:${P}:0`));
       await Bun.sleep(100);
       await enqueueMatchIds(db, 'EUW1', [mine.id], 1);
-      await enqueueMatchIds(db, 'EUW1', [untracked.id], 3);
+      await enqueueMatchIds(db, 'EUW1', [untracked.id], EXTRA_FETCH_RANK);
+      await enqueueMatchIds(db, 'EUW1', [diamond], DIAMOND_FETCH_RANK);
       await enqueueMatchIds(db, 'EUW1', [retried.id]);
       await waitFor(() => fetching(mine) && fetching(untracked) && fetching(retried));
       riot.idsGate = null;
@@ -493,8 +497,11 @@ d('PlatformWorker: listing skip rule (Postgres)', () => {
       mine.release();
       await waitFor(() => ids().length === 3);
       expect(ids()).toEqual([`ids:${P}`, `ids:${P1}`, `ids:${P2}`]);
+      // The apex players never waited for the matches of the tiers below, nor for the back of
+      // the queue; and the Diamond player's match was not even asked for while they had work.
       expect(riot.calls).not.toContain(`timeline:${untracked.id}`);
       expect(riot.calls).not.toContain(`timeline:${retried.id}`);
+      expect(riot.calls).not.toContain(`match:${diamond}`);
 
       untracked.release();
       retried.release();

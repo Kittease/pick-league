@@ -31,7 +31,12 @@ import { abortError, type Clock, isAbortError, systemClock } from '../clock.ts';
 import { type Logger, silentLogger } from '../log.ts';
 import { HostLimiter, type HostLimiterOptions, type HostLimiterStats } from './rate-limiter.ts';
 
-/** Priority levels of docs/architecture.md (higher = served first). */
+/**
+ * Priority levels of docs/architecture.md (higher = served first). Each host serves its own
+ * waiting requests in this order: the platform hosts get the ladders, the Diamond sweep,
+ * masteries and rank lookups; the regional hosts get every match-v5 request, in the order of the
+ * three tiers (apex players, Masters outside Riot's list, Diamond players).
+ */
 export const PRIORITY = {
   LADDER: 5,
   /**
@@ -39,12 +44,17 @@ export const PRIORITY = {
    * masteries and rank lookups of the same host (the sweep decides who played).
    */
   DIAMOND_SWEEP: 4,
+  /** Tier 1: listings of the tracked apex players, then their matches (and every timeline). */
   MATCH_IDS: 4,
   MATCH: 3,
   DAILY_REFRESH: 2,
   ENRICHMENT: 1,
-  /** Listings of untracked players: only what no other request is waiting for. */
-  EXTRA_MATCH_IDS: 0,
+  /** Tier 2: the matches found by listing a Master outside Riot's list, then those blind listings. */
+  EXTRA_MATCH: 0,
+  EXTRA_MATCH_IDS: -1,
+  /** Tier 3: listings of the tracked Diamond players, then their matches. */
+  DIAMOND_MATCH_IDS: -2,
+  DIAMOND_MATCH: -3,
 } as const;
 export type Priority = (typeof PRIORITY)[keyof typeof PRIORITY];
 
@@ -120,7 +130,13 @@ export interface RiotApi {
     query: MatchIdsQuery,
     signal?: AbortSignal,
   ): Promise<MatchIdsDto>;
-  getMatch(platform: Platform, matchId: string, signal?: AbortSignal): Promise<MatchDto | null>;
+  /** `priority`: rate-limit priority of the request (default `PRIORITY.MATCH`). */
+  getMatch(
+    platform: Platform,
+    matchId: string,
+    signal?: AbortSignal,
+    priority?: Priority,
+  ): Promise<MatchDto | null>;
   getTimeline(
     platform: Platform,
     matchId: string,
@@ -220,13 +236,18 @@ export class RiotClient implements RiotApi {
     return ids ?? [];
   }
 
-  getMatch(platform: Platform, matchId: string, signal?: AbortSignal) {
+  getMatch(
+    platform: Platform,
+    matchId: string,
+    signal?: AbortSignal,
+    priority: Priority = PRIORITY.MATCH,
+  ) {
     return this.request<MatchDto>(
       platform,
       matchBaseUrl(platform),
       'match-v5.match',
       `/lol/match/v5/matches/${encodeURIComponent(matchId)}`,
-      PRIORITY.MATCH,
+      priority,
       signal,
     );
   }

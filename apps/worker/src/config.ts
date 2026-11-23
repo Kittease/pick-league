@@ -14,8 +14,16 @@ export interface WorkerConfig {
    * runs) or 'on' (a tracked player whose new games are all stored is not listed).
    */
   listingSkip: ListingSkipMode;
-  /** Diamond players tracked at most, per platform (default 0: Diamond is not read at all). */
+  /**
+   * Ceiling of the Diamond target, per platform (default 0: Diamond is not read at all). How many
+   * Diamond players are tracked under it is sized by the worker.
+   */
   diamondMaxTracked: number;
+  /**
+   * Local hour (0 to 23, default 4) at which the daily listing pass over the Masters outside
+   * Riot's list opens on each platform.
+   */
+  untrackedMasterListingStartHour: number;
 }
 
 export class ConfigError extends Error {
@@ -76,6 +84,16 @@ export function loadConfig(env: Record<string, string | undefined>): WorkerConfi
     );
   }
 
+  const rawStartHour = (env.UNTRACKED_MASTER_LISTING_START_HOUR ?? '').trim() || '4';
+  let untrackedMasterListingStartHour = 4;
+  if (/^\d{1,2}$/.test(rawStartHour) && Number(rawStartHour) <= 23) {
+    untrackedMasterListingStartHour = Number(rawStartHour);
+  } else {
+    problems.push(
+      `UNTRACKED_MASTER_LISTING_START_HOUR must be a whole hour, 0 to 23 (got "${rawStartHour}")`,
+    );
+  }
+
   if (problems.length > 0) {
     throw new ConfigError(`Invalid worker configuration:\n  - ${problems.join('\n  - ')}`);
   }
@@ -87,5 +105,6 @@ export function loadConfig(env: Record<string, string | undefined>): WorkerConfi
     collectPreviousPatch,
     listingSkip,
     diamondMaxTracked,
+    untrackedMasterListingStartHour,
   };
 }

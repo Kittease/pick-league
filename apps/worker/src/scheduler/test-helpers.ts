@@ -143,8 +143,12 @@ export class FakeRiot implements RiotApi {
   /** Matches whose fetch waits for a promise (after recording the call). */
   matchGates = new Map<string, Promise<void>>();
 
-  async getMatch(_p: Platform, id: string) {
+  /** Rate-limit priority each match was asked with (undefined: the default). */
+  matchPriorities = new Map<string, Priority | undefined>();
+
+  async getMatch(_p: Platform, id: string, _signal?: AbortSignal, priority?: Priority) {
     this.calls.push(`match:${id}`);
+    this.matchPriorities.set(id, priority);
     this.maybeThrow(`match:${id}`);
     await this.matchGates.get(id);
     return this.matches.get(id)?.match ?? null;

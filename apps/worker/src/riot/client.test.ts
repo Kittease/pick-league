@@ -251,20 +251,27 @@ describe('RiotClient', () => {
     ]);
   });
 
-  test('match host: tracked listings, then matches, then the listings of untracked players', async () => {
+  test('match host: the three tiers in order, listings before matches for the tracked players', async () => {
     const { client, clock, calls } = setup(() => json([]), { appLimit: '1:1' });
     await client.getMatch('EUW1', 'EUW1_1');
-    client.getMatchIds('EUW1', 'untracked', { priority: PRIORITY.EXTRA_MATCH_IDS });
+    // Asked for in the reverse order.
+    client.getMatch('EUW1', 'EUW1_9', undefined, PRIORITY.DIAMOND_MATCH);
+    client.getMatchIds('EUW1', 'diamond', { priority: PRIORITY.DIAMOND_MATCH_IDS });
+    client.getMatchIds('EUW1', 'outside', { priority: PRIORITY.EXTRA_MATCH_IDS });
+    client.getMatch('EUW1', 'EUW1_5', undefined, PRIORITY.EXTRA_MATCH);
     client.getTimeline('EUW1', 'EUW1_2');
     client.getMatch('EUW1', 'EUW1_3');
-    client.getMatchIds('EUW1', 'tracked', {});
-    for (let i = 0; i < 5; i++) await clock.advance(1000);
+    client.getMatchIds('EUW1', 'apex', {});
+    for (let i = 0; i < 8; i++) await clock.advance(1000);
     expect(calls.map((c) => c.url.split('/matches/')[1]?.split('?')[0])).toEqual([
       'EUW1_1',
-      'by-puuid/tracked/ids',
+      'by-puuid/apex/ids',
       'EUW1_2/timeline',
       'EUW1_3',
-      'by-puuid/untracked/ids',
+      'EUW1_5',
+      'by-puuid/outside/ids',
+      'by-puuid/diamond/ids',
+      'EUW1_9',
     ]);
   });
 

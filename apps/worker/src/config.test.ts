@@ -63,3 +63,25 @@ describe('loadConfig: DIAMOND_MAX_TRACKED', () => {
     expect(load).toThrow(/DIAMOND_MAX_TRACKED/);
   });
 });
+
+describe('loadConfig: UNTRACKED_MASTER_LISTING_START_HOUR', () => {
+  test.each([undefined, '', '4'])('4 in the morning with %p', (value) => {
+    const config = loadConfig({ ...VALID, UNTRACKED_MASTER_LISTING_START_HOUR: value });
+    expect(config.untrackedMasterListingStartHour).toBe(4);
+  });
+
+  test.each([
+    ['0', 0],
+    [' 3 ', 3],
+    ['23', 23],
+  ])('%p is that hour', (value, hour) => {
+    const config = loadConfig({ ...VALID, UNTRACKED_MASTER_LISTING_START_HOUR: value });
+    expect(config.untrackedMasterListingStartHour).toBe(hour);
+  });
+
+  test.each(['24', '-1', '3.5', '4am', '100'])('%p is a configuration error', (value) => {
+    const load = () => loadConfig({ ...VALID, UNTRACKED_MASTER_LISTING_START_HOUR: value });
+    expect(load).toThrow(ConfigError);
+    expect(load).toThrow(/UNTRACKED_MASTER_LISTING_START_HOUR/);
+  });
+});

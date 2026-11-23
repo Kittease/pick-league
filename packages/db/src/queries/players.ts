@@ -399,6 +399,21 @@ export async function extraListingCandidates(
   return rows.map((r) => r.puuid);
 }
 
+/** How many players `extraListingCandidates` would return without a limit. */
+export async function countExtraListingCandidates(
+  q: Queryable,
+  platform: Platform,
+  opts: { minTier: SoloTier; syncedBefore: Date },
+): Promise<number> {
+  const [row] = await q<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM players p
+    WHERE p.platform = ${platform}
+      AND p.solo_tier >= ${opts.minTier}::solo_tier
+      AND (p.matches_synced_until IS NULL OR p.matches_synced_until < ${opts.syncedBefore})
+      AND NOT EXISTS (SELECT 1 FROM ladder_entries le WHERE le.puuid = p.puuid)`;
+  return row?.n ?? 0;
+}
+
 /** Stores the solo-queue rank from league-v4 entries/by-puuid (null = unranked in solo queue). */
 export async function updatePlayerRank(
   q: Queryable,
