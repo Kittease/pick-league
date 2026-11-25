@@ -5,7 +5,8 @@
  * where every stats view is a materialized view recomputed from all the matches, and is refreshed
  * view by view as the API did then; the other is refreshed by `refreshStats`. After every step
  * each stats relation must hold the same rows in both. A migration that changes what a view holds
- * on purpose has to move the reference (`REFERENCE_BEFORE`) with it.
+ * on purpose has to move the reference (`REFERENCE_BEFORE`) with it, or compare what the old view
+ * held (`stats_side_wins`, per platform since 0034, is summed over the platforms).
  * Needs DATABASE_URL_TEST; uses its own two databases.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
@@ -75,6 +76,12 @@ const COMPARED: Record<string, { reference: string; current: string }> = {
     ]),
   ),
   stats_participants: { reference: 'stats_participants', current: 'stats_participant_traits' },
+  // Per platform since 0034: summed over the platforms, the rows of 0016.
+  stats_side_wins: {
+    reference: 'stats_side_wins',
+    current: `(SELECT patch, team_id, sum(games)::int AS games, sum(wins)::int AS wins
+               FROM stats_side_wins GROUP BY patch, team_id)`,
+  },
 };
 
 type Checksums = Record<string, { rows: number; checksum: string }>;
