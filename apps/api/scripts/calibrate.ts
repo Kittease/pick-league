@@ -25,7 +25,7 @@ import { ENGINE_CONFIG } from '../src/engine/config.ts';
 
 const USAGE =
   'usage: calibrate.ts [--patch <id>] [--split time|hash] [--test-share <0–1>] [--test-every <n>]';
-const K_GRID = [300, 600, 900, 1200, 1600, 2500, 4000, 6000, 10000];
+const K_GRID = [300, 600, 900, 1200, 1600, 2400, 3000, 4000, 6000, 7500, 10000];
 
 let patch: string | null = null;
 let split: HoldOut['by'] = DEFAULT_HOLD_OUT.by;
