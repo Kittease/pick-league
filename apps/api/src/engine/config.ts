@@ -22,14 +22,16 @@ export const ENGINE_CONFIG = {
    * The previous patch as a prior. Each statistic's previous-patch sample always contributes but
    * counts for at most `cap` games (weight `min(1, cap / previous games)`), so it fades as games
    * of the current patch arrive, with no threshold. Simulated inside 16.22: the strength estimate
-   * was off by 0.65–0.80 points with a prior of this size, 1.06–1.50 when the previous patch was
-   * dropped at 150 games.
+   * was off by 0.65–0.80 points with a cap of 1,200 games, 1.06–1.50 when the previous patch was
+   * dropped at 150 games. Replaying 16.23 day by day (each day predicted from 16.22 + its earlier
+   * days), a cap of 5,000 did better than 1,200 from the second day on (slightly worse on the
+   * patch day itself); with the refit `picks.shrinkK`, days 5–8 log-loss 6869.6e-4 → 6866.1e-4.
    */
   previousPatchPrior: {
     /** A champion+role's own record. */
-    strength: 1200,
+    strength: 5000,
     /** Each pair statistic: a matchup, a duo, another ally or enemy, a composition trait, a lane phase. */
-    pair: 1200,
+    pair: 5000,
     /**
      * Builds: one factor per champion+role, from its previous-patch games (choices stay comparable).
      * Much larger than the strength cap: a build splits the champion's games between many choices

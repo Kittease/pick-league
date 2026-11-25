@@ -38,9 +38,10 @@ describe('lanePhaseDiff', () => {
   test('a previous row over the cap counts for the cap', () => {
     const big = [
       lane(CUR, 117, 89, 'UTILITY', 300, { gold: -400, xp: -300, cs: -6 }),
-      lane(PREV, 117, 89, 'UTILITY', 5000, { gold: 200, xp: 100, cs: 2 }),
+      lane(PREV, 117, 89, 'UTILITY', 20_000, { gold: 200, xp: 100, cs: 2 }),
     ];
-    // 300 + 1,200 effective matchups: gold (−400 × 300 + 200 × 1,200) / 1,500 = +80.
+    // 300 + 5,000 effective matchups: gold (−400 × 300 + 200 × 5,000) / 5,300 = +166.
+    expect(CAP).toBe(5000);
     const n = 300 + CAP;
     const keep = n / (n + K);
     expect(lanePhaseDiff(big, BOTH, 10)).toEqual({
@@ -49,9 +50,11 @@ describe('lanePhaseDiff', () => {
       xp: Math.round(((-300 * 300 + 100 * CAP) / n) * keep),
       cs: Math.round(((-6 * 300 + 2 * CAP) / n) * keep * 10) / 10,
       duo: true,
-      games: 1500,
+      games: 5300,
     });
-    expect(lanePhaseDiff(big, BOTH, 10)?.gold).toBe(Math.round(80 * (1500 / (1500 + K))));
+    expect(lanePhaseDiff(big, BOTH, 10)?.gold).toBe(
+      Math.round(((-400 * 300 + 200 * 5000) / 5300) * (5300 / (5300 + K))),
+    );
   });
 
   test('null under the minimum sample; 15 min uses its own count', () => {

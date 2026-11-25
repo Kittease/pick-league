@@ -136,7 +136,7 @@ describe('buildTierListChampion', () => {
     expect(ids(d.synergies)).toEqual([111, 222]);
   });
 
-  test('a previous relation over the cap counts for 1,200 games', () => {
+  test('a previous relation over the cap counts for 5,000 games', () => {
     const d = buildTierListChampion(
       'UTILITY',
       111,
@@ -145,15 +145,15 @@ describe('buildTierListChampion', () => {
           role(CUR, 111, 'UTILITY', 2000, 1000),
           role(PREV, 111, 'UTILITY', 10_000, 5000),
         ],
-        vs: [vs(CUR, 111, 40, 'UTILITY', 100, 60), vs(PREV, 111, 40, 'UTILITY', 3000, 1500)],
+        vs: [vs(CUR, 111, 40, 'UTILITY', 100, 60), vs(PREV, 111, 40, 'UTILITY', 12_000, 6000)],
       }),
     );
     const m = d.matchups[0];
     expect(m?.games).toBe(100 + CAP);
-    expect(m?.games).toBe(1300);
-    // +10 points on 100 current games, 0 on 1,200 previous ones.
-    expect(m?.delta).toBeCloseTo(((100 * 0.1) / 1300) * (1300 / (1300 + K.matchup)), 4);
-    expect(m?.winRate).toBeCloseTo((100 * 0.6 + 1200 * 0.5) / 1300, 4);
+    expect(m?.games).toBe(5100);
+    // +10 points on 100 current games, 0 on 5,000 previous ones.
+    expect(m?.delta).toBeCloseTo(((100 * 0.1) / 5100) * (5100 / (5100 + K.matchup)), 4);
+    expect(m?.winRate).toBeCloseTo((100 * 0.6 + 5000 * 0.5) / 5100, 4);
   });
 
   test('a champion buffed on the new patch does not see all its matchups drop', () => {
@@ -282,27 +282,27 @@ function gameLength(
 }
 
 describe('buildTierListChampion shown games', () => {
-  // Nautilus: 100 games on 15.22 and 5,000 on 15.21 (counting for 1,200: listed), or 20,000 and
-  // 1,300 (5.7 % of the effective games: not listed). Lulu is the rest of the role.
+  // Nautilus: 100 games on 15.22 and 20,000 on 15.21 (counting for 5,000: listed), or 60,000
+  // and 6,500 (7.7 % of the effective games: not listed). Lulu is the rest of the role.
   const listed = [
     role(CUR, 111, 'UTILITY', 100, 55),
-    role(PREV, 111, 'UTILITY', 5000, 2750),
+    role(PREV, 111, 'UTILITY', 20_000, 11_000),
     role(CUR, 117, 'UTILITY', 2000, 1000),
-    role(PREV, 117, 'UTILITY', 5000, 2500),
+    role(PREV, 117, 'UTILITY', 20_000, 10_000),
   ];
   const unlisted = [
-    role(CUR, 111, 'UTILITY', 20_000, 10_400),
-    role(PREV, 111, 'UTILITY', 1300, 650),
-    role(CUR, 117, 'UTILITY', 20_000, 9_600),
-    role(PREV, 117, 'UTILITY', 1300, 650),
+    role(CUR, 111, 'UTILITY', 60_000, 31_200),
+    role(PREV, 111, 'UTILITY', 6500, 3250),
+    role(CUR, 117, 'UTILITY', 60_000, 28_800),
+    role(PREV, 117, 'UTILITY', 6500, 3250),
   ];
 
   test('the real games of the patches listed, the win rate still blended', () => {
     const one = buildTierListChampion('UTILITY', 111, data({ roleStats: listed }));
-    expect(one).toMatchObject({ patchesUsed: [CUR, PREV], games: 5100, winRate: 0.55 });
+    expect(one).toMatchObject({ patchesUsed: [CUR, PREV], games: 20_100, winRate: 0.55 });
     const two = buildTierListChampion('UTILITY', 111, data({ roleStats: unlisted }));
-    expect(two).toMatchObject({ patchesUsed: [CUR], games: 20_000 });
-    // (10,400 + 1,200 / 1,300 × 650) / 21,200: the previous patch still weighs in.
-    expect(two.winRate).toBeCloseTo(0.5189, 4);
+    expect(two).toMatchObject({ patchesUsed: [CUR], games: 60_000 });
+    // (31,200 + 5,000 / 6,500 × 3,250) / 65,000: the previous patch still weighs in.
+    expect(two.winRate).toBeCloseTo(0.5185, 4);
   });
 });

@@ -190,9 +190,9 @@ describe('recommendPicks', () => {
     // 2,000 current games: 900 / 2,900 = 31 %, listed but no reason.
     expect(naut(2000, 900)).toMatchObject({ patchesUsed: [CUR, PREV], games: 2900 });
     expect(fallback(naut(2000, 900))).toBe(false);
-    // 20,000 current games: 1,300 previous count for 1,200, 5.7 %: not listed, so its games
+    // 60,000 current games: 6,500 previous count for 5,000, 7.7 %: not listed, so its games
     // are not shown either.
-    expect(naut(20_000, 1300)).toMatchObject({ patchesUsed: [CUR], games: 20_000 });
+    expect(naut(60_000, 6500)).toMatchObject({ patchesUsed: [CUR], games: 60_000 });
   });
 
   test('continuity: the score does not jump when current games cross 150', () => {
@@ -224,30 +224,31 @@ describe('recommendPicks', () => {
     expect(scoreAt(152)).toBeCloseTo(0.02384, 4);
   });
 
-  test('previous patch only: its strength on up to 1,200 games, and says so', () => {
+  test('previous patch only: its strength on up to 5,000 games, and says so', () => {
     const result = recommendPicks(
       req({ role: 'UTILITY' }),
       data({
         roleStats: [
-          role(PREV, 111, 'UTILITY', 5000, 2750), // 55 %, nothing on 15.22 yet
+          role(PREV, 111, 'UTILITY', 20_000, 11_000), // 55 %, nothing on 15.22 yet
           role(CUR, 117, 'UTILITY', 2000, 1000),
-          role(PREV, 117, 'UTILITY', 5000, 2250),
+          role(PREV, 117, 'UTILITY', 20_000, 9_000),
         ],
       }),
     );
     const naut = result.candidates.find((c) => c.championId === 111);
     // Against the previous patch's role average (50 %): +5 points, the old summed record's
-    // delta, now on min(5,000, 1,200) games.
-    const prevDelta = 0.55 - (2750 + 2250) / 10_000;
-    expect(naut?.score).toBeCloseTo(shrink(prevDelta, Math.min(5000, 1200), K.base), 5);
-    expect(naut?.score).toBeCloseTo((0.05 * 1200) / 1450, 5);
-    // Shown: the real games of the patches listed, not the 1,200 they count for.
-    expect(naut).toMatchObject({ games: 5000, patchesUsed: [CUR, PREV] });
+    // delta, now on min(20,000, 5,000) games.
+    const prevDelta = 0.55 - (11_000 + 9_000) / 40_000;
+    expect(ENGINE_CONFIG.previousPatchPrior.strength).toBe(5000);
+    expect(naut?.score).toBeCloseTo(shrink(prevDelta, Math.min(20_000, 5000), K.base), 5);
+    expect(naut?.score).toBeCloseTo((0.05 * 5000) / (5000 + K.base), 5);
+    // Shown: the real games of the patches listed, not the 5,000 they count for.
+    expect(naut).toMatchObject({ games: 20_000, patchesUsed: [CUR, PREV] });
     expect(naut?.winRate).toBeCloseTo(0.55, 4);
     expect(naut?.reasons[0]).toMatchObject({
       kind: 'patch_fallback',
       label: '15.21 data: no games of Nautilus support on 15.22 yet',
-      games: 5000,
+      games: 20_000,
       delta: 0,
     });
   });
@@ -533,19 +534,19 @@ describe('mastery', () => {
 });
 
 describe('recommendPicks shown games', () => {
-  // Nautilus: 100 games on 15.22 and 5,000 on 15.21 (counting for 1,200: listed), or 20,000 and
-  // 1,300 (5.7 % of the effective games: not listed). Lulu is the rest of the role.
+  // Nautilus: 100 games on 15.22 and 20,000 on 15.21 (counting for 5,000: listed), or 60,000
+  // and 6,500 (7.7 % of the effective games: not listed). Lulu is the rest of the role.
   const listed = [
     role(CUR, 111, 'UTILITY', 100, 55),
-    role(PREV, 111, 'UTILITY', 5000, 2750),
+    role(PREV, 111, 'UTILITY', 20_000, 11_000),
     role(CUR, 117, 'UTILITY', 2000, 1000),
-    role(PREV, 117, 'UTILITY', 5000, 2500),
+    role(PREV, 117, 'UTILITY', 20_000, 10_000),
   ];
   const unlisted = [
-    role(CUR, 111, 'UTILITY', 20_000, 10_400),
-    role(PREV, 111, 'UTILITY', 1300, 650),
-    role(CUR, 117, 'UTILITY', 20_000, 9_600),
-    role(PREV, 117, 'UTILITY', 1300, 650),
+    role(CUR, 111, 'UTILITY', 60_000, 31_200),
+    role(PREV, 111, 'UTILITY', 6500, 3250),
+    role(CUR, 117, 'UTILITY', 60_000, 28_800),
+    role(PREV, 117, 'UTILITY', 6500, 3250),
   ];
   const naut = (roleStats: PicksData['roleStats']) =>
     recommendPicks(req({ role: 'UTILITY' }), data({ roleStats })).candidates.find(
@@ -554,25 +555,25 @@ describe('recommendPicks shown games', () => {
 
   test('the real games of the patches listed; score and confidence on the effective games', () => {
     const one = naut(listed);
-    expect(one).toMatchObject({ patchesUsed: [CUR, PREV], games: 5100 });
-    expect(one?.score).toBeCloseTo(0.02243, 5);
-    expect(one?.confidence).toBe(0.867);
-    expect(one?.reasons[0]).toMatchObject({ kind: 'patch_fallback', games: 5100 });
+    expect(one).toMatchObject({ patchesUsed: [CUR, PREV], games: 20_100 });
+    expect(one?.score).toBeCloseTo(0.02425, 5);
+    expect(one?.confidence).toBe(0.962);
+    expect(one?.reasons[0]).toMatchObject({ kind: 'patch_fallback', games: 20_100 });
     expect(one?.reasons[1]).toMatchObject({
       kind: 'base',
-      label: '55.0% win rate as support (5,100 games)',
-      delta: 0.0224,
-      games: 5100,
+      label: '55.0% win rate as support (20,100 games)',
+      delta: 0.0243,
+      games: 20_100,
     });
     const two = naut(unlisted);
-    expect(two).toMatchObject({ patchesUsed: [CUR], games: 20_000 });
-    expect(two?.score).toBeCloseTo(0.01865, 5);
-    expect(two?.confidence).toBe(0.991);
+    expect(two).toMatchObject({ patchesUsed: [CUR], games: 60_000 });
+    expect(two?.score).toBeCloseTo(0.01839, 5);
+    expect(two?.confidence).toBe(0.997);
     expect(two?.reasons[0]).toMatchObject({
       kind: 'base',
-      label: '51.9% win rate as support (20,000 games)',
-      delta: 0.0186,
-      games: 20_000,
+      label: '51.8% win rate as support (60,000 games)',
+      delta: 0.0184,
+      games: 60_000,
     });
   });
 });

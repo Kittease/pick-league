@@ -97,45 +97,46 @@ describe('buildTierList', () => {
       'UTILITY',
       data({
         roleStats: [
-          role(CUR, 111, 'UTILITY', 20_000, 10_400),
-          role(PREV, 111, 'UTILITY', 1300, 650),
-          role(CUR, 117, 'UTILITY', 20_000, 9_600),
-          role(PREV, 117, 'UTILITY', 1300, 650),
+          role(CUR, 111, 'UTILITY', 60_000, 31_200),
+          role(PREV, 111, 'UTILITY', 6500, 3250),
+          role(CUR, 117, 'UTILITY', 60_000, 28_800),
+          role(PREV, 117, 'UTILITY', 6500, 3250),
         ],
       }),
     );
     const naut = t.entries.find((e) => e.championId === 111);
-    // 1,300 previous games count for 1,200: share 1,200 / 21,200 = 5.7 %, so only the current
+    // 6,500 previous games count for 5,000: share 5,000 / 65,000 = 7.7 %, so only the current
     // patch's games are shown.
-    expect(naut?.games).toBe(20_000);
+    expect(CAP).toBe(5000);
+    expect(naut?.games).toBe(60_000);
     expect(naut?.patchesUsed).toEqual([CUR]);
-    const w = CAP / 1300;
-    expect(naut?.winRate).toBeCloseTo((10_400 + w * 650) / 21_200, 4);
+    const w = CAP / 6500;
+    expect(naut?.winRate).toBeCloseTo((31_200 + w * 3250) / 65_000, 4);
     // Role at 50 % on both patches: +2 points on 15.22, 0 on 15.21.
-    expect(naut?.score).toBeCloseTo(shrink((20_000 * 0.02) / 21_200, 21_200, K_BASE), 5);
+    expect(naut?.score).toBeCloseTo(shrink((60_000 * 0.02) / 65_000, 65_000, K_BASE), 5);
   });
 
-  test('previous patch only: the old summed record, capped at 1,200 games', () => {
+  test('previous patch only: the old summed record, capped at 5,000 games', () => {
     const t = buildTierList(
       'UTILITY',
       data({
         roleStats: [
-          role(PREV, 111, 'UTILITY', 5000, 2750), // 55 %, nothing on 15.22 yet
-          role(PREV, 117, 'UTILITY', 5000, 2250),
+          role(PREV, 111, 'UTILITY', 20_000, 11_000), // 55 %, nothing on 15.22 yet
+          role(PREV, 117, 'UTILITY', 20_000, 9_000),
           role(CUR, 117, 'UTILITY', 1000, 500),
           role(CUR, 412, 'UTILITY', 1000, 500),
         ],
       }),
     );
     const naut = t.entries.find((e) => e.championId === 111);
-    // Shown: its real 5,000 games; they count for 1,200.
-    expect(naut?.games).toBe(5000);
+    // Shown: its real 20,000 games; they count for 5,000.
+    expect(naut?.games).toBe(20_000);
     expect(naut?.patchesUsed).toEqual([CUR, PREV]);
     expect(naut?.winRate).toBeCloseTo(0.55, 4);
-    // Against the previous patch's role average (50 %), on 1,200 games.
+    // Against the previous patch's role average (50 %), on 5,000 games.
     const prevDelta = 0.55 - 0.5;
-    expect(naut?.score).toBeCloseTo(shrink(prevDelta, 1200, K_BASE), 5);
-    expect(naut?.score).toBeCloseTo((0.05 * 1200) / 1450, 5);
+    expect(naut?.score).toBeCloseTo(shrink(prevDelta, 5000, K_BASE), 5);
+    expect(naut?.score).toBeCloseTo((0.05 * 5000) / (5000 + K_BASE), 5);
   });
 
   test('without a previous patch its rows are ignored', () => {
@@ -177,19 +178,19 @@ describe('assignTiers', () => {
 });
 
 describe('buildTierList shown games', () => {
-  // Nautilus: 100 games on 15.22 and 5,000 on 15.21 (counting for 1,200: listed), or 20,000 and
-  // 1,300 (5.7 % of the effective games: not listed). Lulu is the rest of the role.
+  // Nautilus: 100 games on 15.22 and 20,000 on 15.21 (counting for 5,000: listed), or 60,000
+  // and 6,500 (7.7 % of the effective games: not listed). Lulu is the rest of the role.
   const listed = [
     role(CUR, 111, 'UTILITY', 100, 55),
-    role(PREV, 111, 'UTILITY', 5000, 2750),
+    role(PREV, 111, 'UTILITY', 20_000, 11_000),
     role(CUR, 117, 'UTILITY', 2000, 1000),
-    role(PREV, 117, 'UTILITY', 5000, 2500),
+    role(PREV, 117, 'UTILITY', 20_000, 10_000),
   ];
   const unlisted = [
-    role(CUR, 111, 'UTILITY', 20_000, 10_400),
-    role(PREV, 111, 'UTILITY', 1300, 650),
-    role(CUR, 117, 'UTILITY', 20_000, 9_600),
-    role(PREV, 117, 'UTILITY', 1300, 650),
+    role(CUR, 111, 'UTILITY', 60_000, 31_200),
+    role(PREV, 111, 'UTILITY', 6500, 3250),
+    role(CUR, 117, 'UTILITY', 60_000, 28_800),
+    role(PREV, 117, 'UTILITY', 6500, 3250),
   ];
   const naut = (roleStats: TierListData['roleStats']) =>
     buildTierList('UTILITY', data({ roleStats, bans: [], patchMatches: [] })).entries.find(
@@ -197,13 +198,13 @@ describe('buildTierList shown games', () => {
     );
 
   test('the real games of the patches listed; score and confidence on the effective games', () => {
-    // Both patches listed: 100 + 5,000 shown, scored on 100 + 1,200.
-    expect(naut(listed)).toMatchObject({ patchesUsed: [CUR, PREV], games: 5100 });
-    expect(naut(listed)?.score).toBeCloseTo(0.02243, 5);
-    expect(naut(listed)?.confidence).toBe(0.867);
-    // Previous patch not listed: the current patch's 20,000 shown, scored on 21,200.
-    expect(naut(unlisted)).toMatchObject({ patchesUsed: [CUR], games: 20_000 });
-    expect(naut(unlisted)?.score).toBeCloseTo(0.01865, 5);
-    expect(naut(unlisted)?.confidence).toBe(0.991);
+    // Both patches listed: 100 + 20,000 shown, scored on 100 + 5,000.
+    expect(naut(listed)).toMatchObject({ patchesUsed: [CUR, PREV], games: 20_100 });
+    expect(naut(listed)?.score).toBeCloseTo(0.02425, 5);
+    expect(naut(listed)?.confidence).toBe(0.962);
+    // Previous patch not listed: the current patch's 60,000 shown, scored on 65,000.
+    expect(naut(unlisted)).toMatchObject({ patchesUsed: [CUR], games: 60_000 });
+    expect(naut(unlisted)?.score).toBeCloseTo(0.01839, 5);
+    expect(naut(unlisted)?.confidence).toBe(0.997);
   });
 });

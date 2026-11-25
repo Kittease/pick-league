@@ -289,12 +289,12 @@ describe('evaluateDraft with a previous patch', () => {
   const CAP = ENGINE_CONFIG.previousPatchPrior.strength;
 
   test("a champion's strength blends its patches, the previous one capped", () => {
-    // Thresh: 100 games at 55 % on 15.22, 5,000 at 55 % on 15.21 (counting for 1,200).
+    // Thresh: 100 games at 55 % on 15.22, 20,000 at 55 % on 15.21 (counting for 5,000).
     const roleStats = [
       role(CUR, 412, 'UTILITY', 100, 55),
-      role(PREV, 412, 'UTILITY', 5000, 2750),
+      role(PREV, 412, 'UTILITY', 20_000, 11_000),
       role(CUR, 111, 'UTILITY', 2000, 1000),
-      role(PREV, 111, 'UTILITY', 5000, 2500),
+      role(PREV, 111, 'UTILITY', 20_000, 10_000),
       role(CUR, 89, 'UTILITY', 2000, 900),
     ];
     const r = evaluateDraft(
@@ -302,14 +302,15 @@ describe('evaluateDraft with a previous patch', () => {
       data({ previousPatch: PREV, roleStats }),
     );
     const roleCur = (55 + 1000 + 900) / 4100;
-    const rolePrev = (2750 + 2500) / 10_000;
+    const rolePrev = (11_000 + 10_000) / 40_000;
+    expect(CAP).toBeLessThan(20_000);
     const games = 100 + CAP;
     const delta = (100 * (0.55 - roleCur) + CAP * (0.55 - rolePrev)) / games;
     const strength = (delta * games) / (games + K.base);
     expect(r.winProbability).toBeCloseTo(0.5 + D.baseWeight * strength, 4);
-    // Shown: the real games of both patches, not the 1,300 they count for.
-    expect(r.reasons[0]).toMatchObject({ kind: 'base', games: 5100, championIds: [412] });
-    expect(r.reasons[0]?.label).toMatch(/Thresh: 55\.0% win rate as support \(5,100 games\)$/);
+    // Shown: the real games of both patches, not the 5,100 they count for.
+    expect(r.reasons[0]).toMatchObject({ kind: 'base', games: 20_100, championIds: [412] });
+    expect(r.reasons[0]?.label).toMatch(/Thresh: 55\.0% win rate as support \(20,100 games\)$/);
     expect(r.patchesUsed).toEqual([CUR, PREV]);
   });
 
@@ -464,19 +465,19 @@ describe('evaluateDraft with a previous patch', () => {
 
 describe('evaluateDraft shown games', () => {
   const PREV = '15.21';
-  // Nautilus: 100 games on 15.22 and 5,000 on 15.21 (counting for 1,200: listed), or 20,000 and
-  // 1,300 (5.7 % of the effective games: not listed). Lulu is the rest of the role.
+  // Nautilus: 100 games on 15.22 and 20,000 on 15.21 (counting for 5,000: listed), or 60,000
+  // and 6,500 (7.7 % of the effective games: not listed). Lulu is the rest of the role.
   const listed = [
     role(CUR, 111, 'UTILITY', 100, 55),
-    role(PREV, 111, 'UTILITY', 5000, 2750),
+    role(PREV, 111, 'UTILITY', 20_000, 11_000),
     role(CUR, 117, 'UTILITY', 2000, 1000),
-    role(PREV, 117, 'UTILITY', 5000, 2500),
+    role(PREV, 117, 'UTILITY', 20_000, 10_000),
   ];
   const unlisted = [
-    role(CUR, 111, 'UTILITY', 20_000, 10_400),
-    role(PREV, 111, 'UTILITY', 1300, 650),
-    role(CUR, 117, 'UTILITY', 20_000, 9_600),
-    role(PREV, 117, 'UTILITY', 1300, 650),
+    role(CUR, 111, 'UTILITY', 60_000, 31_200),
+    role(PREV, 111, 'UTILITY', 6500, 3250),
+    role(CUR, 117, 'UTILITY', 60_000, 28_800),
+    role(PREV, 117, 'UTILITY', 6500, 3250),
   ];
   const evaluate = (roleStats: DraftData['roleStats']) =>
     evaluateDraft(
@@ -486,24 +487,24 @@ describe('evaluateDraft shown games', () => {
 
   test('base reasons show the real games of the patches listed, the strength unchanged', () => {
     const one = evaluate(listed);
-    expect(one.winProbability).toBeCloseTo(0.5224, 4);
+    expect(one.winProbability).toBeCloseTo(0.5243, 4);
     expect(one.reasons).toEqual([
       {
         kind: 'base',
-        label: '+2.2% Nautilus: 55.0% win rate as support (5,100 games)',
-        delta: 0.0224,
-        games: 5100,
+        label: '+2.4% Nautilus: 55.0% win rate as support (20,100 games)',
+        delta: 0.0243,
+        games: 20_100,
         championIds: [111],
       },
     ]);
     const two = evaluate(unlisted);
-    expect(two.winProbability).toBeCloseTo(0.5186, 4);
+    expect(two.winProbability).toBeCloseTo(0.5184, 4);
     expect(two.reasons).toEqual([
       {
         kind: 'base',
-        label: '+1.9% Nautilus: 51.9% win rate as support (20,000 games)',
-        delta: 0.0186,
-        games: 20_000,
+        label: '+1.8% Nautilus: 51.8% win rate as support (60,000 games)',
+        delta: 0.0184,
+        games: 60_000,
         championIds: [111],
       },
     ]);
