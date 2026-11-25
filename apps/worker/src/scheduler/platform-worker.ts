@@ -36,8 +36,9 @@
  * divisions are read page by page (the rank of every player already known is stored on the way),
  * and the best candidates are tracked, as many as the target says: first those seen in a Master+
  * game lately, by division then LP, then the other Diamond I players by LP; nobody else. The
- * target grows a step after a full day of keeping up and shrinks a step when the platform has not
- * kept up for several cycles (`startBudgetCycle`).
+ * target is sized on the day: it grows a step when the tiers ran out of work in a few hours of
+ * the last day, and shrinks a step when they did not catch up once in a full day
+ * (`startBudgetCycle`).
  */
 import {
   claimEnrichment,
@@ -268,25 +269,28 @@ export interface SchedulerOptions {
   diamondStep: number;
   diamondWithMasterWindowMs: number;
   /**
-   * The target grows a step when the last `diamondGrowCycles` ladder cycles (default 24: a full
-   * day, evening peak included) hold no missed cycle and at least `diamondGrowMinKeptCycles`
-   * (default 6) kept ones. A cycle is kept when the three tiers had nothing waiting at least
-   * once during it; missed otherwise, unless patch data was missing: that one is neither.
+   * The target is sized on the day, not on the hour: the backlog the evening peak leaves is
+   * caught up in the quiet hours, which would otherwise go unused. It grows a step when the last
+   * `diamondGrowCycles` ladder cycles (default 24: a full day) hold at least
+   * `diamondGrowMinKeptCycles` (default 3) kept ones, whatever was missed in between: hours in
+   * which the three tiers ran out of work, so budget was left. A cycle is kept when the three
+   * tiers had nothing waiting at least once during it; missed otherwise, unless patch data was
+   * missing: that one is neither.
    */
   diamondGrowCycles: number;
   diamondGrowMinKeptCycles: number;
   /**
    * Fast start: while the target has never shrunk, or not for `diamondFastGrowAfterShrinkMs`
    * (default 7 days), it grows a step after only `diamondFastGrowCycles` kept cycles in a row
-   * (default 2; 0 switches the fast start off). A platform with spare budget then finds what it carries in a day or two instead
-   * of weeks; the first shrink says the peak hours are reached, and the slow rule above takes
-   * over.
+   * (default 2; 0 switches the fast start off). A platform with spare budget then finds what it
+   * carries in a day or two instead of weeks; the first shrink says a day's budget is reached,
+   * and the slow rule above takes over.
    */
   diamondFastGrowCycles: number;
   diamondFastGrowAfterShrinkMs: number;
   /**
-   * The target shrinks a step once `diamondShrinkMissedCycles` cycles (default 6) were missed
-   * since the last kept one.
+   * The target shrinks a step once `diamondShrinkMissedCycles` cycles (default 24: a full day)
+   * were missed since the last kept one: the backlog was not caught up even in the quiet hours.
    */
   diamondShrinkMissedCycles: number;
   /**
@@ -341,10 +345,10 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
   diamondStep: 1_000,
   diamondWithMasterWindowMs: 7 * DAY,
   diamondGrowCycles: 24,
-  diamondGrowMinKeptCycles: 6,
+  diamondGrowMinKeptCycles: 3,
   diamondFastGrowCycles: 2,
   diamondFastGrowAfterShrinkMs: 7 * DAY,
-  diamondShrinkMissedCycles: 6,
+  diamondShrinkMissedCycles: 24,
   diamondSettleCycles: 24,
   diamondKeepMs: DAY,
 };
@@ -603,8 +607,9 @@ export interface DiamondTargetRules {
 /**
  * The next Diamond target after the cycles of `history` (those since it last changed), or null
  * to keep it. Shrinks a step once `shrinkMissedCycles` cycles were missed since the last kept
- * one; grows a step, up to the ceiling, when the last `growCycles` cycles hold no missed one and
- * at least `growMinKeptCycles` kept ones, and `tracked` players fill the target.
+ * one; grows a step, up to the ceiling, when the last `growCycles` cycles hold at least
+ * `growMinKeptCycles` kept ones (missed ones in between do not matter: the backlog of the peak
+ * hours is caught up in the quiet ones), and `tracked` players fill the target.
  */
 export function nextDiamondTarget(
   history: string,
@@ -624,14 +629,13 @@ export function nextDiamondTarget(
   const kept = window.split('K').length - 1;
   if (
     window.length >= rules.growCycles &&
-    !window.includes('M') &&
     kept >= rules.growMinKeptCycles &&
     target < rules.cap &&
     current.tracked >= target
   ) {
     return {
       target: Math.min(rules.cap, target + rules.step),
-      reason: `kept up for ${window.length} cycles (${kept} kept, none missed)`,
+      reason: `caught up in ${kept} of the last ${window.length} cycles`,
     };
   }
   return null;

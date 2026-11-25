@@ -528,13 +528,13 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
       cap: 5,
       cycles: '',
       settleCyclesLeft: 24,
-      lastChange: { from: 2, reason: 'kept up for 24 cycles (24 kept, none missed)' },
+      lastChange: { from: 2, reason: 'caught up in 24 of the last 24 cycles' },
     });
     expect(await trackedDiamonds()).toEqual(['d-90', 'd-80', 'd-70', 'd-60']);
     expect((await w.progress()).playedToList).toBe(2);
 
     // Their first listings wait for ten cycles: a burst, not "not keeping up". Nothing is
-    // recorded, the target does not shrink (six missed cycles would do it).
+    // recorded, the target does not shrink.
     await hours(w, 10);
     expect(await diamond(w)).toMatchObject({ target: 4, cycles: '', settleCyclesLeft: 14 });
     // Absorbed: the day at the new size starts with the first cycle kept up with.
@@ -553,27 +553,41 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
     expect(await trackedDiamonds()).toEqual(['d-90', 'd-80', 'd-70', 'd-60', 'd-50']);
   }, 60_000);
 
-  test('one missed cycle in the day (the evening peak) holds the growth', async () => {
+  test('sized on the day: a backlog left by the peak hours and caught up later neither shrinks nor holds the target', async () => {
     const w = await tracking(2, ['d-90', 'd-80'], { diamondStep: 2 });
-    await hours(w, 13);
-    // A Diamond player played and is not listed within the hour.
+    await hours(w, 2);
+    // A Diamond player played and is not listed for twenty hours (the evening peak).
     riot.diamond.I = riot.diamond.I.map((e) => (e.puuid === dia('d-80') ? { ...e, wins: 31 } : e));
     await hour(w);
-    await hour(w);
+    await hours(w, 20);
+    expect(await diamond(w)).toMatchObject({ target: 2, cycles: `KK${'M'.repeat(20)}` });
+    // Caught up in the quiet hours, which then run out of work: budget was left.
     await w.listTrackedPlayer(dia('d-80'));
-    await hours(w, 10);
-    const progress = await diamond(w);
-    expect(progress).toMatchObject({ target: 2, keptCycles: 23 });
-    expect(progress.cycles).toBe(`${'K'.repeat(13)}M${'K'.repeat(10)}`);
-    // The missed cycle leaves the last 24 cycles: a full day kept up with.
-    await hours(w, 13);
-    expect(await diamond(w)).toMatchObject({ target: 2, cycles: `M${'K'.repeat(23)}` });
     await hour(w);
-    expect(await diamond(w)).toMatchObject({ target: 4 });
+    expect(await diamond(w)).toMatchObject({ target: 2, cycles: `KK${'M'.repeat(20)}K` });
+    await hour(w);
+    expect(await diamond(w)).toMatchObject({
+      target: 4,
+      cycles: '',
+      lastChange: { from: 2, reason: 'caught up in 4 of the last 24 cycles' },
+    });
+  }, 60_000);
+
+  test('a full day without catching up once shrinks the target', async () => {
+    const w = await tracking(4, ['d-90', 'd-80'], { diamondStep: 2 });
+    // 'd-70' and 'd-60' are never listed.
+    await hours(w, 24);
+    expect(await diamond(w)).toMatchObject({ target: 4, cycles: 'M'.repeat(23) });
+    await hour(w);
+    expect(await diamond(w)).toMatchObject({
+      target: 2,
+      tracked: 2,
+      lastChange: { from: 4, reason: 'not kept up: 24 cycles missed since the last kept one' },
+    });
   }, 60_000);
 
   test('the target shrinks a step after six missed cycles: the last candidates leave the ladder, their matches stay', async () => {
-    const w = await tracking(4, ['d-90', 'd-80'], { diamondStep: 2 });
+    const w = await tracking(4, ['d-90', 'd-80'], { diamondStep: 2, diamondShrinkMissedCycles: 6 });
     expect(await trackedDiamonds()).toEqual(['d-90', 'd-80', 'd-70', 'd-60']);
     // A stored match of a player who will be dropped.
     const id = 'EUW1_7000000401';
@@ -749,7 +763,7 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
     ['a short restart: the missed cycles go on counting', false],
     ['a stop of three hours: its backlog is not held against the target', true],
   ])('%s', async (_name, longStop) => {
-    const before = await tracking(2, ['d-90']);
+    const before = await tracking(2, ['d-90'], { diamondShrinkMissedCycles: 6 });
     expect(await trackedDiamonds()).toEqual(['d-90', 'd-80']);
     // Five cycles missed so far ('d-80' is waiting for a listing); the worker stops.
     await setTarget(2, 'KMMMMM');
@@ -759,7 +773,7 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
     else t += MIN;
 
     // The target is read when the worker starts.
-    const w = makeWorker({ diamondMaxTracked: 5, diamondStep: 1 });
+    const w = makeWorker({ diamondMaxTracked: 5, diamondStep: 1, diamondShrinkMissedCycles: 6 });
     expect(await diamond(w)).toMatchObject({ settleCyclesLeft: longStop ? 24 : 0 });
     await hours(w, 2);
     if (longStop) {

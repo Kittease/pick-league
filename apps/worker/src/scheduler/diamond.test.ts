@@ -133,13 +133,16 @@ describe('nextDiamondTarget', () => {
   };
   const at = (target: number, tracked = target) => ({ target, tracked });
 
-  test('grows a step after a full day of cycles without a missed one', () => {
+  test('grows a step after a full day with enough kept cycles, missed ones in between or not', () => {
     expect(nextDiamondTarget('K'.repeat(23), at(1000), rules)).toBeNull();
     expect(nextDiamondTarget('K'.repeat(24), at(1000), rules)?.target).toBe(1500);
-    // One missed cycle in the day (the evening peak): not yet.
-    expect(nextDiamondTarget(`${'K'.repeat(12)}M${'K'.repeat(11)}`, at(1000), rules)).toBeNull();
-    // It leaves the window a day later.
-    expect(nextDiamondTarget(`M${'K'.repeat(24)}`, at(1000), rules)?.target).toBe(1500);
+    // The evening peak is missed, the quiet hours catch it up and run out of work: budget left.
+    const day = `${'M'.repeat(18)}${'K'.repeat(6)}`;
+    expect(nextDiamondTarget(day, at(1000), rules)?.target).toBe(1500);
+    // Caught up in only five hours of the day: it stays.
+    expect(nextDiamondTarget(`${'M'.repeat(19)}${'K'.repeat(5)}`, at(1000), rules)).toBeNull();
+    // Only the last day counts.
+    expect(nextDiamondTarget(`${'K'.repeat(6)}${'M'.repeat(5)}`, at(1000), rules)).toBeNull();
   });
 
   test('the cycles spent waiting for patch data are neither kept nor missed', () => {
