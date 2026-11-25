@@ -619,6 +619,11 @@ export const draftRequestSchema = z.object({
   enemies: z.array(buildParticipantSchema).max(5).default([]),
   /** Side of `allies` when known: the sides do not win as often. */
   side: z.enum(DRAFT_SIDES).nullable().default(null),
+  /**
+   * Platform the match is played on, when known: the side edge is then that platform's (the
+   * sides do not win as often on every server). Absent or null: every platform.
+   */
+  platform: z.enum(PLATFORMS).nullable().optional(),
   patch: patchIdSchema.optional(),
 });
 

@@ -481,6 +481,22 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     expect(((await again.json()) as DraftEvaluationResponse).winProbability).toBe(
       body.winProbability,
     );
+    // With the platform, the side edge is that platform's (not served from the cache above).
+    const sideLabel = async (platform: string) => {
+      const r = await post('/recommendations/draft', {
+        allies: [],
+        enemies: [],
+        side: 'red',
+        platform,
+      });
+      return r.status === 200
+        ? ((await r.json()) as DraftEvaluationResponse).reasons.find((x) => x.kind === 'side')
+            ?.label
+        : r.status;
+    };
+    expect(body.reasons.find((r) => r.kind === 'side')?.label).toMatch(/ of matches on /);
+    expect(await sideLabel('EUW1')).toMatch(/ of EUW1 matches on /);
+    expect(await sideLabel('OC1')).toBe(400);
   });
 
   test('picks: availableChampionIds and limit', async () => {

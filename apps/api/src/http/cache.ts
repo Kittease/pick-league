@@ -151,6 +151,7 @@ export function draftCacheKey(req: {
   allies: readonly { championId: number; role: string | null }[];
   enemies: readonly { championId: number; role: string | null }[];
   side: string | null;
+  platform?: string | null;
   patch?: string;
 }): string {
   const team = (xs: readonly { championId: number; role: string | null }[]) =>
@@ -160,6 +161,7 @@ export function draftCacheKey(req: {
     team(req.allies),
     team(req.enemies),
     req.side,
+    req.platform ?? null,
     req.patch ?? null,
   ]);
 }

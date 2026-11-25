@@ -34,6 +34,17 @@ export const ENGINE_CONFIG = {
      * scaled down at all.
      */
     build: 20_000,
+    /**
+     * The side edge of the draft evaluation, on every platform. It moves between patches (blue
+     * won 48.6 % of the 16.22 matches, 49.5 % of the 16.23 ones, ±0.17): summing both patches
+     * unweighted left every blue probability of 16.23 ~0.85 points too low.
+     */
+    side: 20_000,
+    /**
+     * The side edge on the request's platform (EUW1 46.9 → 48.3 %, KR 49.0 → 49.8, NA1 48.8 →
+     * 49.2, VN2 50.1 → 50.8 from 16.22 to 16.23): ~1.5e-4 better log-loss than every platform's.
+     */
+    sidePlatform: 5_000,
     /** `patchesUsed` lists the previous patch from this share of the effective games. */
     listedShare: 0.1,
     /** A `patch_fallback` reason says so from this share. */

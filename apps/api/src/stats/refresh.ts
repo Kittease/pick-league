@@ -84,7 +84,7 @@ export const STATS_REFRESH_ORDER: readonly StatsRefreshStep[] = [
   // Tier list ban rates (0003_stats_bans.sql).
   { view: 'stats_patch_matches', concurrent: true },
   { view: 'stats_champion_bans', concurrent: true },
-  // Results per side, for the draft evaluation (0016_side_wins.sql).
+  // Results per side and platform, for the draft evaluation (0034_side_wins_per_platform.sql).
   { view: 'stats_side_wins', concurrent: true },
   // Win rate by the player's mastery of the champion, for the picks' mastery term
   // (0018_mastery_curve.sql). Since champion_masteries only keeps the champions of stored games

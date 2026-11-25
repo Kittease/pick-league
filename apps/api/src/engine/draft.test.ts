@@ -4,6 +4,7 @@ import { ENGINE_CONFIG } from './config.ts';
 import { type DraftData, draftPairs, draftRoles, evaluateDraft } from './draft.ts';
 import { names, role, traitsOf, vs, withAlly } from './fixtures.ts';
 import { championGameLength, indexGameLength } from './game-length.ts';
+import { formatDelta, formatGames, formatRate } from './math.ts';
 import type { GameLengthRow } from './types.ts';
 
 const CUR = '15.22';
@@ -27,8 +28,8 @@ function data(overrides: Partial<DraftData> = {}): DraftData {
     with: [],
     championTraits: [],
     sides: [
-      { patch: CUR, side: 'blue', games: 1000, wins: 480 },
-      { patch: CUR, side: 'red', games: 1000, wins: 520 },
+      { patch: CUR, platform: 'EUW1', side: 'blue', games: 1000, wins: 480 },
+      { patch: CUR, platform: 'EUW1', side: 'red', games: 1000, wins: 520 },
     ],
     names,
     ...overrides,
@@ -379,23 +380,85 @@ describe('evaluateDraft with a previous patch', () => {
     ).toEqual([CUR, PREV]);
   });
 
-  test('the side edge sums both patches and names them', () => {
+  test('the side edge is the current patch with the previous one as a capped prior', () => {
+    const cap = ENGINE_CONFIG.previousPatchPrior.side;
+    const previousGames = 4 * cap;
     const r = evaluateDraft(
       req({ side: 'blue' }),
       data({
         previousPatch: PREV,
         sides: [
-          { patch: CUR, side: 'blue', games: 1000, wins: 480 },
-          { patch: PREV, side: 'blue', games: 3000, wins: 1500 },
-          { patch: CUR, side: 'red', games: 1000, wins: 520 },
+          { patch: CUR, platform: 'KR', side: 'blue', games: 1000, wins: 440 },
+          { patch: CUR, platform: 'EUW1', side: 'blue', games: 1000, wins: 460 },
+          {
+            patch: PREV,
+            platform: 'KR',
+            side: 'blue',
+            games: previousGames,
+            wins: previousGames / 2,
+          },
+          { patch: CUR, platform: 'KR', side: 'red', games: 1000, wins: 560 },
         ],
       }),
     );
-    expect(r.winProbability).toBeCloseTo(1980 / 4000, 6);
-    expect(r.reasons[0]).toMatchObject({ kind: 'side', games: 4000 });
+    // Current: 900 / 2,000 (45 %); the previous patch's 50 % counts for `cap` games.
+    const expected = (900 + 0.5 * cap) / (2000 + cap);
+    expect(r.winProbability).toBeCloseTo(expected, 4);
+    expect(r.reasons[0]).toMatchObject({ kind: 'side', games: 2000 + previousGames });
     expect(r.reasons[0]?.label).toBe(
-      '−0.5% Blue side: wins 49.5% of matches on 15.22 + 15.21 (4,000 games)',
+      `${formatDelta(expected - 0.5)} Blue side: wins ${formatRate(expected)} of matches on 15.22 + 15.21 (${formatGames(2000 + previousGames)})`,
     );
+    // Summed unweighted, the previous patch would hide the current one's edge.
+    expect(expected).toBeLessThan((900 + previousGames / 2) / (2000 + previousGames) - 0.002);
+  });
+
+  test('a previous patch that weighs little is not named', () => {
+    const r = evaluateDraft(
+      req({ side: 'red' }),
+      data({
+        previousPatch: PREV,
+        sides: [
+          { patch: CUR, platform: 'NA1', side: 'red', games: 500_000, wins: 255_000 },
+          { patch: PREV, platform: 'NA1', side: 'red', games: 500_000, wins: 250_000 },
+        ],
+      }),
+    );
+    expect(r.reasons[0]).toMatchObject({ kind: 'side', games: 500_000 });
+    expect(r.reasons[0]?.label).toMatch(/ of matches on 15\.22 \(500,000 games\)$/);
+  });
+
+  test("with a platform, the side edge is that platform's, else every platform's", () => {
+    const cap = ENGINE_CONFIG.previousPatchPrior.sidePlatform;
+    const sides: DraftData['sides'] = [
+      { patch: CUR, platform: 'EUW1', side: 'blue', games: 2000, wins: 940 },
+      { patch: CUR, platform: 'VN2', side: 'blue', games: 2000, wins: 1020 },
+      { patch: PREV, platform: 'EUW1', side: 'blue', games: 2 * cap, wins: 0.46 * 2 * cap },
+    ];
+    const at = (platform: string | null) =>
+      evaluateDraft(req({ side: 'blue', platform }), data({ previousPatch: PREV, sides }));
+
+    const euw = at('EUW1');
+    expect(euw.winProbability).toBeCloseTo((940 + 0.46 * cap) / (2000 + cap), 4);
+    expect(euw.reasons[0]?.label).toMatch(/ of EUW1 matches on 15\.22 \+ 15\.21 /);
+
+    // VN2: no previous-patch row, its own current patch only.
+    expect(at('VN2').winProbability).toBeCloseTo(0.51, 4);
+    expect(at('VN2').reasons[0]?.label).toMatch(/ of VN2 matches on 15\.22 \(2,000 games\)$/);
+
+    // Every platform: both platforms' current games, the previous patch capped at `side`.
+    const weight = Math.min(1, ENGINE_CONFIG.previousPatchPrior.side / (2 * cap));
+    const all = (1960 + 0.46 * 2 * cap * weight) / (4000 + 2 * cap * weight);
+    expect(at(null).winProbability).toBeCloseTo(all, 4);
+    expect(at(null).reasons[0]?.label).toMatch(/ of matches on /);
+
+    // A platform without any result falls back to every platform.
+    expect(at('KR').winProbability).toBeCloseTo(all, 4);
+    expect(at('KR').reasons[0]?.label).toMatch(/ of matches on /);
+  });
+
+  test('the platform is optional and must be a known one', () => {
+    expect(draftRequestSchema.parse({ side: 'blue' }).platform).toBeUndefined();
+    expect(draftRequestSchema.safeParse({ side: 'blue', platform: 'OC1' }).success).toBe(false);
   });
 });
 

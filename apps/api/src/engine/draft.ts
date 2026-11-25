@@ -10,13 +10,16 @@
  * once, averaged over both points of view: an ally–enemy pair is (ally vs enemy − enemy vs ally)
  * / 2, a pair of teammates (a with b + b with a) / 2, each delta measured like in the picks
  * engine (against what the role usually gets vs/with that champion). Champions not picked yet
- * count as average. The weights come from a held-out fit (see `ENGINE_CONFIG.draft`).
+ * count as average. The weights come from a held-out fit (see `ENGINE_CONFIG.draft`). The side
+ * edge is the side's win rate on the current patch with the previous one as a capped prior, on
+ * the match's platform when the request names it (`sideEdge`).
  */
 import type {
   DraftEvaluationResponse,
   DraftRequest,
   DraftSide,
   PatchId,
+  Platform,
   Position,
   Reason,
   TeamDamage,
@@ -50,9 +53,10 @@ import type {
   WithRow,
 } from './types.ts';
 
-/** stats_side_wins: results of a side (team 100 = blue, 200 = red) on a patch. */
+/** stats_side_wins: results of a side (team 100 = blue, 200 = red) on a patch and platform. */
 export interface SideRow extends GamesWins {
   patch: PatchId;
+  platform: Platform;
   side: DraftSide;
 }
 
@@ -257,26 +261,18 @@ export function evaluateDraft(
     reasons.push({ ...reason, delta: round(delta) });
   };
 
-  // Side.
-  // Side: both kept patches summed, unweighted (the side edge does not depend on champion balance,
-  // and a new patch's first matches alone would give a wild, unshrunk edge).
+  // Side: the current patch's results with the previous patch as a prior (the side edge moves
+  // between patches: blue won 48.6 % on 16.22, 49.5 % on 16.23), on the request's platform when it
+  // has results there, else on every platform.
   if (req.side) {
-    const rows = data.sides.filter(
-      (s) =>
-        s.side === req.side &&
-        s.games > 0 &&
-        (s.patch === data.currentPatch || s.patch === data.previousPatch),
-    );
-    const onSide = sumStats(rows);
-    const patches = [data.currentPatch, data.previousPatch].filter(
-      (p): p is PatchId => p !== null && rows.some((r) => r.patch === p),
-    );
-    if (onSide.games > 0) {
-      const shift = winRate(onSide) - 0.5;
+    const side = sideEdge(data, req.side, req.platform ?? null);
+    if (side) {
+      const shift = side.winRate - 0.5;
+      const where = side.platform ? `${side.platform} matches` : 'matches';
       add(shift, {
         kind: 'side',
-        label: `${formatDelta(shift)} ${req.side === 'blue' ? 'Blue' : 'Red'} side: wins ${formatRate(winRate(onSide))} of matches on ${patchesLabel(patches)} (${formatGames(onSide.games)})`,
-        games: onSide.games,
+        label: `${formatDelta(shift)} ${req.side === 'blue' ? 'Blue' : 'Red'} side: wins ${formatRate(side.winRate)} of ${where} on ${patchesLabel(side.patches)} (${formatGames(side.games)})`,
+        games: side.games,
       });
     }
   }
@@ -361,6 +357,61 @@ export function evaluateDraft(
     },
     ...(data.gameLength ? { gameLength: draftGameLength(data.gameLength, roles) } : {}),
   };
+}
+
+export interface SideEdge {
+  /** Blended win rate of the side. */
+  winRate: number;
+  /** Real games on the patches listed (the previous patch's full count while it is listed). */
+  games: number;
+  /** Patches listed, newest first: the previous one while it weighs ≥ `listedShare`. */
+  patches: PatchId[];
+  /** The platform measured; null = every platform. */
+  platform: Platform | null;
+}
+
+/**
+ * Win rate of `side`: the current patch's, with the previous patch as a prior worth at most
+ * `previousPatchPrior.side` games (`sidePlatform` on one platform). On `platform` when it has
+ * results there on either patch, else on every platform. Null without any result.
+ */
+export function sideEdge(
+  data: Pick<DraftData, 'sides' | 'currentPatch' | 'previousPatch'>,
+  side: DraftSide,
+  platform: Platform | null,
+): SideEdge | null {
+  const measure = (only: Platform | null): SideEdge | null => {
+    const sample = (patch: PatchId | null): PatchSample | undefined => {
+      if (patch === null) return undefined;
+      const stats = sumStats(
+        data.sides.filter(
+          (s) => s.side === side && s.patch === patch && (only === null || s.platform === only),
+        ),
+      );
+      return stats.games > 0 ? { value: winRate(stats), games: stats.games } : undefined;
+    };
+    const blend = blendPatches(
+      sample(data.currentPatch),
+      sample(data.previousPatch),
+      only === null ? PRIOR.side : PRIOR.sidePlatform,
+    );
+    if (blend.games === 0) return null;
+    const withCurrent = blend.currentGames > 0;
+    const withPrevious =
+      data.previousPatch !== null &&
+      blend.previousGames > 0 &&
+      blend.previousShare >= PRIOR.listedShare;
+    return {
+      winRate: blend.value,
+      games: (withCurrent ? blend.currentGames : 0) + (withPrevious ? blend.previousGames : 0),
+      patches: [
+        ...(withCurrent ? [data.currentPatch] : []),
+        ...(withPrevious ? [data.previousPatch as PatchId] : []),
+      ],
+      platform: only,
+    };
+  };
+  return (platform ? measure(platform) : null) ?? measure(null);
 }
 
 /** Each team's early / late profile, champions in their given or guessed roles. */

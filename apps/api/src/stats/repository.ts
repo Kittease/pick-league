@@ -937,15 +937,19 @@ function uniquePairs<T extends { position: Position; otherId: number; otherPosit
   return [...seen.values()];
 }
 
-/** Results per side (stats_side_wins, 0016): team 100 = blue, 200 = red. */
+/** Results per side and platform (stats_side_wins, 0034): team 100 = blue, 200 = red. */
 export async function loadSideWins(q: Queryable, patches: PatchId[]): Promise<SideRow[]> {
-  const rows = await q<{ patch: string; team_id: number; games: number; wins: number }[]>`
-    SELECT patch, team_id, games, wins FROM stats_side_wins WHERE patch IN ${q(patches)}`;
+  const rows = await q<
+    { patch: string; platform: Platform; team_id: number; games: number; wins: number }[]
+  >`
+    SELECT patch, platform, team_id, games, wins FROM stats_side_wins
+    WHERE patch IN ${q(patches)}`;
   return rows.flatMap((r) =>
     r.team_id === 100 || r.team_id === 200
       ? [
           {
             patch: r.patch,
+            platform: r.platform,
             side: r.team_id === 100 ? ('blue' as const) : ('red' as const),
             games: r.games,
             wins: r.wins,
