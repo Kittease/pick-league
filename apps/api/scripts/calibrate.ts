@@ -1,41 +1,58 @@
 /**
  * Calibration check: re-measures the picks engine's shrinkage constants on the stored matches.
- * Statistics come from 4 matches in 5 (by a hash of the match id), the engine's components are
- * rebuilt on the other matches and a logistic fit gives each one's weight for a grid of `k`: the
- * `k` to keep is the one whose weight is ~1. Read-only (one read-only transaction, SELECTs only).
+ * Statistics come from the matches of the patch started before a cutoff, the engine's components
+ * are rebuilt on the later ones (the last 20 % by start time, `--test-share`) and a logistic fit
+ * gives each one's weight for a grid of `k`: the `k` to keep is the one whose weight is ~1.
+ * Predicting later matches is what the engine does in production; `--split hash` holds out
+ * 1 match in `--test-every` (5) by a hash of its id instead, which flatters the engine (matches of
+ * the same day and players on both sides: slope 0.98 on 16.22, against 0.92 replaying 16.23 day
+ * by day). Read-only (one read-only transaction, SELECTs only).
  *   docker compose build api && docker compose run --rm api bun run apps/api/scripts/calibrate.ts --patch 16.22
- *   DATABASE_URL=postgres://… bun run apps/api/scripts/calibrate.ts [--patch 16.22] [--test-every 5]
+ *   DATABASE_URL=postgres://… bun run apps/api/scripts/calibrate.ts [--patch 16.22]
+ *     [--split time|hash] [--test-share 0.2] [--test-every 5]
  * Without `--patch`, uses the patch with the most matches.
  */
 import { createDb } from '@pick-league/db';
 import type { Position } from '@pick-league/shared';
-import { type CalibrationKind, calibrate, MatchCollector } from '../src/engine/calibration.ts';
+import {
+  type CalibrationKind,
+  calibrate,
+  DEFAULT_HOLD_OUT,
+  type HoldOut,
+  MatchCollector,
+} from '../src/engine/calibration.ts';
 import { ENGINE_CONFIG } from '../src/engine/config.ts';
 
-const USAGE = 'usage: calibrate.ts [--patch <id>] [--test-every <n>]';
+const USAGE =
+  'usage: calibrate.ts [--patch <id>] [--split time|hash] [--test-share <0–1>] [--test-every <n>]';
 const K_GRID = [300, 600, 900, 1200, 1600, 2500, 4000, 6000, 10000];
 
 let patch: string | null = null;
+let split: HoldOut['by'] = DEFAULT_HOLD_OUT.by;
+let testShare = DEFAULT_HOLD_OUT.by === 'time' ? DEFAULT_HOLD_OUT.testShare : 0.2;
 let testEvery = 5;
 const args = process.argv.slice(2);
 for (let i = 0; i < args.length; i++) {
   const value = args[i + 1];
+  const n = Number(value);
   if (args[i] === '--patch' && value) {
     patch = value;
     i++;
-  } else if (
-    args[i] === '--test-every' &&
-    value &&
-    Number.isInteger(Number(value)) &&
-    Number(value) >= 2
-  ) {
-    testEvery = Number(value);
+  } else if (args[i] === '--split' && (value === 'time' || value === 'hash')) {
+    split = value;
+    i++;
+  } else if (args[i] === '--test-share' && value && n > 0 && n < 1) {
+    testShare = n;
+    i++;
+  } else if (args[i] === '--test-every' && value && Number.isInteger(n) && n >= 2) {
+    testEvery = n;
     i++;
   } else {
     console.error(USAGE);
     process.exit(1);
   }
 }
+const holdOut: HoldOut = split === 'time' ? { by: 'time', testShare } : { by: 'hash', testEvery };
 
 const url = process.env.DATABASE_URL;
 if (!url) {
@@ -71,13 +88,16 @@ try {
         champion_id: number;
         position: Position | null;
         win: boolean;
+        started_at: Date;
       }[]
     >`
-      SELECT match_id, team_id, champion_id, position, win
-      FROM stats_tierlist_participants WHERE patch = ${chosen}`;
+      SELECT p.match_id, p.team_id, p.champion_id, p.position, p.win, m.started_at
+      FROM stats_tierlist_participants p
+      JOIN matches m ON m.id = p.match_id
+      WHERE p.patch = ${chosen}`;
     for await (const batch of rows.cursor(20000)) {
       for (const r of batch) {
-        collector.add(r.match_id, r.team_id, r.champion_id, r.position, r.win);
+        collector.add(r.match_id, r.team_id, r.champion_id, r.position, r.win, r.started_at);
       }
     }
     return chosen;
@@ -87,9 +107,14 @@ try {
     process.exit(1);
   }
 
-  const matches = collector.finish(testEvery);
+  const matches = collector.finish(holdOut);
   console.log(`patch ${used}`);
   console.log(`matches kept ${matches.count}, dropped ${matches.dropped} (roles incomplete)`);
+  console.log(
+    holdOut.by === 'time'
+      ? `held out: the last ${Math.round(100 * holdOut.testShare)} % by start time, from ${new Date(matches.cutoff ?? 0).toISOString()}`
+      : `held out: 1 match in ${holdOut.testEvery} by a hash of its id (random split: flatters the engine)`,
+  );
   if (matches.count === 0) process.exit(1);
   const result = calibrate(matches, {
     kGrid: K_GRID,

@@ -1,6 +1,12 @@
 /**
  * Held-out calibration of the picks engine's shrinkage constants.
  *
+ * The held-out matches are by default the last ones of the patch by start time: statistics from
+ * the earlier matches predict the later ones, as in production, where the stats only hold matches
+ * played before the draft. A random split by a hash of the match id is still available, but it
+ * flatters the engine: matches of the same day and of the same players land on both sides (the
+ * summed score's slope was 0.98 with it on 16.22, 0.92 replaying 16.23 day by day).
+ *
  * Statistics are built from the training matches the same way the engine builds them (a
  * champion's strength in its role, pair deltas measured against what the role usually does
  * vs/with that champion), then each component is summed per held-out match, blue minus red, and a
@@ -51,7 +57,17 @@ interface PendingMatch {
   slots: Int16Array;
   blueWin: number;
   broken: boolean;
+  /** Start time (ms since the epoch); NaN while no row gave one. */
+  startedAt: number;
 }
+
+/**
+ * How the held-out matches are chosen: the last `testShare` of the matches by start time (the
+ * default), or 1 match in `testEvery` by a hash of its id.
+ */
+export type HoldOut = { by: 'time'; testShare: number } | { by: 'hash'; testEvery: number };
+
+export const DEFAULT_HOLD_OUT: HoldOut = { by: 'time', testShare: 0.2 };
 
 /** FNV-1a: a stable hash of a match id, so the held-out set does not depend on row order. */
 function hashId(id: string): number {
@@ -73,12 +89,14 @@ export class MatchCollector {
     championId: number,
     position: Position | null,
     win: boolean,
+    startedAt?: Date | number | null,
   ): void {
     let match = this.pending.get(matchId);
     if (!match) {
-      match = { slots: new Int16Array(10).fill(-1), blueWin: 0, broken: false };
+      match = { slots: new Int16Array(10).fill(-1), blueWin: 0, broken: false, startedAt: NaN };
       this.pending.set(matchId, match);
     }
+    if (startedAt !== undefined && startedAt !== null) match.startedAt = Number(startedAt);
     const side = teamId === 100 ? 0 : teamId === 200 ? 1 : -1;
     const role = position === null ? -1 : POSITIONS.indexOf(position);
     if (side < 0 || role < 0) {
@@ -93,17 +111,34 @@ export class MatchCollector {
   }
 
   /**
-   * `testEvery`: 1 match in N goes to the held-out set, by a hash of its id (not its order).
-   * Matches come out sorted by id, so the result does not depend on the order rows were added.
+   * The complete matches, the held-out ones flagged (see `HoldOut`). By time, a match without a
+   * start time is dropped and the held-out set starts at `cutoff`, the start time of the first
+   * match of the last `testShare` (every match started at that time or later is held out). By
+   * hash, the set does not depend on row order. Matches come out sorted by id, so the result does
+   * not depend on the order rows were added.
    */
-  finish(testEvery = 5): CalibrationMatches & { ids: string[]; dropped: number } {
+  finish(
+    holdOut: HoldOut = DEFAULT_HOLD_OUT,
+  ): CalibrationMatches & { ids: string[]; dropped: number; cutoff: number | null } {
     const ids: string[] = [];
     let dropped = 0;
     for (const [id, match] of this.pending) {
-      if (match.broken || match.slots.includes(-1)) dropped++;
+      const untimed = holdOut.by === 'time' && Number.isNaN(match.startedAt);
+      if (match.broken || match.slots.includes(-1) || untimed) dropped++;
       else ids.push(id);
     }
     ids.sort();
+    let cutoff: number | null = null;
+    if (holdOut.by === 'time' && ids.length > 0) {
+      const starts = ids.map((id) => (this.pending.get(id) as PendingMatch).startedAt);
+      starts.sort((a, b) => a - b);
+      const first = Math.floor(starts.length * (1 - holdOut.testShare));
+      cutoff = starts[Math.min(starts.length - 1, Math.max(0, first))] as number;
+    }
+    const heldOut = (id: string, match: PendingMatch) =>
+      holdOut.by === 'time'
+        ? match.startedAt >= (cutoff as number)
+        : hashId(id) % holdOut.testEvery === 0;
     const count = ids.length;
     const champions = new Int16Array(count * 10);
     const blueWin = new Uint8Array(count);
@@ -112,9 +147,9 @@ export class MatchCollector {
       const match = this.pending.get(id) as PendingMatch;
       champions.set(match.slots, m * 10);
       blueWin[m] = match.blueWin;
-      test[m] = hashId(id) % testEvery === 0 ? 1 : 0;
+      test[m] = heldOut(id, match) ? 1 : 0;
     });
-    return { count, champions, blueWin, test, ids, dropped };
+    return { count, champions, blueWin, test, ids, dropped, cutoff };
   }
 }
 

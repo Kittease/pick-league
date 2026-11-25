@@ -49,7 +49,7 @@ describe('MatchCollector', () => {
       ),
     ];
     for (const r of rows) collector.add(r.id, r.team, r.champion, r.position, r.win);
-    const out = collector.finish(5);
+    const out = collector.finish({ by: 'hash', testEvery: 5 });
     expect(out.count).toBe(1);
     expect(out.dropped).toBe(3);
     expect(out.ids).toEqual(['EUW1_OK']);
@@ -57,11 +57,11 @@ describe('MatchCollector', () => {
     expect(out.blueWin[0]).toBe(1);
   });
 
-  test('holds out about 1 match in N, by id, whatever the row order', () => {
+  test('by hash, holds out about 1 match in N, by id, whatever the row order', () => {
     const rows = Array.from({ length: 2000 }, (_, m) => fullMatch(`NA1_${m}`, m % 2 === 0)).flat();
     const inOrder = new MatchCollector();
     for (const r of rows) inOrder.add(r.id, r.team, r.champion, r.position, r.win);
-    const a = inOrder.finish(5);
+    const a = inOrder.finish({ by: 'hash', testEvery: 5 });
 
     const rng = createRng(3);
     const shuffled = [...rows];
@@ -74,7 +74,7 @@ describe('MatchCollector', () => {
     }
     const outOfOrder = new MatchCollector();
     for (const r of shuffled) outOfOrder.add(r.id, r.team, r.champion, r.position, r.win);
-    const b = outOfOrder.finish(5);
+    const b = outOfOrder.finish({ by: 'hash', testEvery: 5 });
 
     expect(a.count).toBe(2000);
     const held = a.test.reduce((s, v) => s + v, 0);
@@ -83,6 +83,33 @@ describe('MatchCollector', () => {
     const flags = (m: typeof a) => new Map(m.ids.map((id, i) => [id, m.test[i]]));
     expect(flags(b)).toEqual(flags(a));
     expect(Array.from(b.blueWin)).toEqual(Array.from(a.blueWin));
+  });
+
+  test('by default, holds out the last matches by start time', () => {
+    const start = Date.UTC(2026, 10, 18);
+    const collector = new MatchCollector();
+    // Ids in another order than the start times, one match without a start time.
+    for (let m = 0; m < 100; m++) {
+      const at = new Date(start + (99 - m) * 60_000);
+      for (const r of fullMatch(`KR_${m}`, m % 2 === 0)) {
+        collector.add(r.id, r.team, r.champion, r.position, r.win, at);
+      }
+    }
+    for (const r of fullMatch('KR_UNTIMED', true)) {
+      collector.add(r.id, r.team, r.champion, r.position, r.win);
+    }
+    const out = collector.finish();
+    expect(out.count).toBe(100);
+    expect(out.dropped).toBe(1);
+    expect(out.cutoff).toBe(start + 80 * 60_000);
+    // The 20 latest (ids 0–19) are held out, every earlier one is training.
+    const held = out.ids.filter((_, i) => out.test[i] === 1).sort();
+    expect(held).toEqual(Array.from({ length: 20 }, (_, m) => `KR_${m}`).sort());
+
+    const third = collector.finish({ by: 'time', testShare: 1 / 3 });
+    expect(third.test.reduce((s, v) => s + v, 0)).toBe(34);
+    // The hash split keeps every complete match, timed or not.
+    expect(collector.finish({ by: 'hash', testEvery: 5 }).count).toBe(101);
   });
 });
 
