@@ -45,18 +45,18 @@ export const PRIORITY = {
    * else of the same host (the sweep decides who played for 205 players a request).
    */
   DIAMOND_SWEEP: 4,
-  /**
-   * The solo queue entry of one Master outside Riot's list, on the platform host: it decides
-   * who played for one player a request, so after the lists and the sweep, and before the
-   * masteries and rank lookups below (the worker caps how many it asks for an hour).
-   */
-  OUTSIDE_MASTER_CHECK: 3,
   /** Tier 1: listings of the tracked apex players, then their matches (and every timeline). */
   MATCH_IDS: 4,
   MATCH: 3,
   /** The mastery refresh of tracked players, then enrichment (platform host). */
   DAILY_REFRESH: 2,
   ENRICHMENT: 1,
+  /**
+   * The solo queue entry of one Master outside Riot's list, on the platform host: last, after
+   * the masteries and ranks above, which the stats of the stored games read; a late check only
+   * delays that player's games (the worker also caps how many it asks for an hour).
+   */
+  OUTSIDE_MASTER_CHECK: 0,
   /** Tier 2: the matches found by listing a Master outside Riot's list, then those listings. */
   EXTRA_MATCH: 0,
   EXTRA_MATCH_IDS: -1,

@@ -280,7 +280,7 @@ describe('RiotClient', () => {
     ]);
   });
 
-  test('platform host: ladder lists, Diamond pages, checks of outside Masters, mastery refresh, enrichment', async () => {
+  test('platform host: ladder lists, Diamond pages, mastery refresh, enrichment, checks of outside Masters', async () => {
     const { client, clock, calls } = setup(() => json([]), { appLimit: '1:1' });
     await client.getMasteries('EUW1', 'first', PRIORITY.ENRICHMENT);
     // Asked for in the reverse order.
@@ -289,7 +289,7 @@ describe('RiotClient', () => {
     client.getLeagueEntries('EUW1', 'outside-check', PRIORITY.OUTSIDE_MASTER_CHECK);
     client.getDiamondEntries('EUW1', 'I', 1);
     client.getLeague('EUW1', 'MASTER');
-    // A list and a page asked for later still go before the check that was already waiting.
+    // A list and a page asked for later still go before what was already waiting.
     client.getLeague('EUW1', 'CHALLENGER');
     client.getDiamondEntries('EUW1', 'I', 2);
     for (let i = 0; i < 7; i++) await clock.advance(1000);
@@ -299,9 +299,9 @@ describe('RiotClient', () => {
       'RANKED_SOLO_5x5',
       'I?page=1',
       'I?page=2',
-      'outside-check',
       'refresh',
       'enrich-rank',
+      'outside-check',
     ]);
   });
 

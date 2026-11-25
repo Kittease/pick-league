@@ -3,9 +3,10 @@
  * rate limiters, which serve the highest priority first (docs/architecture.md, "Worker").
  *
  * Platform host, in this order: ladder refresh (hourly, and when Master grows; priority 5), the
- * Diamond sweep (4), the checks of the Masters outside Riot's list (3, at most
- * `outsideCheckMaxPerHour`), the mastery refresh of tracked players (2), enrichment (masteries,
- * and the rank when the stored one is old; 1).
+ * Diamond sweep (4), the mastery refresh of tracked players (2), enrichment (masteries, and the
+ * rank when the stored one is old; 1), then the checks of the Masters outside Riot's list (0, at
+ * most `outsideCheckMaxPerHour`). Masteries and ranks feed the stats of the stored games; a late
+ * check only delays an outside Master's games (their listing starts where the last one stopped).
  *
  * Match cluster (the scarce budget), three strict tiers:
  *
@@ -204,11 +205,12 @@ export interface SchedulerOptions {
    * above, on no tracked ladder) are followed by their own solo queue entry, asked for on the
    * platform host in rotation, least recently checked first, once every Master player of Riot's
    * list is tracked. At most `outsideCheckMaxPerHour` checks an hour (default 1,500, half of what
-   * a platform host allows; 0: none): the checks go before the mastery refresh and enrichment on
-   * that host, so without a ceiling those two would get nothing as long as anyone is left to
-   * check. What a busy hour did not use (the Diamond sweep goes first) is caught up, up to half
-   * an hour's worth. A player is not checked again within `outsideCheckIntervalMs` (default 1 h,
-   * the pace of the ladder lists).
+   * a platform host allows; 0: none). The checks come last on that host, after the mastery
+   * refresh and enrichment (the stats of the stored games read their masteries and ranks): they
+   * get what those leave, which may be nothing while enrichment has a backlog. A late check only
+   * delays a player's games: their listing starts where the last one stopped. What a busy hour
+   * did not use is caught up, up to half an hour's worth. A player is not checked again within
+   * `outsideCheckIntervalMs` (default 1 h, the pace of the ladder lists).
    */
   outsideCheckMaxPerHour: number;
   outsideCheckIntervalMs: number;
@@ -2196,8 +2198,8 @@ export class PlatformWorker {
   }
 
   /**
-   * Asks for the solo queue entry of a Master outside Riot's list (platform host, after the
-   * ladder lists and the Diamond sweep, before masteries and enrichment) and stores what it says
+   * Asks for the solo queue entry of a Master outside Riot's list (platform host, last: after the
+   * ladder lists, the Diamond sweep, the mastery refresh and enrichment) and stores what it says
    * (`recordOutsideMasterCheck`): their rank, and whether their wins + losses moved since the
    * last check, in which case a listing is requested (tier 2). A first check has nothing to
    * compare: it is the starting counter when the player's match ids were listed within the

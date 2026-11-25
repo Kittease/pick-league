@@ -226,7 +226,11 @@ d('PlatformWorker: Masters outside the ladder lists (Postgres)', () => {
   const calls = (prefix: string) => riot.calls.filter((c) => c.startsWith(prefix));
   const listings = () => calls('ids:').map((c) => c.replace(/:0$/, ''));
   const checks = () =>
-    calls('entries:').map((c) => c.replace('entries:fake-outside-master-', '').replace(/:3$/, ''));
+    calls('entries:').map((c) =>
+      c
+        .replace('entries:fake-outside-master-', '')
+        .replace(new RegExp(`:${PRIORITY.OUTSIDE_MASTER_CHECK}$`), ''),
+    );
   const trackedDiamonds = async () =>
     (await ladderOrder(db, 'EUW1'))
       .filter((r) => r.tier === 'DIAMOND')
@@ -477,7 +481,7 @@ d('PlatformWorker: Masters outside the ladder lists (Postgres)', () => {
     expect(listings()).toEqual([`ids:${A}`]);
   });
 
-  test('start(): at most so many checks an hour, so that masteries and enrichment keep a share of the host', async () => {
+  test('start(): at most so many checks an hour', async () => {
     for (const name of ['a', 'b', 'c', 'd', 'e']) await outside(name, 100, NOW - HOUR);
     // Four an hour: two at once (half an hour's worth), then one every 15 minutes.
     const w = makeWorker({ outsideCheckMaxPerHour: 4, concurrency: { ...none, outsideCheck: 2 } });
