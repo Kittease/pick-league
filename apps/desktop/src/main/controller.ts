@@ -10,8 +10,10 @@ import {
   buildRequestSchema,
   type DraftEvaluationResponse,
   draftRequestSchema,
+  isPlatform,
   type PicksRequestInput,
   type PicksResponse,
+  type Platform,
   type Position,
   picksRequestSchema,
   type StaticDataResponse,
@@ -101,6 +103,8 @@ export class Controller {
   private leavingTimer: ReturnType<typeof setTimeout> | null = null;
   private recovering = false;
   private available: number[] | null = null;
+  /** Platform of the logged-in account, when the client says and PickLeague crawls it. */
+  private platform: Platform | null = null;
   private staticData: StaticDataResponse | null = null;
   private staticLoading: Promise<void> | null = null;
   /** Increments for every champion select (session appears). */
@@ -272,11 +276,15 @@ export class Controller {
     return toResult(this.api.build(parsed.data));
   }
 
-  /** Win probability and damage split of a draft (draft planner or champion select). */
+  /**
+   * Win probability and damage split of a draft (draft planner or champion select). The side
+   * edge is the account's platform's when the client told it and the request does not say.
+   */
   async evaluateDraft(request: unknown): Promise<ApiResult<DraftEvaluationResponse>> {
     const parsed = draftRequestSchema.safeParse(request);
     if (!parsed.success) return badDraftRequest('evaluation');
-    return toResult(this.api.draft(parsed.data));
+    const body = parsed.data;
+    return toResult(this.api.draft({ ...body, platform: body.platform ?? this.platform }));
   }
 
   // ---------------------------------------------------------------------------
@@ -297,6 +305,7 @@ export class Controller {
   private onLcuStatus(status: LcuConnectionStatus): void {
     if (status.state === 'searching') {
       this.lcuApi = null;
+      this.platform = null;
       this.patch({ lcu: { state: 'searching', account: null, message: status.message } });
       return;
     }
@@ -309,12 +318,16 @@ export class Controller {
   private async loadAccount(): Promise<void> {
     const api = this.lcuApi;
     if (!api) return;
-    const [summoner, owned, mastery] = await Promise.allSettled([
+    const [summoner, owned, mastery, platform] = await Promise.allSettled([
       api.getCurrentSummoner(),
       api.getOwnedChampions(),
       api.getMastery(),
+      api.getPlatformId(),
     ]);
     if (api !== this.lcuApi) return;
+    if (platform.status === 'fulfilled' && platform.value && isPlatform(platform.value)) {
+      this.platform = platform.value;
+    }
     if (summoner.status === 'fulfilled' && summoner.value) {
       const s = summoner.value;
       const account = s.gameName ? `${s.gameName}#${s.tagLine ?? ''}` : (s.displayName ?? null);

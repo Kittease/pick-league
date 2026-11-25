@@ -49,6 +49,7 @@ function fakeLcu(pages: LcuPerkPage[], ownedPageCount: number) {
     getOwnedChampions: async () => [],
     getMastery: async () => [],
     getCurrentSummoner: async () => null,
+    getPlatformId: async () => null,
     getPerkPages: async () => pages,
     getPerkInventory: async () => ({ ownedPageCount }),
     async createPerkPage(page) {

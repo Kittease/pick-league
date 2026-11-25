@@ -1,8 +1,8 @@
 /**
  * Typed LCU endpoints. Reads: champion select, gameflow, owned champions, mastery, current
- * summoner, rune pages. Writes are limited to the PickLeague rune page and the local player's
- * summoner spells — the helper never picks, bans, locks in, accepts or reveals other players'
- * identities (the puuids of a game in progress never leave the main process).
+ * summoner and its platform, rune pages. Writes are limited to the PickLeague rune page and the
+ * local player's summoner spells — the helper never picks, bans, locks in, accepts or reveals
+ * other players' identities (the puuids of a game in progress never leave the main process).
  */
 
 import type {
@@ -46,6 +46,11 @@ export interface LcuApi {
   getOwnedChampions(): Promise<LcuOwnedChampion[]>;
   getMastery(): Promise<LcuChampionMastery[]>;
   getCurrentSummoner(): Promise<LcuCurrentSummoner | null>;
+  /**
+   * The logged-in account's platform (`EUW1`, `KR`, `NA1`, `VN2`…, as the client spells it), or
+   * null when the client does not say. Not checked against the platforms PickLeague crawls.
+   */
+  getPlatformId(): Promise<string | null>;
   getPerkPages(): Promise<LcuPerkPage[]>;
   getPerkInventory(): Promise<LcuPerkInventory>;
   createPerkPage(page: LcuPerkPageInput): Promise<LcuPerkPage>;
@@ -83,6 +88,21 @@ export function createLcuApi(send: LcuTransport): LcuApi {
       return Array.isArray(wrapped) ? (wrapped as LcuChampionMastery[]) : [];
     },
     getCurrentSummoner: () => orNullOn404(send('GET', '/lol-summoner/v1/current-summoner')),
+    async getPlatformId() {
+      // The chat's own entry carries the platform id; older clients also expose the login
+      // packet's. Either may be missing: the platform is optional for everything it serves.
+      const platformOf = (value: unknown) =>
+        typeof value === 'string' && value.trim() !== '' ? value.trim().toUpperCase() : null;
+      const me = await orNullOn404<{ platformId?: unknown }>(send('GET', '/lol-chat/v1/me')).catch(
+        () => null,
+      );
+      const fromChat = platformOf(me?.platformId);
+      if (fromChat) return fromChat;
+      const packet = await orNullOn404(
+        send('GET', '/lol-platform-config/v1/namespaces/LoginDataPacket/platformId'),
+      ).catch(() => null);
+      return platformOf(packet);
+    },
     async getPerkPages() {
       const pages = await send('GET', '/lol-perks/v1/pages');
       return Array.isArray(pages) ? (pages as LcuPerkPage[]) : [];

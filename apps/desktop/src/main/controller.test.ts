@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import type { BuildRequestInput, BuildResponse, PicksRequestInput } from '@pick-league/shared';
+import type {
+  BuildRequestInput,
+  BuildResponse,
+  DraftRequestInput,
+  PicksRequestInput,
+} from '@pick-league/shared';
 import type { AppState } from '../core/app-state.ts';
 import {
   champSelectSession,
@@ -82,6 +87,8 @@ function setup(options: { lcu?: Partial<LcuApi> } = {}) {
   const calls = { picks: 0, build: 0, draft: 0, spells: 0, applies: 0 };
   /** Every picks request received, in order. */
   const picksRequests: PicksRequestInput[] = [];
+  /** Every draft evaluation request received, in order. */
+  const draftRequests: DraftRequestInput[] = [];
   const api: ApiClient = {
     baseUrl: 'http://api.test',
     health: async () => ({
@@ -103,6 +110,7 @@ function setup(options: { lcu?: Partial<LcuApi> } = {}) {
     },
     draft: async (req) => {
       calls.draft++;
+      draftRequests.push(req);
       const none = { physical: 0, magic: 0, true: 0, champions: [] };
       return {
         patch: '15.22',
@@ -123,6 +131,7 @@ function setup(options: { lcu?: Partial<LcuApi> } = {}) {
     getOwnedChampions: async () => [],
     getMastery: async () => [],
     getCurrentSummoner: async () => FAKE_SUMMONER,
+    getPlatformId: async () => null,
     getPerkPages: async () => {
       calls.applies++;
       return [];
@@ -172,7 +181,7 @@ function setup(options: { lcu?: Partial<LcuApi> } = {}) {
     },
   };
   const state = (): AppState => controller.getState();
-  return { controller, calls, picksRequests, lcu: lcuEvents, state };
+  return { controller, calls, picksRequests, draftRequests, lcu: lcuEvents, state };
 }
 
 describe('controller: mastery-aware picks', () => {
@@ -515,6 +524,24 @@ describe('controller: draft planner', () => {
       expect(await controller.evaluateDraft(bad)).toMatchObject({ ok: false, code: 'BAD_REQUEST' });
     }
     expect(calls.draft).toBe(1);
+  });
+
+  test("draft evaluations carry the account's platform when the client gives a crawled one", async () => {
+    const body = { allies: [], enemies: [], side: 'blue' };
+    const platformOf = async (platformId: string | null, request: object = body) => {
+      const { controller, draftRequests } = setup({
+        lcu: { getPlatformId: async () => platformId },
+      });
+      await settle();
+      await controller.evaluateDraft(request);
+      return draftRequests[0]?.platform;
+    };
+    expect(await platformOf('EUW1')).toBe('EUW1');
+    expect(await platformOf(null)).toBeNull();
+    // A platform PickLeague does not crawl: every platform's side edge.
+    expect(await platformOf('OC1')).toBeNull();
+    // The request's own platform wins.
+    expect(await platformOf('EUW1', { ...body, platform: 'KR' })).toBe('KR');
   });
 
   test('refuses malformed bodies from the renderer without calling the API', async () => {
