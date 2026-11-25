@@ -299,7 +299,9 @@ aggregate them, recomputed each time. A Postgres advisory lock keeps several API
 refreshing at the same time.
 Engine weights and thresholds live in `apps/api/src/engine/config.ts`. The calibration script
 prints, per kind of effect, the fitted weight of the engine's shrinkage for a grid of `k` (the `k`
-to keep is the one with a weight of ~1).
+to keep is the one with a weight of ~1): statistics from the earlier matches of the patch, the
+latest 20 % by start time scored (`--test-share`), as the engine predicts later matches in
+production; `--split hash` scores a random 1 match in 5 instead, which flatters the engine.
 
 Settings (env): `DATABASE_URL`, `PORT`, `LOG_LEVEL`, `CACHE_TTL_SECONDS` (600),
 `RATE_LIMIT_PER_MINUTE` (120 per IP, 0 = off), `RATE_LIMIT_BURST` (30), `TRUST_PROXY` (use

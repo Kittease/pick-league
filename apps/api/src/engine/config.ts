@@ -5,10 +5,15 @@
  * `delta * n / (n + k)` (empirical-Bayes style), where `k` is the "prior strength" below: a delta
  * backed by `k` games keeps half of its value.
  *
- * The `k` values come from the data (patch 16.22, ~300k matches, Nov 2026): a held-out fit
- * (statistics from 80 % of the matches, the other 20 % — about 60k matches — scored) picks, for
- * each kind of delta, the `k` at which that component's fitted weight is 1. Re-measure them with
- * `apps/api/scripts/calibrate.ts`.
+ * The `k` values come from the data. First (patch 16.22, ~300k matches, Nov 2026) a held-out fit
+ * (statistics from a random 80 % of the matches, the other 20 % scored) picked, for each kind of
+ * delta, the `k` at which that component's fitted weight is 1. A random split flatters the engine
+ * (matches of the same day and players on both sides), so the picks' pair `k` were refit on a
+ * replay of production over 16.23 (Nov 2026, 665k stored matches): for each of its 8 days, the
+ * stats of all of 16.22 + the earlier days of 16.23 predict that day's matches (346k in all); `k`
+ * fit by log-loss on days 1–4, checked on days 5–8. Re-measure them with
+ * `apps/api/scripts/calibrate.ts` (statistics from the earlier matches of a patch, the latest
+ * ones scored).
  */
 import type { CompTrait, Position } from '@pick-league/shared';
 
@@ -84,17 +89,21 @@ export const ENGINE_CONFIG = {
      * Shrinkage prior strength per kind (games). Pair deltas (matchup, duo, other enemies and
      * allies) are measured against what the role usually does vs/with that champion (the other
      * champion's own strength is the same for every candidate), so these `k` fit that interaction
-     * alone: it is small, hence the large values. Each pair `k` is the one at which the held-out
-     * weight of its kind is ~1 (lane 600, other bot laner 1,600, other enemies 3,500, duo 4,000,
-     * other allies 10,000); with them the summed score has a held-out slope of 0.98 ± 0.04.
+     * alone: it is small, hence the large values. They were first set where the held-out weight
+     * of each kind was ~1 on a random split of 16.22 (lane 600, other bot laner 1,600, other
+     * enemies 3,500, duo 4,000, other allies 10,000; summed score slope 0.98 ± 0.04). Replaying
+     * 16.23 day by day, the held-out weights with those `k` were base 0.93–0.98, lane 0.85, other
+     * bot laner 0.6–0.76, other enemies 1.2, duo 1.4–1.5, other allies 1.1–1.3 and the summed
+     * score's slope 0.92; a log-loss refit (days 1–4, checked on days 5–8) gave the values below
+     * (base and other enemies unchanged), with a slope of ~0.96 on the later days.
      */
     shrinkK: {
       base: 250,
-      matchup: 600,
-      laneSecondary: 1600,
-      duo: 4000,
+      matchup: 900,
+      laneSecondary: 2400,
+      duo: 3000,
       otherEnemy: 3500,
-      otherAlly: 10000,
+      otherAlly: 7500,
       /** No measurable effect of enemy traits on 16.22, a small one for ally traits (k ≈ 2,800). */
       comp: 3000,
     },
@@ -286,8 +295,10 @@ export const ENGINE_CONFIG = {
 
   /**
    * Draft evaluation (POST /recommendations/draft): the picks engine's deltas summed per team,
-   * with weight 1. With the `k` above the summed score is calibrated as it is (held-out slope
-   * 0.98 ± 0.04 on ~60k matches of 16.22), so no extra scaling.
+   * with weight 1. With the `k` above the summed score is close to calibrated as it is: slope
+   * 0.98 ± 0.04 on a random split of 16.22 (~60k held-out matches), which leaks same-day and
+   * same-player information; replaying 16.23 day by day, 0.92 with the earlier `k`, ~0.96 on the
+   * later days with the current ones. No extra scaling.
    */
   draft: {
     baseWeight: 1,

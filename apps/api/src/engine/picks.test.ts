@@ -65,15 +65,15 @@ describe('recommendPicks', () => {
     const naut = result.candidates[0];
     const matchup = naut?.reasons.find((r) => r.kind === 'matchup');
     expect(matchup?.games).toBe(1000);
-    // 6 % − the usual 1.5 %, shrunk with k = 600.
+    // 6 % − the usual 1.5 %, shrunk with k = 900.
     expect(matchup?.delta).toBeCloseTo((0.045 * 1000) / (1000 + K.matchup), 3);
     expect(matchup?.label).toBe(
-      '+2.8% vs Janna compared with other supports (likely lane, support, 1,000 games)',
+      '+2.4% vs Janna compared with other supports (likely lane, support, 1,000 games)',
     );
     expect(matchup?.championIds).toEqual([40]);
     const duo = result.candidates[1]?.reasons.find((r) => r.kind === 'duo');
     expect(duo?.delta).toBeCloseTo((0.045 * 1000) / (1000 + K.duo), 3);
-    expect(duo?.label).toBe('+0.9% with Jinx compared with other supports (bot duo, 1,000 games)');
+    expect(duo?.label).toBe('+1.1% with Jinx compared with other supports (bot duo, 1,000 games)');
   });
 
   test("an enemy's own strength does not favour candidates with small samples", () => {
