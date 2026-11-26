@@ -34,3 +34,8 @@ test('autoView: the draft planner is never left otherwise', () => {
     expect(autoView('draft', { wasInSelect: false, inSelect: false, busy })).toBe('draft');
   }
 });
+
+test('autoView: the patch notes, like the draft planner, stay after a champion select ends', () => {
+  expect(autoView('patches', { wasInSelect: true, inSelect: false, busy: false })).toBe('patches');
+  expect(autoView('patches', { wasInSelect: false, inSelect: true, busy: false })).toBe('select');
+});

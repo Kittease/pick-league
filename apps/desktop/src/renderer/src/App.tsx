@@ -1,5 +1,6 @@
 import { PickLeagueDataProvider } from '@pick-league/ui/components/data-provider';
 import { type DraftHandle, DraftPlanner } from '@pick-league/ui/components/draft-planner';
+import { PatchNotesPage } from '@pick-league/ui/components/patch-notes';
 import { type TierListHandle, TierListPage } from '@pick-league/ui/components/tier-list';
 import { Toaster } from '@pick-league/ui/components/ui/sonner';
 import { Tabs, TabsList, TabsTrigger } from '@pick-league/ui/components/ui/tabs';
@@ -120,6 +121,8 @@ export function App() {
   const state = useAppState();
   const lookup = useStatic(state?.staticVersion);
   const { view, setView, setBusy } = useAutoView(Boolean(state?.champSelect));
+  const [patchesVisited, setPatchesVisited] = useState(false);
+  if (view === 'patches' && !patchesVisited) setPatchesVisited(true);
 
   // Escape steps back (search text, build page, details, champion select → tier list); Ctrl/Cmd+K
   // or F jumps to the tier list search. See `escapeAction` for the order. The draft planner
@@ -129,6 +132,12 @@ export function App() {
   useShortcuts((shortcut) => {
     const list = tierList.current;
     if (!state || !list) return false;
+    if (view === 'patches') {
+      if (shortcut !== 'focus-search') return false;
+      setView('tierlist');
+      list.focusSearch();
+      return true;
+    }
     if (view === 'draft') {
       const planner = draft.current;
       if (!planner) return false;
@@ -202,6 +211,12 @@ export function App() {
                 handleRef={draft}
               />
             </div>
+            {/* Mounted on its first visit, then kept: the selected patch survives the other views. */}
+            {(view === 'patches' || patchesVisited) && (
+              <div className={view === 'patches' ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}>
+                <PatchNotesPage lookup={lookup} dataKey={apiDataKey(state)} />
+              </div>
+            )}
             {view === 'select' && (
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 {state.champSelect ? (

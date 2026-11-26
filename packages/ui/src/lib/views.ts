@@ -1,14 +1,14 @@
 /**
- * Main views of the window: champion select (or the screen waiting for it), the tier list and
- * the draft planner.
+ * Main views of the window: champion select (or the screen waiting for it), the tier list, the
+ * draft planner and the patch notes.
  */
-export type View = 'select' | 'tierlist' | 'draft';
+export type View = 'select' | 'tierlist' | 'draft' | 'patches';
 
 /**
  * View after a champion select starts or ends, or `view` unchanged. The app only moves on these
  * two edges: a champion select starting shows it (unless the user is reading a champion in the
  * tier list: `busy`), its end (after the game it led to) shows the tier list — except from the
- * draft planner, which only a champion select starting leaves. In between, the view stays
+ * draft planner and the patch notes, which only a champion select starting leaves. In between, the view stays
  * wherever the user put it (nav, Escape), so leaving a running champion select is never undone
  * until the next one starts.
  */
@@ -18,6 +18,6 @@ export function autoView(
 ): View {
   const { wasInSelect, inSelect, busy } = change;
   if (inSelect === wasInSelect) return view;
-  if (!inSelect) return view === 'draft' ? view : 'tierlist';
+  if (!inSelect) return view === 'draft' || view === 'patches' ? view : 'tierlist';
   return view === 'tierlist' && busy ? view : 'select';
 }

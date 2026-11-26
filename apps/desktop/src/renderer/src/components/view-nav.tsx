@@ -1,6 +1,6 @@
 import { cn } from '@pick-league/ui/lib/utils';
 import { autoView, type View } from '@pick-league/ui/lib/views';
-import { LayoutGridIcon, ListOrderedIcon, SwordsIcon } from 'lucide-react';
+import { LayoutGridIcon, ListOrderedIcon, ScrollTextIcon, SwordsIcon } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type { View };
@@ -31,9 +31,13 @@ const ITEMS: { view: View; label: string; Icon: typeof SwordsIcon }[] = [
   { view: 'select', label: 'Champ select', Icon: SwordsIcon },
   { view: 'tierlist', label: 'Tier list', Icon: ListOrderedIcon },
   { view: 'draft', label: 'Draft', Icon: LayoutGridIcon },
+  { view: 'patches', label: 'Patches', Icon: ScrollTextIcon },
 ];
 
-/** Slim left rail switching between the champion select view, the tier list and the draft planner. */
+/**
+ * Slim left rail switching between the champion select view, the tier list, the draft planner and
+ * the patch notes.
+ */
 export function ViewNav({
   view,
   onChange,
