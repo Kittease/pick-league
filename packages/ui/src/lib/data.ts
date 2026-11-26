@@ -3,6 +3,8 @@ import type {
   BuildResponse,
   DraftEvaluationResponse,
   DraftRequestInput,
+  PatchChangesIndexResponse,
+  PatchNotesResponse,
   PicksRequestInput,
   PicksResponse,
   Position,
@@ -34,4 +36,8 @@ export interface PickLeagueData {
   draftBuild(request: BuildRequestInput): Promise<ApiResult<BuildResponse>>;
   /** Win probability and damage split of a draft. */
   evaluateDraft(request: DraftRequestInput): Promise<ApiResult<DraftEvaluationResponse>>;
+  /** Patch notes: the patches with changes and their hotfixes (the selector). */
+  getPatchNotesIndex(): Promise<ApiResult<PatchChangesIndexResponse>>;
+  /** Patch notes of a patch ('latest') or of one of its builds (a hotfix). */
+  getPatchNotes(patch: string, build?: string): Promise<ApiResult<PatchNotesResponse>>;
 }

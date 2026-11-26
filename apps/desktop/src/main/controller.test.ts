@@ -123,6 +123,8 @@ function setup(options: { lcu?: Partial<LcuApi> } = {}) {
     statsStatus: async () => Promise.reject(new Error('no stats in tests')),
     tierList: async () => Promise.reject(new Error('no tier list in tests')),
     tierListChampion: async () => Promise.reject(new Error('no tier list in tests')),
+    patchNotesIndex: async () => Promise.reject(new Error('no patch notes in tests')),
+    patchNotes: async () => Promise.reject(new Error('no patch notes in tests')),
   };
   const lcu: LcuApi = {
     getChampSelectSession: async () => null,

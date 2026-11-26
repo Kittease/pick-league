@@ -8,6 +8,8 @@ import {
   draftPicks,
   evaluateDraft,
   getGenericBuild,
+  getPatchNotes,
+  getPatchNotesIndex,
   getServerStatus,
   getTierList as getTierListAction,
   getTierListChampion,
@@ -51,6 +53,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             draftPicks,
             draftBuild,
             evaluateDraft,
+            getPatchNotesIndex,
+            getPatchNotes,
           }}
           getServerStatus={getServerStatus}
         />

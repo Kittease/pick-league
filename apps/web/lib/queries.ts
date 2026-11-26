@@ -2,6 +2,11 @@ import 'server-only';
 import {
   API_ROUTES,
   type HealthResponse,
+  PATCH_CHANGES_INDEX_ROUTE,
+  PATCH_NOTES_ROUTE,
+  type PatchChangesIndexResponse,
+  type PatchNotesQuery,
+  type PatchNotesResponse,
   type StaticDataResponse,
   type StatsStatusResponse,
   TIER_LIST_CHAMPION_ROUTE,
@@ -54,5 +59,21 @@ export function getTierListChampion(
   return apiGet(`${TIER_LIST_CHAMPION_ROUTE}?${params}`, {
     revalidate: REVALIDATE.tierListChampion,
     tags: [TAGS.tierList],
+  });
+}
+
+export function getPatchNotesIndex(): Promise<ApiResult<PatchChangesIndexResponse>> {
+  return apiGet(PATCH_CHANGES_INDEX_ROUTE, {
+    revalidate: REVALIDATE.patchNotes,
+    tags: [TAGS.patchNotes],
+  });
+}
+
+export function getPatchNotes(query: PatchNotesQuery): Promise<ApiResult<PatchNotesResponse>> {
+  const { patch, build } = query;
+  const params = new URLSearchParams(build ? { patch, build } : { patch });
+  return apiGet(`${PATCH_NOTES_ROUTE}?${params}`, {
+    revalidate: REVALIDATE.patchNotes,
+    tags: [TAGS.patchNotes],
   });
 }

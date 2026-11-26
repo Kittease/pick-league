@@ -10,6 +10,7 @@ export const REVALIDATE = {
   static: 6 * 3600,
   tierList: 600,
   tierListChampion: 600,
+  patchNotes: 600,
 } as const;
 
 /** Cache tags of the API's GET answers (for `revalidateTag`). */
@@ -19,4 +20,5 @@ export const TAGS = {
   patches: 'api:patches',
   static: 'api:static',
   tierList: 'api:tierlist',
+  patchNotes: 'api:patch-notes',
 } as const;

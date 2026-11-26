@@ -23,6 +23,21 @@ describe('gatewayRoute', () => {
     ).toBe('/tierlist/champion?role=UTILITY&championId=111');
   });
 
+  test('allows the patch changes and patch notes with their query', () => {
+    expect(gatewayRoute('GET', seg('patch-changes/index'), '')).toEqual({
+      method: 'GET',
+      path: '/patch-changes/index',
+      maxAge: 600,
+    });
+    expect(gatewayRoute('GET', seg('patch-changes'), '?patch=16.23')?.path).toBe(
+      '/patch-changes?patch=16.23',
+    );
+    expect(gatewayRoute('GET', seg('patch-notes'), '?patch=16.23&build=16.23.8418428')?.path).toBe(
+      '/patch-notes?patch=16.23&build=16.23.8418428',
+    );
+    expect(gatewayRoute('POST', seg('patch-notes'), '')).toBeNull();
+  });
+
   test('allows static data of the latest patch or a patch id only', () => {
     expect(gatewayRoute('GET', seg('static/latest'), '')?.path).toBe('/static/latest');
     expect(gatewayRoute('GET', seg('static/16.22'), '')?.maxAge).toBe(21600);

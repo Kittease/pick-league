@@ -48,6 +48,8 @@ export function DataProvider({
       draftPicks: (request) => latest.current.draftPicks(request),
       draftBuild: (request) => latest.current.draftBuild(request),
       evaluateDraft: (request) => latest.current.evaluateDraft(request),
+      getPatchNotesIndex: () => latest.current.getPatchNotesIndex(),
+      getPatchNotes: (patch, build) => latest.current.getPatchNotes(patch, build),
     }),
     [],
   );

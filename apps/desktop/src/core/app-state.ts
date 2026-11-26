@@ -120,6 +120,8 @@ export const IPC = {
   draftPicks: 'pickleague:draft-picks',
   draftBuild: 'pickleague:draft-build',
   evaluateDraft: 'pickleague:evaluate-draft',
+  patchNotesIndex: 'pickleague:patch-notes-index',
+  patchNotes: 'pickleague:patch-notes',
 } as const;
 
 /** Window chrome drawn by the app itself (frameless window on Windows and Linux). */

@@ -225,6 +225,10 @@ async function main(): Promise<void> {
   ipcMain.handle(IPC.draftPicks, (_e, request: unknown) => controller.draftPicks(request));
   ipcMain.handle(IPC.draftBuild, (_e, request: unknown) => controller.draftBuild(request));
   ipcMain.handle(IPC.evaluateDraft, (_e, request: unknown) => controller.evaluateDraft(request));
+  ipcMain.handle(IPC.patchNotesIndex, () => controller.patchNotesIndex());
+  ipcMain.handle(IPC.patchNotes, (_e, patch: unknown, build: unknown) =>
+    controller.patchNotes(patch, build),
+  );
 
   // Auto-update from GitHub Releases: installed Windows app only (releases ship no macOS/Linux
   // builds, and an unsigned macOS app cannot update itself). See updater.ts.

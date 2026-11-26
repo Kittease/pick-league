@@ -9,6 +9,11 @@ import {
   type DraftEvaluationResponse,
   type DraftRequestInput,
   type HealthResponse,
+  PATCH_CHANGES_INDEX_ROUTE,
+  PATCH_NOTES_ROUTE,
+  type PatchChangesIndexResponse,
+  type PatchNotesQuery,
+  type PatchNotesResponse,
   type PicksRequestInput,
   type PicksResponse,
   type Position,
@@ -51,6 +56,8 @@ export interface ApiClient {
     filters?: TierListFilters,
     patch?: string,
   ): Promise<TierListChampionResponse>;
+  patchNotesIndex(): Promise<PatchChangesIndexResponse>;
+  patchNotes(query: PatchNotesQuery): Promise<PatchNotesResponse>;
 }
 
 export function normaliseApiUrl(url: string): string {
@@ -113,5 +120,8 @@ export function createApiClient(
       call(
         `${TIER_LIST_CHAMPION_ROUTE}?${new URLSearchParams({ role, championId: String(championId), patch, ...filters })}`,
       ),
+    patchNotesIndex: () => call(PATCH_CHANGES_INDEX_ROUTE),
+    patchNotes: ({ patch, build }) =>
+      call(`${PATCH_NOTES_ROUTE}?${new URLSearchParams(build ? { patch, build } : { patch })}`),
   };
 }

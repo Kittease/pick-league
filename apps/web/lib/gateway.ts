@@ -2,6 +2,9 @@ import {
   API_ROUTES,
   type ApiErrorCode,
   type ApiErrorResponse,
+  PATCH_CHANGES_INDEX_ROUTE,
+  PATCH_CHANGES_ROUTE,
+  PATCH_NOTES_ROUTE,
   patchIdSchema,
   TIER_LIST_CHAMPION_ROUTE,
   TIER_LIST_ROUTE,
@@ -26,6 +29,9 @@ const GET_ROUTES: Record<string, number> = {
   [API_ROUTES.statsStatus]: REVALIDATE.statsStatus,
   [TIER_LIST_ROUTE]: REVALIDATE.tierList,
   [TIER_LIST_CHAMPION_ROUTE]: REVALIDATE.tierListChampion,
+  [PATCH_CHANGES_INDEX_ROUTE]: REVALIDATE.patchNotes,
+  [PATCH_CHANGES_ROUTE]: REVALIDATE.patchNotes,
+  [PATCH_NOTES_ROUTE]: REVALIDATE.patchNotes,
 };
 
 const POST_ROUTES: ReadonlySet<string> = new Set([

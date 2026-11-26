@@ -11,10 +11,13 @@ import {
   type DraftEvaluationResponse,
   draftRequestSchema,
   isPlatform,
+  type PatchChangesIndexResponse,
+  type PatchNotesResponse,
   type PicksRequestInput,
   type PicksResponse,
   type Platform,
   type Position,
+  patchNotesQuerySchema,
   picksRequestSchema,
   type StaticDataResponse,
   type TierListChampionResponse,
@@ -285,6 +288,21 @@ export class Controller {
     if (!parsed.success) return badDraftRequest('evaluation');
     const body = parsed.data;
     return toResult(this.api.draft({ ...body, platform: body.platform ?? this.platform }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Patch notes (one-off calls; the query comes from the renderer: validated first)
+  // ---------------------------------------------------------------------------
+
+  patchNotesIndex(): Promise<ApiResult<PatchChangesIndexResponse>> {
+    return toResult(this.api.patchNotesIndex());
+  }
+
+  async patchNotes(patch: unknown, build: unknown): Promise<ApiResult<PatchNotesResponse>> {
+    const parsed = patchNotesQuerySchema.safeParse({ patch, build: build ?? undefined });
+    if (!parsed.success)
+      return { ok: false, code: 'BAD_REQUEST', message: 'Invalid patch notes request' };
+    return toResult(this.api.patchNotes(parsed.data));
   }
 
   // ---------------------------------------------------------------------------

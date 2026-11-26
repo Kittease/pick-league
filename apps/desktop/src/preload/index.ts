@@ -37,6 +37,8 @@ const bridge: PickLeagueBridge = {
   draftPicks: (request) => ipcRenderer.invoke(IPC.draftPicks, request),
   draftBuild: (request) => ipcRenderer.invoke(IPC.draftBuild, request),
   evaluateDraft: (request) => ipcRenderer.invoke(IPC.evaluateDraft, request),
+  getPatchNotesIndex: () => ipcRenderer.invoke(IPC.patchNotesIndex),
+  getPatchNotes: (patch, build) => ipcRenderer.invoke(IPC.patchNotes, patch, build),
   onState(listener) {
     const handler = (_e: unknown, state: AppState) => listener(state);
     ipcRenderer.on(IPC.state, handler);

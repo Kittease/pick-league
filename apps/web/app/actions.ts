@@ -7,7 +7,10 @@ import {
   type DraftEvaluationResponse,
   draftRequestSchema,
   type HealthResponse,
+  type PatchChangesIndexResponse,
+  type PatchNotesResponse,
   type PicksResponse,
+  patchNotesQuerySchema,
   picksRequestSchema,
   type StatsStatusResponse,
   type TierListChampionResponse,
@@ -88,6 +91,18 @@ export async function draftBuild(request: unknown): Promise<ApiResult<BuildRespo
 export async function evaluateDraft(request: unknown): Promise<ApiResult<DraftEvaluationResponse>> {
   const body = parse(draftRequestSchema, request);
   return body.ok ? apiPost(API_ROUTES.draft, body.data) : body.result;
+}
+
+export async function getPatchNotesIndex(): Promise<ApiResult<PatchChangesIndexResponse>> {
+  return queries.getPatchNotesIndex();
+}
+
+export async function getPatchNotes(
+  patch: unknown,
+  build?: unknown,
+): Promise<ApiResult<PatchNotesResponse>> {
+  const query = parse(patchNotesQuerySchema, { patch, build: build ?? undefined });
+  return query.ok ? queries.getPatchNotes(query.data) : query.result;
 }
 
 /** What the header shows (API patch + matches, stats freshness), polled by the page. */
