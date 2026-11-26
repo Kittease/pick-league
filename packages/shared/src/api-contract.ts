@@ -831,3 +831,99 @@ export interface TierListChampionResponse {
    */
   gameLength?: GameLengthProfile;
 }
+
+// ---------------------------------------------------------------------------
+// GET /patch-changes/index and GET /patch-changes?patch=latest[&build=16.23.8418428]
+// Champion and item values changed by each game build, from the game files (Community Dragon).
+// ---------------------------------------------------------------------------
+
+export const PATCH_CHANGES_ROUTE = '/patch-changes';
+export const PATCH_CHANGES_INDEX_ROUTE = '/patch-changes/index';
+
+/** A game build: Community Dragon's content version without its branch ('16.23.8418428'). */
+export const gameBuildSchema = z
+  .string()
+  .regex(/^\d+\.\d+\.\d+$/, 'expected a game build like "16.23.8418428"');
+
+/**
+ * Query string of `GET /patch-changes`. `patch` = a patch id or 'latest' (default: the newest
+ * patch with a patch diff). Without `build`: the patch diff; with it: that build's diff (the patch
+ * diff or a hotfix) of the patch.
+ */
+export const patchChangesQuerySchema = z.object({
+  patch: z.union([z.literal('latest'), patchIdSchema]).default('latest'),
+  build: gameBuildSchema.optional(),
+});
+export type PatchChangesQuery = z.infer<typeof patchChangesQuerySchema>;
+export type PatchChangesQueryInput = z.input<typeof patchChangesQuerySchema>;
+
+/**
+ * One diff. `patch`: the first build read of a patch vs the newest build of the previous patch.
+ * `hotfix`: a later build vs the build before it (most change nothing: `gameplayChanged` false).
+ */
+export interface PatchChangeSetSummary {
+  patch: PatchId;
+  build: string;
+  kind: 'patch' | 'hotfix';
+  /**
+   * 'live': read when the build came out. 'backfill': read afterwards from both patches' final
+   * builds, so the patch's mid-patch changes are merged in ("final build, includes mid-patch
+   * changes").
+   */
+  source: 'live' | 'backfill';
+  basePatch: PatchId;
+  baseBuild: string;
+  /** When the worker first read the build (ISO 8601); for a backfill, when it was backfilled. */
+  detectedAt: string;
+  changedChampions: number;
+  changedItems: number;
+  gameplayChanged: boolean;
+}
+
+export interface PatchChangesIndexResponse {
+  /** Newest patch first; each patch's sets in build order (the patch diff first). */
+  patches: { patch: PatchId; sets: PatchChangeSetSummary[] }[];
+}
+
+/** One changed value. */
+export interface PatchValueChange {
+  /** Champions: Q W E R, P (passive), base (base stats), other; items: null. */
+  slot: string | null;
+  /** The game object holding the value ('EzrealR', 'EzrealEMissile'); null for base stats and items. */
+  spellName: string | null;
+  /** The spell calculation of a ratio ('Damage'), else null. */
+  calculation: string | null;
+  /**
+   * 'BaseDamage', 'Cooldown', 'Cost', a ratio ('bonusAdRatio', 'apRatio'…), a base stat
+   * ('attackRange'); 'added' / 'removed' for a whole spell object (no values).
+   */
+  valueName: string;
+  /** Per rank (rank 1 first) for a spell value, else one value; null when absent on that side. */
+  oldValues: number[] | null;
+  newValues: number[] | null;
+  /** Where in the game file (debugging). */
+  path: string;
+}
+
+export interface PatchEntityChange {
+  /** 'new' / 'removed' (no values) or 'changed'. */
+  status: 'changed' | 'new' | 'removed';
+  name: string;
+  changes: PatchValueChange[];
+}
+
+export interface PatchChampionChange extends PatchEntityChange {
+  championId: number;
+}
+
+export interface PatchItemChange extends PatchEntityChange {
+  itemId: number;
+}
+
+export interface PatchChangesResponse extends PatchChangeSetSummary {
+  /** By name. */
+  champions: PatchChampionChange[];
+  items: PatchItemChange[];
+  /** The hotfixes of the patch (summaries), in build order: fetch one with `build`. */
+  hotfixes: PatchChangeSetSummary[];
+}

@@ -5,6 +5,9 @@ import {
   buildRequestSchema,
   draftRequestSchema,
   MAX_REQUEST_BODY_BYTES,
+  PATCH_CHANGES_INDEX_ROUTE,
+  PATCH_CHANGES_ROUTE,
+  patchChangesQuerySchema,
   picksRequestSchema,
   TIER_LIST_CHAMPION_ROUTE,
   TIER_LIST_ROUTE,
@@ -17,6 +20,7 @@ import type { z } from 'zod';
 import { ApiError } from '../errors.ts';
 import type { Logger } from '../logger.ts';
 import * as meta from '../services/meta.ts';
+import * as patchChanges from '../services/patch-changes.ts';
 import * as reco from '../services/recommendations.ts';
 import * as tiers from '../services/tierlist.ts';
 import type { StatsRefresher } from '../stats/refresh.ts';
@@ -199,6 +203,19 @@ export function createApp(deps: AppDeps): Hono<Env> {
     // Every parsed field is in the key, so filters added to the query schema are too.
     return cached(c, `tierlist-champion|${JSON.stringify(query)}`, () =>
       tiers.tierListChampion(db, query),
+    );
+  });
+
+  app.get(PATCH_CHANGES_INDEX_ROUTE, (c) =>
+    cached(c, 'patch-changes-index', () => patchChanges.patchChangesIndex(db)),
+  );
+  app.get(PATCH_CHANGES_ROUTE, (c) => {
+    const parsed = patchChangesQuerySchema.safeParse(c.req.query());
+    if (!parsed.success)
+      throw new ApiError('BAD_REQUEST', 'Invalid query string', parsed.error.issues);
+    const query = parsed.data;
+    return cached(c, `patch-changes|${JSON.stringify(query)}`, () =>
+      patchChanges.patchChanges(db, query),
     );
   });
 
