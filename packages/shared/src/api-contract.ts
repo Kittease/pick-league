@@ -927,3 +927,181 @@ export interface PatchChangesResponse extends PatchChangeSetSummary {
   /** The hotfixes of the patch (summaries), in build order: fetch one with `build`. */
   hotfixes: PatchChangeSetSummary[];
 }
+
+// ---------------------------------------------------------------------------
+// GET /patch-notes?patch=latest[&build=16.23.8418428]
+// The patch changes classified for the patch notes page: buff / nerf per value, weighted per
+// champion by how it deals damage, the changed items, and who builds them.
+// ---------------------------------------------------------------------------
+
+export const PATCH_NOTES_ROUTE = '/patch-notes';
+
+/** Same query as `GET /patch-changes`. */
+export const patchNotesQuerySchema = patchChangesQuerySchema;
+export type PatchNotesQuery = PatchChangesQuery;
+export type PatchNotesQueryInput = PatchChangesQueryInput;
+
+/** What a change does for the champion (or for the item's buyers). */
+export type PatchNoteDirection = 'buff' | 'nerf' | 'neutral';
+
+/**
+ * How to show a value: `percent` = a fraction shown ×100 (1.15 → 115%), `percentPoints` = already
+ * in percent (9 → 9%), `seconds`, `flat` (damage, range, gold…).
+ */
+export type PatchNoteUnit = 'percent' | 'percentPoints' | 'seconds' | 'flat';
+
+/**
+ * What kind of value changed (the rule that classified it). `technical`: file data with no
+ * gameplay meaning we can tell (flags, unnamed values); `other`: a gameplay value whose direction
+ * is unclear.
+ */
+export type PatchNoteCategory =
+  | 'damage'
+  | 'ratio'
+  | 'scaling'
+  | 'healing'
+  | 'shield'
+  | 'cooldown'
+  | 'cost'
+  | 'castTime'
+  | 'range'
+  | 'cc'
+  | 'duration'
+  | 'speed'
+  | 'stat'
+  | 'price'
+  | 'minion'
+  | 'other'
+  | 'technical';
+
+export interface PatchNoteChange {
+  /** Readable name ('Bonus AD ratio', 'Tibbers total HP · level 1 value'). */
+  label: string;
+  /** Game objects holding this same change (duplicates such as SyndraE / SyndraE5 merged). */
+  spellNames: string[];
+  calculation: string | null;
+  valueName: string;
+  /** Per rank (rank 1 first) or one value; null when absent on that side. */
+  oldValues: number[] | null;
+  newValues: number[] | null;
+  unit: PatchNoteUnit;
+  category: PatchNoteCategory;
+  direction: PatchNoteDirection;
+  /**
+   * Relative change of the value, ranks averaged ((new − old) / |old|, each rank capped at
+   * ±100 %), signed for the champion: positive = buff. 0 when neutral.
+   */
+  magnitude: number;
+  /**
+   * How much the value matters to this champion (0–2): a ratio's damage type weighed by the
+   * champion's damage split (10 % + 90 % × share), 0.3 for mana costs and minion values, 2 for
+   * attack range, 0 for technical values, else 1.
+   */
+  relevance: number;
+  /** `magnitude × relevance`: what the verdict sums. */
+  weight: number;
+  /** |weight| under 5 %: a small change. */
+  minor: boolean;
+}
+
+/** Overall verdict of a champion or an item. */
+export type PatchNoteVerdict =
+  | 'buff'
+  | 'nerf'
+  | 'mixed'
+  | 'adjusted'
+  | 'reworked'
+  | 'new'
+  | 'removed';
+
+export interface PatchNoteVerdictSummary {
+  verdict: PatchNoteVerdict;
+  /** Σ of the weights: positive = buff. */
+  score: number;
+  /** Σ of the positive weights, and Σ of the sizes of the negative ones. */
+  buffWeight: number;
+  nerfWeight: number;
+}
+
+/** The champion's damage split used to weigh its ratios. */
+export interface PatchNoteDamageSplit {
+  physical: number;
+  magic: number;
+  true: number;
+  /**
+   * 'stats': measured (`stats_champion_traits` of `patch`: the patch's own when the stats keep
+   * it, else the newest kept one); 'ddragon': Data Dragon's attack / magic ratings; 'none':
+   * unknown (half and half).
+   */
+  source: 'stats' | 'ddragon' | 'none';
+  patch: PatchId | null;
+  games: number;
+}
+
+/** P (passive), Q, W, E, R, base (base stats), other. */
+export type PatchNoteSlot = 'P' | 'Q' | 'W' | 'E' | 'R' | 'base' | 'other';
+
+/**
+ * Win rate of the champion in one of its main roles on the patch vs the previous patch, each
+ * centred on the role's average: positive = it wins more than before, relative to its role.
+ */
+export interface PatchNoteObserved {
+  role: Position;
+  delta: number;
+  winRate: number;
+  previousWinRate: number;
+  games: number;
+  previousGames: number;
+}
+
+export interface PatchNotesChampion extends PatchNoteVerdictSummary {
+  championId: number;
+  name: string;
+  status: 'changed' | 'new' | 'removed';
+  damage: PatchNoteDamageSplit;
+  /** In slot order P, Q, W, E, R, base, other. */
+  spells: { slot: PatchNoteSlot; changes: PatchNoteChange[] }[];
+  /** Main roles with enough games on both patches; empty when the stats cannot tell. */
+  observed: PatchNoteObserved[];
+}
+
+export interface PatchNotesItem extends PatchNoteVerdictSummary {
+  itemId: number;
+  name: string;
+  status: 'changed' | 'new' | 'removed';
+  changes: PatchNoteChange[];
+}
+
+/** A champion + role that builds a changed item. */
+export interface PatchNoteItemUser {
+  championId: number;
+  role: Position;
+  /** Share of the champion + role's games where the item was completed (or started with). */
+  share: number;
+  games: number;
+}
+
+export interface PatchNotesItemUsers {
+  itemId: number;
+  name: string;
+  verdict: PatchNoteVerdict;
+  /** Most frequent first. */
+  users: PatchNoteItemUser[];
+}
+
+export interface PatchNotesResponse extends PatchChangeSetSummary {
+  /** The patch's hotfixes, in build order. */
+  hotfixes: PatchChangeSetSummary[];
+  /** Buffs first, then mixed / adjusted / reworked / new, then nerfs; by score inside each. */
+  champions: PatchNotesChampion[];
+  /** Same order as the champions. */
+  items: PatchNotesItem[];
+  /** Each changed item with the champions + roles that build it (stats of `statsPatch`). */
+  itemUsers: PatchNotesItemUsers[];
+  /** Patch the build shares come from (the stats' current one), null without stats. */
+  statsPatch: PatchId | null;
+  /** The two patches compared by `observed`, null when not shown. */
+  observedPatches: { current: PatchId; previous: PatchId } | null;
+  /** The thresholds behind `itemUsers` and `observed`. */
+  thresholds: { minItemShare: number; minRoleGames: number; minObservedGames: number };
+}
