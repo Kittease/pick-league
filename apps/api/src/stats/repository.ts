@@ -1019,3 +1019,80 @@ export async function loadMasteryRows(q: Queryable, patches: PatchId[]): Promise
     wins: r.wins,
   }));
 }
+
+/** A champion + role's games with an item (completed, as boots or in its starter). */
+export interface ItemUserRow {
+  itemId: number;
+  championId: number;
+  position: Position;
+  /** Games where the item was completed (or started with). */
+  games: number;
+  /** All games of the champion + role on the patch. */
+  roleGames: number;
+}
+
+/**
+ * Who builds the given items on `patch` (stats_choices kinds item, boots and starter, the latter
+ * containing the item), champion + roles with at least `minRoleGames` games only.
+ */
+export async function loadItemUsers(
+  q: Queryable,
+  patch: PatchId,
+  itemIds: readonly number[],
+  minRoleGames: number,
+): Promise<ItemUserRow[]> {
+  if (itemIds.length === 0) return [];
+  const rows = await q<
+    {
+      item_id: number;
+      champion_id: number;
+      position: Position;
+      games: number;
+      role_games: number;
+    }[]
+  >`
+    WITH ids AS (SELECT unnest(${itemIds as number[]}::int[]) AS item_id)
+    SELECT i.item_id, c.champion_id, c.position, sum(c.games)::int AS games,
+           r.games AS role_games
+    FROM stats_choices c
+    JOIN ids i ON (c.kind IN ('item', 'boots') AND c.choice = i.item_id::text)
+               OR (c.kind = 'starter' AND i.item_id::text = ANY(string_to_array(c.choice, ',')))
+    JOIN stats_champion_roles r
+      ON r.patch = c.patch AND r.champion_id = c.champion_id AND r.position = c.position
+    WHERE c.patch = ${patch} AND c.kind IN ('item', 'boots', 'starter')
+      AND r.games >= ${minRoleGames}
+    GROUP BY i.item_id, c.champion_id, c.position, r.games`;
+  return rows.map((r) => ({
+    itemId: r.item_id,
+    championId: r.champion_id,
+    position: r.position,
+    games: r.games,
+    roleGames: r.role_games,
+  }));
+}
+
+/**
+ * Data Dragon's attack / magic ratings (0–10) of the champions, from the newest of `patches`
+ * (newest first) that has them.
+ */
+export async function loadChampionRatings(
+  q: Queryable,
+  patches: readonly PatchId[],
+  championIdsIn: readonly number[],
+): Promise<Map<number, { attack: number; magic: number }>> {
+  const championIds = storedChampionIds(championIdsIn);
+  const out = new Map<number, { attack: number; magic: number }>();
+  if (championIds.length === 0 || patches.length === 0) return out;
+  const rows = await q<
+    { patch: string; id: number; attack: number | null; magic: number | null }[]
+  >`
+    SELECT patch, id, (info->>'attack')::float8 AS attack, (info->>'magic')::float8 AS magic
+    FROM champions WHERE patch IN ${q(patches as PatchId[])} AND id IN ${q(championIds)}`;
+  for (const patch of patches) {
+    for (const r of rows) {
+      if (r.patch !== patch || out.has(r.id) || r.attack === null || r.magic === null) continue;
+      out.set(r.id, { attack: r.attack, magic: r.magic });
+    }
+  }
+  return out;
+}

@@ -17,7 +17,7 @@ import type {
 } from '@pick-league/shared';
 import { ApiError } from '../errors.ts';
 
-function summary(s: PatchChangeSetRow): PatchChangeSetSummary {
+export function summary(s: PatchChangeSetRow): PatchChangeSetSummary {
   return {
     patch: s.patch,
     build: s.build,
@@ -43,7 +43,7 @@ export async function patchChangesIndex(q: Queryable): Promise<PatchChangesIndex
 }
 
 /** Rows (in their stored order) grouped by champion / item, values as the contract shows them. */
-function group(rows: PatchChangeRow[]): Pick<PatchChangesResponse, 'champions' | 'items'> {
+export function group(rows: PatchChangeRow[]): Pick<PatchChangesResponse, 'champions' | 'items'> {
   const champions = new Map<number, PatchChampionChange>();
   const items = new Map<number, PatchItemChange>();
   const entityOf = (r: PatchChangeRow): PatchChampionChange | PatchItemChange => {
@@ -84,6 +84,19 @@ export async function patchChanges(
   q: Queryable,
   query: PatchChangesQuery,
 ): Promise<PatchChangesResponse> {
+  const { set, hotfixes } = await findChangeSet(q, query);
+  return {
+    ...summary(set),
+    ...group(await getPatchChanges(q, set.id)),
+    hotfixes: hotfixes.map(summary),
+  };
+}
+
+/** The set a query asks for and its patch's hotfixes (see `patchChanges`); 404 when none. */
+export async function findChangeSet(
+  q: Queryable,
+  query: PatchChangesQuery,
+): Promise<{ set: PatchChangeSetRow; hotfixes: PatchChangeSetRow[] }> {
   const sets = await listPatchChangeSets(q);
   const patch =
     query.patch === 'latest' ? sets.find((s) => s.kind === 'patch')?.patch : query.patch;
@@ -96,9 +109,5 @@ export async function patchChanges(
     const what = query.build ? `build ${query.build} of patch ${patch}` : `patch ${patch}`;
     throw new ApiError('NOT_FOUND', `No patch changes for ${what}`);
   }
-  return {
-    ...summary(set),
-    ...group(await getPatchChanges(q, set.id)),
-    hotfixes: ofPatch.filter((s) => s.kind === 'hotfix').map(summary),
-  };
+  return { set, hotfixes: ofPatch.filter((s) => s.kind === 'hotfix') };
 }

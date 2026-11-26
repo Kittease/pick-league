@@ -7,7 +7,9 @@ import {
   MAX_REQUEST_BODY_BYTES,
   PATCH_CHANGES_INDEX_ROUTE,
   PATCH_CHANGES_ROUTE,
+  PATCH_NOTES_ROUTE,
   patchChangesQuerySchema,
+  patchNotesQuerySchema,
   picksRequestSchema,
   TIER_LIST_CHAMPION_ROUTE,
   TIER_LIST_ROUTE,
@@ -21,6 +23,7 @@ import { ApiError } from '../errors.ts';
 import type { Logger } from '../logger.ts';
 import * as meta from '../services/meta.ts';
 import * as patchChanges from '../services/patch-changes.ts';
+import * as patchNotes from '../services/patch-notes.ts';
 import * as reco from '../services/recommendations.ts';
 import * as tiers from '../services/tierlist.ts';
 import type { StatsRefresher } from '../stats/refresh.ts';
@@ -216,6 +219,15 @@ export function createApp(deps: AppDeps): Hono<Env> {
     const query = parsed.data;
     return cached(c, `patch-changes|${JSON.stringify(query)}`, () =>
       patchChanges.patchChanges(db, query),
+    );
+  });
+  app.get(PATCH_NOTES_ROUTE, (c) => {
+    const parsed = patchNotesQuerySchema.safeParse(c.req.query());
+    if (!parsed.success)
+      throw new ApiError('BAD_REQUEST', 'Invalid query string', parsed.error.issues);
+    const query = parsed.data;
+    return cached(c, `patch-notes|${JSON.stringify(query)}`, () =>
+      patchNotes.patchNotes(db, query),
     );
   });
 
