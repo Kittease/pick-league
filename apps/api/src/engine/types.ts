@@ -171,8 +171,9 @@ export interface ItemSwapRow {
 }
 
 /**
- * stats_champion_mastery (0018_mastery_curve.sql): games of champion + role by the player's
- * mastery points on the champion (`bucket` 0–6, see `ENGINE_CONFIG.mastery.bucketEdges`).
+ * stats_champion_mastery (0018_mastery_curve.sql, pre-game masteries since 0035): games of
+ * champion + role by the player's mastery points on the champion (`bucket` 0–6, see
+ * `ENGINE_CONFIG.mastery.bucketEdges`).
  */
 export interface MasteryRow extends GamesWins {
   patch: PatchId;

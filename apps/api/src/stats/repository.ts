@@ -996,7 +996,7 @@ export async function loadGameLength(
   );
 }
 
-/** Mastery rows (stats_champion_mastery, 0018) of every champion and role on `patches`. */
+/** Mastery rows (stats_champion_mastery, 0018 / 0035) of every champion and role on `patches`. */
 export async function loadMasteryRows(q: Queryable, patches: PatchId[]): Promise<MasteryRow[]> {
   const rows = await q<
     {

@@ -6,7 +6,9 @@
  * view by view as the API did then; the other is refreshed by `refreshStats`. After every step
  * each stats relation must hold the same rows in both. A migration that changes what a view holds
  * on purpose has to move the reference (`REFERENCE_BEFORE`) with it, or compare what the old view
- * held (`stats_side_wins`, per platform since 0034, is summed over the platforms).
+ * held (`stats_side_wins`, per platform since 0034, is summed over the platforms;
+ * `stats_champion_mastery`, pre-game masteries only since 0035, is the query of 0035 on the
+ * reference's tables).
  * Needs DATABASE_URL_TEST; uses its own two databases.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
@@ -81,6 +83,22 @@ const COMPARED: Record<string, { reference: string; current: string }> = {
     reference: 'stats_side_wins',
     current: `(SELECT patch, team_id, sum(games)::int AS games, sum(wins)::int AS wins
                FROM stats_side_wins GROUP BY patch, team_id)`,
+  },
+  // Masteries fetched before the game only since 0035: the reference's view counts every row,
+  // so its side is the query of 0035 on its tables.
+  stats_champion_mastery: {
+    reference: `(SELECT m.patch, p.position, p.champion_id,
+                        width_bucket(cm.points, ARRAY[5000, 20000, 50000, 100000, 200000, 500000])
+                          ::smallint AS bucket,
+                        count(*)::int AS games, count(*) FILTER (WHERE p.win)::int AS wins
+                 FROM participants p
+                 JOIN matches m ON m.id = p.match_id
+                 JOIN champion_masteries cm
+                   ON cm.puuid = p.puuid AND cm.champion_id = p.champion_id
+                 WHERE NOT m.is_remake AND p.position IS NOT NULL
+                   AND cm.last_played_at < m.started_at
+                 GROUP BY 1, 2, 3, 4)`,
+    current: 'stats_champion_mastery',
   },
 };
 
@@ -162,7 +180,10 @@ describe.skipIf(!URL_)('incremental stats tables vs a full recomputation (Postgr
         WHERE puuid LIKE ${`synthetic-puuid-${like}`}`;
       await target`
         INSERT INTO champion_masteries (puuid, champion_id, level, points, last_played_at)
-        SELECT p.puuid, p.champion_id, 5, abs(hashtext('points' || p.puuid)) % 700000, now()
+        SELECT p.puuid, p.champion_id, 5, abs(hashtext('points' || p.puuid)) % 700000,
+               -- Half fetched before the games (counted by the mastery view), half after.
+               CASE WHEN abs(hashtext('before' || p.puuid)) % 2 = 0
+                    THEN timestamptz '2020-01-01' ELSE now() END
         FROM participants p
         WHERE p.match_id LIKE ${like} AND abs(hashtext('mastery' || p.puuid)) % 2 = 0`;
     });

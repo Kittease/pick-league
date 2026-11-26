@@ -284,17 +284,18 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
         'CHALLENGER', 'GRANDMASTER', 'GRANDMASTER', 'GRANDMASTER', 'MASTER', 'MASTER', 'MASTER',
         'MASTER', 'DIAMOND', NULL
       ])[1 + abs(hashtext(puuid)) % 10]::solo_tier`;
-    // Mastery of the champion each synthetic player played: seven levels spread by a hash; the
-    // planted effect is that Leona's losers are beginners. Braum's players have no mastery row.
+    // Mastery of the champion each synthetic player played, fetched before the games (their last
+    // game on it ended in 2020): seven levels spread by a hash; the planted effect is that
+    // Leona's losers are beginners. Braum's players' masteries were fetched after their games
+    // (last played now): the mastery view leaves them out.
     await db`
       INSERT INTO champion_masteries (puuid, champion_id, level, points, last_played_at)
       SELECT p.puuid, p.champion_id, 5,
              CASE WHEN p.champion_id = 89 AND NOT p.win THEN 1000
                   ELSE (ARRAY[2000, 12000, 30000, 70000, 150000, 300000, 900000])
                          [1 + abs(hashtext(p.puuid)) % 7] END,
-             now()
-      FROM participants p
-      WHERE p.champion_id <> 201`;
+             CASE WHEN p.champion_id = 201 THEN now() ELSE timestamptz '2020-01-01' END
+      FROM participants p`;
     await refreshStats(db, { force: true });
     cache = new TtlCache(60_000);
     app = createApp({ db, cache, limiter: null, log: silentLogger });
@@ -1306,7 +1307,7 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       JOIN matches m ON m.id = p.match_id
       JOIN champion_masteries cm ON cm.puuid = p.puuid AND cm.champion_id = p.champion_id
       WHERE m.patch = ${CUR} AND NOT m.is_remake AND p.champion_id = 89
-        AND p.position = 'UTILITY' AND cm.points < 5000`;
+        AND p.position = 'UTILITY' AND cm.points < 5000 AND cm.last_played_at < m.started_at`;
     const bucket0 = leona.find((r) => r.bucket === 0);
     expect(expected?.games).toBeGreaterThan(0);
     expect(bucket0).toMatchObject({ games: expected?.games, wins: expected?.wins });
@@ -1316,7 +1317,10 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
       (r) => r.championId === 89 && r.position === 'UTILITY',
     )?.games;
     expect(leona.reduce((s, r) => s + r.games, 0)).toBe(leonaGames ?? -1);
-    // Braum's players have no mastery row: left out.
+    // Braum's players' masteries were fetched after their games: left out.
+    expect(
+      (await db`SELECT count(*)::int AS n FROM champion_masteries WHERE champion_id = 201`)[0]?.n,
+    ).toBeGreaterThan(0);
     const all = await repo.loadMasteryRows(db, [CUR, PREV]);
     expect(all.some((r) => r.championId === PLANTED.rareOnCurrent)).toBe(false);
     for (const r of all) {

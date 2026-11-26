@@ -87,10 +87,10 @@ export const STATS_REFRESH_ORDER: readonly StatsRefreshStep[] = [
   // Results per side and platform, for the draft evaluation (0034_side_wins_per_platform.sql).
   { view: 'stats_side_wins', concurrent: true },
   // Win rate by the player's mastery of the champion, for the picks' mastery term
-  // (0018_mastery_curve.sql). Since champion_masteries only keeps the champions of stored games
-  // (0027), the planner reads each mastery row's player through the puuid index of participants,
-  // expecting one row where a tracked player has hundreds: over 6 minutes on 2026-11-23, against
-  // 7 s with hash joins.
+  // (0018_mastery_curve.sql; masteries fetched before the game since 0035_mastery_pre_game.sql).
+  // Since champion_masteries only keeps the champions of stored games (0027), the planner reads
+  // each mastery row's player through the puuid index of participants, expecting one row where a
+  // tracked player has hundreds: over 6 minutes on 2026-11-23, against 7 s with hash joins.
   { view: 'stats_champion_mastery', concurrent: true, noNestedLoops: true },
   // Tier list filters by server and rank (0006_tierlist_filters.sql). Recomputed whole: the rank
   // is the player's current one (players.solo_tier), which changes without any new match.
