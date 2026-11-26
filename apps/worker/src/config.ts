@@ -27,6 +27,8 @@ export interface WorkerConfig {
   outsideMasterChecksPerHour: number;
   /** Masteries of a tracked player are fetched again after this many days (default 3). */
   masteryRefreshDays: number;
+  /** Read each new game build from Community Dragon and store its changes (default true). */
+  patchChanges: boolean;
 }
 
 export class ConfigError extends Error {
@@ -107,6 +109,13 @@ export function loadConfig(env: Record<string, string | undefined>): WorkerConfi
     );
   }
 
+  const rawPatchChanges = (env.PATCH_CHANGES ?? '').trim().toLowerCase() || 'true';
+  let patchChanges = true;
+  if (rawPatchChanges === 'false' || rawPatchChanges === '0') patchChanges = false;
+  else if (rawPatchChanges !== 'true' && rawPatchChanges !== '1') {
+    problems.push(`PATCH_CHANGES must be true or false (got "${rawPatchChanges}")`);
+  }
+
   if (problems.length > 0) {
     throw new ConfigError(`Invalid worker configuration:\n  - ${problems.join('\n  - ')}`);
   }
@@ -120,5 +129,6 @@ export function loadConfig(env: Record<string, string | undefined>): WorkerConfi
     diamondMaxTracked,
     outsideMasterChecksPerHour,
     masteryRefreshDays,
+    patchChanges,
   };
 }

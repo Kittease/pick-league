@@ -2,12 +2,14 @@
  * PickLeague worker: crawls high-elo ranked games from the Riot API into Postgres.
  * See docs/architecture.md ("Worker"). Config via env: RIOT_API_KEY, DATABASE_URL, PLATFORMS,
  * LOG_LEVEL, COLLECT_PREVIOUS_PATCH, LISTING_SKIP, DIAMOND_MAX_TRACKED,
- * OUTSIDE_MASTER_CHECKS_PER_HOUR, MASTERY_REFRESH_DAYS.
+ * OUTSIDE_MASTER_CHECKS_PER_HOUR, MASTERY_REFRESH_DAYS, PATCH_CHANGES.
  */
 import { createDb, migrate } from '@pick-league/db';
 import { createDdragonClient } from '@pick-league/shared';
 import { ConfigError, loadConfig } from './config.ts';
 import { createLogger, errorMessage } from './log.ts';
+import { createCdragonClient } from './patch-changes/cdragon.ts';
+import { PatchChangesJob } from './patch-changes/job.ts';
 import { PatchTracker } from './patches.ts';
 import { RiotClient } from './riot/client.ts';
 import { PlatformWorker } from './scheduler/platform-worker.ts';
@@ -39,6 +41,7 @@ log.info('collection settings', {
   diamondMaxTracked: config.diamondMaxTracked,
   outsideMasterChecksPerHour: config.outsideMasterChecksPerHour,
   masteryRefreshDays: config.masteryRefreshDays,
+  patchChanges: config.patchChanges,
 });
 
 const riot = new RiotClient({ apiKey: config.riotApiKey, log });
@@ -108,6 +111,13 @@ const progressTimer = setInterval(async () => {
   }
 }, PROGRESS_INTERVAL_MS);
 
+// Patch changes: a side job on Community Dragon. Its failures are logged, never stop the crawl.
+const patchChanges = config.patchChanges
+  ? new PatchChangesJob(db, createCdragonClient(), createDdragonClient(), { log })
+      .run(signal)
+      .catch((err) => log.error('patch changes job stopped', { error: errorMessage(err) }))
+  : Promise.resolve();
+
 let exitCode = 0;
 await Promise.all(
   [patches.run(signal), ...workers.map((w) => w.start(signal))].map((task) =>
@@ -119,6 +129,7 @@ await Promise.all(
   ),
 );
 
+await patchChanges;
 clearInterval(progressTimer);
 await db.end({ timeout: 5 });
 log.info('stopped');

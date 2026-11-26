@@ -109,3 +109,11 @@ describe('loadConfig: the daily pass is gone', () => {
     expect(config).not.toHaveProperty('untrackedMasterListingStartHour');
   });
 });
+
+describe('loadConfig: patch changes', () => {
+  test('PATCH_CHANGES: on by default', () => {
+    expect(loadConfig(VALID).patchChanges).toBe(true);
+    expect(loadConfig({ ...VALID, PATCH_CHANGES: 'false' }).patchChanges).toBe(false);
+    expect(() => loadConfig({ ...VALID, PATCH_CHANGES: 'maybe' })).toThrow('PATCH_CHANGES');
+  });
+});
