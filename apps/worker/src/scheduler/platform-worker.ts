@@ -325,7 +325,9 @@ export const DEFAULT_SCHEDULER_OPTIONS: SchedulerOptions = {
     listing: 2,
     match: 3,
     daily: 1,
-    enrichment: 2,
+    // Four: each enrichment is one or two Riot round trips and a transaction, so two loops left
+    // the platform host's slots to the checks below them (about 950 an hour on KR, Nov 2026).
+    enrichment: 4,
     outsideCheck: 2,
     // Three at a time: with one, the listings of the outside Masters (1.2 new matches each on
     // KR on 2026-11-23) left a sixth of the regional budget unused while thousands waited.
