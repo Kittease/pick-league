@@ -1,0 +1,93 @@
+{
+  "Characters/Azir/CharacterRecords/Root": {
+    "mCharacterName": "Azir",
+    "baseHPModifiable": {
+      "baseValue": 575.0,
+      "__type": "ModifiableFloat"
+    },
+    "hpPerLevelModifiable": {
+      "baseValue": 108.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseStaticHPRegenModifiable": {
+      "baseValue": 1.399999976158142,
+      "__type": "ModifiableFloat"
+    },
+    "hpRegenPerLevelModifiable": {
+      "baseValue": 0.15000000596046448,
+      "__type": "ModifiableFloat"
+    },
+    "healthBarHeight": 95.0,
+    "baseDamageModifiable": {
+      "baseValue": 56.0,
+      "__type": "ModifiableFloat"
+    },
+    "damagePerLevelModifiable": {
+      "baseValue": 3.5,
+      "__type": "ModifiableFloat"
+    },
+    "baseArmorModifiable": {
+      "baseValue": 25.0,
+      "__type": "ModifiableFloat"
+    },
+    "armorPerLevelModifiable": {
+      "baseValue": 5.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseMR": {
+      "baseValue": 30.0,
+      "__type": "ModifiableFloat"
+    },
+    "mrPerLevel": {
+      "baseValue": 1.2999999523162842,
+      "__type": "ModifiableFloat"
+    },
+    "baseMoveSpeedModifiable": {
+      "baseValue": 330.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackRangeModifiable": {
+      "baseValue": 550.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedModifiable": {
+      "baseValue": 0.625,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedRatioModifiable": {
+      "baseValue": 0.6940000057220459,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedPerLevelModifiable": {
+      "baseValue": 5.0,
+      "__type": "ModifiableFloat"
+    },
+    "spellNames": [
+      "AzirQWrapperAbility/AzirQWrapper",
+      "AzirWAbility/AzirW",
+      "AzirEWrapperAbility/AzirEWrapper",
+      "AzirRAbility/AzirR"
+    ],
+    "spells": [
+      "Characters/Azir/Spells/AzirQWrapperAbility/AzirQWrapper",
+      "Characters/Azir/Spells/AzirWAbility/AzirW",
+      "Characters/Azir/Spells/AzirEWrapperAbility/AzirEWrapper",
+      "Characters/Azir/Spells/AzirRAbility/AzirR"
+    ],
+    "mAbilities": [
+      "Characters/Azir/Spells/AzirQWrapperAbility",
+      "Characters/Azir/Spells/AzirWAbility",
+      "Characters/Azir/Spells/AzirEWrapperAbility",
+      "Characters/Azir/Spells/AzirRAbility",
+      "Characters/Azir/Spells/AzirPassiveAbility"
+    ],
+    "passiveSpell": "AzirPassive",
+    "characterToolData": {
+      "{d1df3c3f}": "mage",
+      "{f693457b}": "marksman",
+      "{aa75da9d}": false
+    },
+    "mCharacterPassiveSpell": "Characters/Azir/Spells/AzirPassiveAbility/AzirPassive",
+    "__type": "CharacterRecord"
+  }
+}

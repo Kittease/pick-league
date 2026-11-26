@@ -1,0 +1,350 @@
+{
+  "Characters/Sona/Spells/SonaWAbility": {
+    "mRootSpell": "Characters/Sona/Spells/SonaWAbility/SonaW",
+    "mChildSpells": [
+      "Characters/Sona/Spells/SonaWAbility/SonaW",
+      "Characters/Sona/Spells/SonaWAbility/SonaWShield",
+      "Characters/Sona/Spells/SonaWAbility/SonaWMissile",
+      "Characters/Sona/Spells/SonaWAbility/SonaWPassiveDebuff"
+    ],
+    "mLifetimeManuallyManaged": true,
+    "mName": "SonaWAbility",
+    "AbilityTraits": 4,
+    "__type": "AbilityObject"
+  },
+  "Characters/Sona/Spells/SonaWAbility/SonaW": {
+    "ObjectName": "SonaW",
+    "objectPath": "Characters/Sona/Spells/SonaWAbility/SonaW",
+    "mScriptName": "SonaW",
+    "mSpell": {
+      "flags": 4,
+      "mAffectsTypeFlags": 8193,
+      "mRequiredUnitTags": {
+        "mObjectTagList": ["{ea595ca6}"],
+        "__type": "ObjectTags"
+      },
+      "DataValues": [
+        {
+          "name": "BaseHeal",
+          "values": [15.0, 30.0, 45.0, 60.0, 75.0, 90.0, 105.0],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BaseShield",
+          "values": [5.0, 25.0, 45.0, 65.0, 85.0, 105.0, 125.0],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "AuraDuration",
+          "values": [3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "AuraRange",
+          "values": [400.0, 400.0, 400.0, 400.0, 400.0, 400.0, 400.0],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BaseGlobalCD",
+          "values": [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "DiminuendoDuration",
+          "values": [3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "HealRange",
+          "values": [1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ShieldDuration",
+          "values": [1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "AccelerandoShieldBreakpoint",
+          "values": [5.0, 25.0, 45.0, 65.0, 85.0, 105.0, 125.0],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "HealRatio",
+          "values": [
+            0.30000001192092896, 0.30000001192092896, 0.30000001192092896, 0.30000001192092896,
+            0.30000001192092896, 0.30000001192092896, 0.30000001192092896
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ShieldRatio",
+          "values": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25],
+          "__type": "SpellDataValue"
+        }
+      ],
+      "DataValuesModeOverride": {
+        "ARAM": {
+          "SpellDataValues": [
+            {
+              "name": "BaseShield",
+              "values": [55.0, 65.0, 75.0, 85.0, 95.0, 105.0, 115.0],
+              "__type": "SpellDataValue"
+            },
+            {
+              "name": "HealRatio",
+              "values": [
+                0.20000000298023224, 0.20000000298023224, 0.20000000298023224, 0.20000000298023224,
+                0.20000000298023224, 0.20000000298023224, 0.20000000298023224
+              ],
+              "__type": "SpellDataValue"
+            }
+          ],
+          "__type": "SpellDataValueVector"
+        }
+      },
+      "mSpellCalculations": {
+        "TotalHeal": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseHeal",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mDataValue": "HealRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "TotalShield": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseShield",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mDataValue": "ShieldRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "TotalDiminuendoWeakenPercent": {
+          "mFormulaParts": [
+            {
+              "mNumber": 0.25,
+              "__type": "NumberCalculationPart"
+            },
+            {
+              "mCoefficient": 0.00039999998989515007,
+              "__type": "StatByCoefficientCalculationPart"
+            }
+          ],
+          "mDisplayAsPercent": true,
+          "__type": "GameCalculation"
+        }
+      },
+      "spellCastTime": 0.25,
+      "spellTotalTime": 1.0,
+      "mCantCancelWhileWindingUp": true,
+      "castConeDistance": 100.0,
+      "mana": [80.0, 85.0, 90.0, 95.0, 100.0, 105.0],
+      "manaValues": {
+        "values": [80.0, 85.0, 90.0, 95.0, 100.0, 105.0],
+        "{0a3e0478}": 80.0,
+        "__type": "{630af303}"
+      },
+      "mCastingBreaksStealth": true,
+      "mClientData": {
+        "mTooltipData": {
+          "mLists": {
+            "LevelUp": {
+              "levelCount": 5
+            }
+          }
+        }
+      },
+      "__type": "SpellDataResource"
+    },
+    "mBuff": {
+      "mTooltipData": {
+        "mObjectName": "SonaW",
+        "mFormat": "{b34f999a}",
+        "mLocKeys": {
+          "keyName": "Spell_SonaW_Name",
+          "keyTooltip": "Buff_SonaW_Tooltip"
+        },
+        "__type": "TooltipInstanceBuff"
+      },
+      "__type": "BuffData"
+    },
+    "BotData": {
+      "DamageTag": 1,
+      "{ec17e271}": [
+        {
+          "EffectTag": 8,
+          "EffectCalculation": {
+            "mFormulaParts": [
+              {
+                "mSpellCalculationKey": "TotalHeal",
+                "__type": "{f3cbe7b2}"
+              }
+            ],
+            "__type": "GameCalculation"
+          },
+          "__type": "{b09016f6}"
+        },
+        {
+          "EffectTag": 16,
+          "EffectCalculation": {
+            "mFormulaParts": [
+              {
+                "mSpellCalculationKey": "TotalHeal",
+                "__type": "{f3cbe7b2}"
+              }
+            ],
+            "__type": "GameCalculation"
+          },
+          "__type": "{b09016f6}"
+        },
+        {
+          "EffectTag": 262144,
+          "EffectCalculation": {
+            "mFormulaParts": [
+              {
+                "mSpellCalculationKey": "TotalShield",
+                "__type": "{f3cbe7b2}"
+              }
+            ],
+            "__type": "GameCalculation"
+          },
+          "__type": "{b09016f6}"
+        },
+        {
+          "EffectTag": 524288,
+          "EffectCalculation": {
+            "mFormulaParts": [
+              {
+                "mSpellCalculationKey": "TotalShield",
+                "__type": "{f3cbe7b2}"
+              }
+            ],
+            "__type": "GameCalculation"
+          },
+          "__type": "{b09016f6}"
+        }
+      ],
+      "{38382c53}": [
+        {
+          "{e38f54f7}": 8192,
+          "{0717e686}": false,
+          "__type": "{150d1b92}"
+        }
+      ],
+      "__type": "BotsSpellData"
+    },
+    "__type": "SpellObject"
+  },
+  "Characters/Sona/CharacterRecords/Root": {
+    "mCharacterName": "Sona",
+    "baseHPModifiable": {
+      "baseValue": 550.0,
+      "__type": "ModifiableFloat"
+    },
+    "hpPerLevelModifiable": {
+      "baseValue": 91.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseStaticHPRegenModifiable": {
+      "baseValue": 1.100000023841858,
+      "__type": "ModifiableFloat"
+    },
+    "hpRegenPerLevelModifiable": {
+      "baseValue": 0.10999999940395355,
+      "__type": "ModifiableFloat"
+    },
+    "healthBarHeight": 113.0,
+    "baseDamageModifiable": {
+      "baseValue": 49.0,
+      "__type": "ModifiableFloat"
+    },
+    "damagePerLevelModifiable": {
+      "baseValue": 3.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseArmorModifiable": {
+      "baseValue": 26.0,
+      "__type": "ModifiableFloat"
+    },
+    "armorPerLevelModifiable": {
+      "baseValue": 4.199999809265137,
+      "__type": "ModifiableFloat"
+    },
+    "baseMR": {
+      "baseValue": 30.0,
+      "__type": "ModifiableFloat"
+    },
+    "mrPerLevel": {
+      "baseValue": 1.2999999523162842,
+      "__type": "ModifiableFloat"
+    },
+    "baseMoveSpeedModifiable": {
+      "baseValue": 325.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackRangeModifiable": {
+      "baseValue": 550.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedModifiable": {
+      "baseValue": 0.6439999938011169,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedRatioModifiable": {
+      "baseValue": 0.6439999938011169,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedPerLevelModifiable": {
+      "baseValue": 2.299999952316284,
+      "__type": "ModifiableFloat"
+    },
+    "spellNames": [
+      "SonaQAbility/SonaQ",
+      "SonaWAbility/SonaW",
+      "SonaEAbility/SonaE",
+      "SonaRAbility/SonaR"
+    ],
+    "spells": [
+      "Characters/Sona/Spells/SonaQAbility/SonaQ",
+      "Characters/Sona/Spells/SonaWAbility/SonaW",
+      "Characters/Sona/Spells/SonaEAbility/SonaE",
+      "Characters/Sona/Spells/SonaRAbility/SonaR"
+    ],
+    "mAbilities": [
+      "Characters/Sona/Spells/SonaQAbility",
+      "Characters/Sona/Spells/SonaWAbility",
+      "Characters/Sona/Spells/SonaEAbility",
+      "Characters/Sona/Spells/SonaPassiveAbility",
+      "Characters/Sona/Spells/SonaRAbility"
+    ],
+    "passiveSpell": "SonaPassive",
+    "characterToolData": {},
+    "mCharacterPassiveSpell": "Characters/Sona/Spells/SonaPassiveAbility/SonaPassive",
+    "mCharacterPassiveBuffs": [
+      {
+        "mParentPassiveBuff": "Characters/Sona/Spells/SonaPassiveAbility/SonaPassive",
+        "__type": "CharacterPassiveData"
+      },
+      {
+        "mParentPassiveBuff": "Characters/Sona/Spells/SonaSkin06Manager",
+        "SkinFilter": {
+          "skinIds": [6],
+          "__type": "SkinFilterData"
+        },
+        "__type": "CharacterPassiveData"
+      }
+    ],
+    "__type": "CharacterRecord"
+  }
+}

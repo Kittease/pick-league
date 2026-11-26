@@ -1,0 +1,129 @@
+{
+  "{670c0b91}": {
+    "RecSpellRankUpInfos": [
+      {
+        "MapId": 11,
+        "Position": "jungle",
+        "{5b968ffb}": true,
+        "mEarlyLevelOverrides": [3, 0, 1, 2],
+        "__type": "RecSpellRankUpInfo"
+      },
+      {
+        "MapId": 11,
+        "Position": "middle",
+        "{5b968ffb}": true,
+        "mEarlyLevelOverrides": [3, 0, 1, 2],
+        "__type": "RecSpellRankUpInfo"
+      },
+      {
+        "MapId": 11,
+        "Position": "Top",
+        "IsDefaultRecommendation": true,
+        "{5b968ffb}": true,
+        "mEarlyLevelOverrides": [3, 0, 1, 2],
+        "__type": "RecSpellRankUpInfo"
+      },
+      {
+        "MapId": 12,
+        "Position": "None",
+        "{5b968ffb}": true,
+        "mDefaultPriority": [3, 0, 2, 1],
+        "mEarlyLevelOverrides": [3, 0, 1, 2],
+        "__type": "RecSpellRankUpInfo"
+      }
+    ],
+    "__type": "RecSpellRankUpInfoList"
+  },
+  "Characters/Jayce/CharacterRecords/Root": {
+    "mCharacterName": "Jayce",
+    "baseHPModifiable": {
+      "baseValue": 590.0,
+      "__type": "ModifiableFloat"
+    },
+    "hpPerLevelModifiable": {
+      "baseValue": 109.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseStaticHPRegenModifiable": {
+      "baseValue": 1.2000000476837158,
+      "__type": "ModifiableFloat"
+    },
+    "hpRegenPerLevelModifiable": {
+      "baseValue": 0.11999999731779099,
+      "__type": "ModifiableFloat"
+    },
+    "healthBarHeight": 120.0,
+    "baseDamageModifiable": {
+      "baseValue": 59.0,
+      "__type": "ModifiableFloat"
+    },
+    "damagePerLevelModifiable": {
+      "baseValue": 4.25,
+      "__type": "ModifiableFloat"
+    },
+    "baseArmorModifiable": {
+      "baseValue": 22.0,
+      "__type": "ModifiableFloat"
+    },
+    "armorPerLevelModifiable": {
+      "baseValue": 5.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseMR": {
+      "baseValue": 30.0,
+      "__type": "ModifiableFloat"
+    },
+    "mrPerLevel": {
+      "baseValue": 1.2999999523162842,
+      "__type": "ModifiableFloat"
+    },
+    "baseMoveSpeedModifiable": {
+      "baseValue": 335.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackRangeModifiable": {
+      "baseValue": 125.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedModifiable": {
+      "baseValue": 0.6579999923706055,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedRatioModifiable": {
+      "baseValue": 0.6579999923706055,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedPerLevelModifiable": {
+      "baseValue": 3.0,
+      "__type": "ModifiableFloat"
+    },
+    "spellNames": [
+      "JayceToTheSkiesAbility/JayceToTheSkies",
+      "JayceStaticFieldAbility/JayceStaticField",
+      "JayceThunderingBlowAbility/JayceThunderingBlow",
+      "JayceStanceHtGAbility/JayceStanceHtG"
+    ],
+    "spells": [
+      "Characters/Jayce/Spells/JayceToTheSkiesAbility/JayceToTheSkies",
+      "Characters/Jayce/Spells/JayceStaticFieldAbility/JayceStaticField",
+      "Characters/Jayce/Spells/JayceThunderingBlowAbility/JayceThunderingBlow",
+      "Characters/Jayce/Spells/JayceStanceHtGAbility/JayceStanceHtG"
+    ],
+    "mAbilities": [
+      "Characters/Jayce/Spells/JayceStanceHtGAbility",
+      "Characters/Jayce/Spells/JayceToTheSkiesAbility",
+      "Characters/Jayce/Spells/JayceStaticFieldAbility",
+      "Characters/Jayce/Spells/JayceThunderingBlowAbility",
+      "Characters/Jayce/Spells/JaycePassiveAbility",
+      "Characters/Jayce/Spells/JayceAccelerationGateAbility",
+      "Characters/Jayce/Spells/JayceHyperChargeAbility",
+      "Characters/Jayce/Spells/JayceShockBlastAbility"
+    ],
+    "passiveSpell": "JaycePassive",
+    "characterToolData": {
+      "{aa75da9d}": false
+    },
+    "mCharacterPassiveSpell": "Characters/Jayce/Spells/JaycePassiveAbility/JaycePassive",
+    "__type": "CharacterRecord"
+  }
+}

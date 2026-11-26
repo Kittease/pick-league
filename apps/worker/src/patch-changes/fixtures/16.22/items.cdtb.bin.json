@@ -1,0 +1,243 @@
+{
+  "Items/6699": {
+    "mDisplayName": "Item_6699_Name",
+    "itemID": 6699,
+    "maxStack": 1,
+    "mItemGroups": ["Items/ItemGroups/Default", "{b069b403}"],
+    "mItemAdviceAttributes": ["{0fe5f3f2}", "{72256343}", "{705ee247}"],
+    "price": 963,
+    "mItemCalloutSpectator": true,
+    "mCanBeSold": true,
+    "epicness": 5,
+    "recipeItemLinks": ["Items/2020", "Items/1036", "Items/1036"],
+    "mDataValues": [
+      {
+        "mName": "PercentCurrentHPMelee",
+        "mValue": 9.0,
+        "__type": "ItemDataValue"
+      },
+      {
+        "mName": "PercentCurrentHPRanged",
+        "mValue": 7.0,
+        "__type": "ItemDataValue"
+      },
+      {
+        "mName": "LethalityBonusModMelee",
+        "mValue": 15.0,
+        "__type": "ItemDataValue"
+      },
+      {
+        "mName": "LethalityBonusModRanged",
+        "mValue": 12.0,
+        "__type": "ItemDataValue"
+      },
+      {
+        "mName": "LethalityBonusDuration",
+        "mValue": 4.0,
+        "__type": "ItemDataValue"
+      },
+      {
+        "mName": "LethalityAmount",
+        "mValue": 10.0,
+        "__type": "ItemDataValue"
+      },
+      {
+        "mName": "NonChampCap",
+        "mValue": 200.0,
+        "__type": "ItemDataValue"
+      }
+    ],
+    "StringCalculations": {
+      "PercentHPMeleeRangedSplit": {
+        "MeleeResult": "@PercentCurrentHPMelee@",
+        "RangedResult": "@PercentCurrentHPRanged@",
+        "DefaultResult": "@PercentCurrentHPMelee@",
+        "__type": "{4750ceb6}"
+      },
+      "LethalityBonusModMeleeRangedSplit": {
+        "MeleeResult": "@LethalityBonusModMelee@",
+        "RangedResult": "@LethalityBonusModRanged@",
+        "DefaultResult": "@LethalityBonusModMelee@",
+        "__type": "{4750ceb6}"
+      }
+    },
+    "mAbilityHasteMod": 10.0,
+    "mFlatPhysicalDamageMod": 55.0,
+    "PhysicalLethality": 10.0,
+    "mCategories": ["Damage", "Active", "CooldownReduction", "ArmorPenetration", "AbilityHaste"],
+    "mItemDataAvailability": {
+      "mInStore": true,
+      "__type": "ItemDataAvailability"
+    },
+    "mItemAttributes": [4],
+    "LastMajorChangeMajorPatchVersion": 16,
+    "LastMajorChangeMinorPatchVersion": 9,
+    "mVFXResourceResolver": {
+      "resourceMap": {
+        "6693_buff": "Items/6693/Particles/6693_buff",
+        "6693_Damage": "Items/6693/Particles/6693_Damage",
+        "{a9018a62}": "Items/6699/Particles/6699_Item_Proc",
+        "6699_Max_Charge_Flash": "Items/6699/Particles/6699_Max_Charge_Flash"
+      },
+      "__type": "ResourceResolver"
+    },
+    "__type": "ItemData"
+  },
+  "Items/4015": {
+    "mDisplayName": "Item_4015_Name",
+    "itemID": 4015,
+    "maxStack": 1,
+    "mItemGroups": [
+      "Items/ItemGroups/Default",
+      "Items/ItemGroups/LastWhisper",
+      "Items/ItemGroups/VoidPen",
+      "Items/ItemGroups/ArenaLegendaryItems"
+    ],
+    "price": 2500,
+    "mCanBeSold": true,
+    "epicness": 5,
+    "mDataValues": [
+      {
+        "mName": "MaxBonusDamagePercent",
+        "mValue": 0.15000000596046448,
+        "__type": "ItemDataValue"
+      },
+      {
+        "mName": "MaxHealthDifference",
+        "mValue": 3000.0,
+        "__type": "ItemDataValue"
+      }
+    ],
+    "mPercentMovementSpeedMod": 0.05000000074505806,
+    "mPercentArmorPenetrationMod": 0.2199999988079071,
+    "mPercentMagicPenetrationMod": 0.30000001192092896,
+    "mFlatMagicDamageMod": 60.0,
+    "sellBackModifier": 0.5,
+    "mCategories": [
+      "SpellDamage",
+      "CooldownReduction",
+      "NonbootsMovement",
+      "MagicPenetration",
+      "ArmorPenetration",
+      "AbilityHaste"
+    ],
+    "mItemDataAvailability": {
+      "mInStore": true,
+      "__type": "ItemDataAvailability"
+    },
+    "mItemAttributes": [16],
+    "LastMajorChangeMajorPatchVersion": 14,
+    "LastMajorChangeMinorPatchVersion": 1,
+    "__type": "ItemData"
+  },
+  "Items/1001": {
+    "mDisplayName": "Item_1001_Name",
+    "itemID": 1001,
+    "maxStack": 1,
+    "mItemGroups": [
+      "Items/ItemGroups/Default",
+      "Items/ItemGroups/Boots",
+      "Items/ItemGroups/BootsOfSpeed",
+      "Items/ItemGroups/BootsWithoutActives"
+    ],
+    "price": 300,
+    "mCanBeSold": true,
+    "mFlatMovementSpeedMod": 25.0,
+    "mCategories": ["Boots"],
+    "mItemDataAvailability": {
+      "mInStore": true,
+      "__type": "ItemDataAvailability"
+    },
+    "mItemAttributes": [32],
+    "__type": "ItemData"
+  },
+  "Items/226699": {
+    "mDisplayName": "Item_6699_Name",
+    "itemID": 226699,
+    "maxStack": 1,
+    "mItemGroups": ["Items/ItemGroups/Default", "{b069b403}"],
+    "mItemAdviceAttributes": ["{0fe5f3f2}", "{72256343}", "{705ee247}"],
+    "price": 963,
+    "mItemCalloutSpectator": true,
+    "mCanBeSold": true,
+    "epicness": 5,
+    "recipeItemLinks": ["Items/2020", "Items/1036", "Items/1036"],
+    "mDataValues": [
+      {
+        "mName": "PercentCurrentHPMelee",
+        "mValue": 9.0,
+        "__type": "ItemDataValue"
+      },
+      {
+        "mName": "PercentCurrentHPRanged",
+        "mValue": 7.0,
+        "__type": "ItemDataValue"
+      },
+      {
+        "mName": "LethalityBonusModMelee",
+        "mValue": 15.0,
+        "__type": "ItemDataValue"
+      },
+      {
+        "mName": "LethalityBonusModRanged",
+        "mValue": 12.0,
+        "__type": "ItemDataValue"
+      },
+      {
+        "mName": "LethalityBonusDuration",
+        "mValue": 4.0,
+        "__type": "ItemDataValue"
+      },
+      {
+        "mName": "LethalityAmount",
+        "mValue": 10.0,
+        "__type": "ItemDataValue"
+      },
+      {
+        "mName": "NonChampCap",
+        "mValue": 200.0,
+        "__type": "ItemDataValue"
+      }
+    ],
+    "StringCalculations": {
+      "PercentHPMeleeRangedSplit": {
+        "MeleeResult": "@PercentCurrentHPMelee@",
+        "RangedResult": "@PercentCurrentHPRanged@",
+        "DefaultResult": "@PercentCurrentHPMelee@",
+        "__type": "{4750ceb6}"
+      },
+      "LethalityBonusModMeleeRangedSplit": {
+        "MeleeResult": "@LethalityBonusModMelee@",
+        "RangedResult": "@LethalityBonusModRanged@",
+        "DefaultResult": "@LethalityBonusModMelee@",
+        "__type": "{4750ceb6}"
+      }
+    },
+    "mAbilityHasteMod": 10.0,
+    "mFlatPhysicalDamageMod": 55.0,
+    "PhysicalLethality": 10.0,
+    "mCategories": ["Damage", "Active", "CooldownReduction", "ArmorPenetration", "AbilityHaste"],
+    "mItemDataAvailability": {
+      "mInStore": true,
+      "__type": "ItemDataAvailability"
+    },
+    "mItemAttributes": [4],
+    "LastMajorChangeMajorPatchVersion": 16,
+    "LastMajorChangeMinorPatchVersion": 9,
+    "mVFXResourceResolver": {
+      "resourceMap": {
+        "6693_buff": "Items/6693/Particles/6693_buff",
+        "6693_Damage": "Items/6693/Particles/6693_Damage",
+        "{a9018a62}": "Items/6699/Particles/6699_Item_Proc",
+        "6699_Max_Charge_Flash": "Items/6699/Particles/6699_Max_Charge_Flash"
+      },
+      "__type": "ResourceResolver"
+    },
+    "__type": "ItemData"
+  },
+  "{0123abcd}": {
+    "__type": "VfxSystemDefinitionData",
+    "particleName": "x",
+    "mScale": 1.0
+  }
+}

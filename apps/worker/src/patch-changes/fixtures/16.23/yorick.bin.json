@@ -1,0 +1,343 @@
+{
+  "Characters/Yorick/Spells/YorickPassiveAICFHR": {
+    "ObjectName": "YorickPassiveAICFHR",
+    "objectPath": "Characters/Yorick/Spells/YorickPassiveAICFHR",
+    "mScriptName": "YorickPassiveAICFHR",
+    "mBuff": {
+      "__type": "BuffData"
+    },
+    "__type": "SpellObject"
+  },
+  "Characters/Yorick/Spells/YorickPassiveAbility": {
+    "mRootSpell": "Characters/Yorick/Spells/YorickPassiveAbility/YorickPassive",
+    "mChildSpells": [
+      "Characters/Yorick/Spells/YorickPassiveAbility/YorickPassive",
+      "Characters/Yorick/Spells/YorickPassiveAbility/YorickPassiveAICFH",
+      "Characters/Yorick/Spells/YorickPassiveAbility/YorickPassiveAICombat",
+      "Characters/Yorick/Spells/YorickPassiveAbility/YorickPassiveDeathCounter",
+      "Characters/Yorick/Spells/YorickPassiveAbility/YorickPassiveDeathReady"
+    ],
+    "mName": "YorickPassiveAbility",
+    "mType": 3,
+    "AbilityTraits": 16384,
+    "__type": "AbilityObject"
+  },
+  "Characters/Yorick/Spells/YorickPassiveAbility/YorickPassive": {
+    "ObjectName": "YorickPassive",
+    "objectPath": "Characters/Yorick/Spells/YorickPassiveAbility/YorickPassive",
+    "mScriptName": "YorickPassive",
+    "mSpell": {
+      "DataValues": [
+        {
+          "name": "YorickPassiveGhoulMax",
+          "values": [4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "YorickGhoulDamageReductionVsTowers",
+          "values": [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "YorickGhoulLeashRange",
+          "values": [1600.0, 1600.0, 1600.0, 1600.0, 1600.0, 1600.0, 1600.0],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "YorickGhoulSpawnDelay",
+          "values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "CherryGhoulHPMod",
+          "values": [
+            0.800000011920929, 0.800000011920929, 0.800000011920929, 0.800000011920929,
+            0.800000011920929, 0.800000011920929, 0.800000011920929
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "GhoulADRatio",
+          "values": [
+            0.20000000298023224, 0.20000000298023224, 0.20000000298023224, 0.20000000298023224,
+            0.20000000298023224, 0.20000000298023224, 0.20000000298023224
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "GraveDuration",
+          "values": [300.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MinionMoveBonus",
+          "values": [40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MeleeAttackDamageModifier",
+          "values": [2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MinionDamageTakenMod",
+          "values": [
+            0.6000000238418579, 0.6000000238418579, 0.6000000238418579, 0.6000000238418579,
+            0.6000000238418579, 0.6000000238418579, 0.6000000238418579
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ProcDamageModifier",
+          "values": [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ARAMPassiveSpawnThreshold",
+          "values": [5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "GhoulMonsterDamageMod",
+          "values": [
+            0.6000000238418579, 0.6000000238418579, 0.6000000238418579, 0.6000000238418579,
+            0.6000000238418579, 0.6000000238418579, 0.6000000238418579
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "GhoulHealthRatio",
+          "values": [
+            0.15000000596046448, 0.15000000596046448, 0.15000000596046448, 0.15000000596046448,
+            0.15000000596046448, 0.15000000596046448, 0.15000000596046448
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MonsterDamageTakenMod",
+          "values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+          "__type": "SpellDataValue"
+        }
+      ],
+      "DataValuesModeOverride": {
+        "cherry": {
+          "__type": "SpellDataValueVector"
+        },
+        "SWIFTPLAY": {
+          "SpellDataValues": [
+            {
+              "name": "YorickGhoulDamageReductionVsTowers",
+              "values": [
+                0.30000001192092896, 0.30000001192092896, 0.30000001192092896, 0.30000001192092896,
+                0.30000001192092896, 0.30000001192092896, 0.30000001192092896
+              ],
+              "__type": "SpellDataValue"
+            }
+          ],
+          "__type": "SpellDataValueVector"
+        }
+      },
+      "mSpellCalculations": {
+        "YorickPassiveGhoulHealth": {
+          "mFormulaParts": [
+            {
+              "mStartValue": 100.0,
+              "mEndValue": 300.0,
+              "mScaleByStatProgressionMultiplier": true,
+              "__type": "ByCharLevelInterpolationCalculationPart"
+            },
+            {
+              "mStat": 12,
+              "mStatFormula": 2,
+              "mDataValue": "GhoulHealthRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "YorickPassiveGhoulDamage": {
+          "mFormulaParts": [
+            {
+              "mStartValue": 15.0,
+              "mEndValue": 100.0,
+              "mScaleByStatProgressionMultiplier": true,
+              "__type": "ByCharLevelInterpolationCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mDataValue": "GhoulADRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "YorickPassiveSpawnThreshold": {
+          "mFormulaParts": [
+            {
+              "mLevel1Value": 8.0,
+              "mBreakpoints": [
+                {
+                  "mLevel": 3,
+                  "mAdditionalBonusAtThisLevel": -1.0,
+                  "__type": "Breakpoint"
+                },
+                {
+                  "mLevel": 5,
+                  "mAdditionalBonusAtThisLevel": -1.0,
+                  "__type": "Breakpoint"
+                },
+                {
+                  "mLevel": 7,
+                  "mAdditionalBonusAtThisLevel": -1.0,
+                  "__type": "Breakpoint"
+                },
+                {
+                  "mLevel": 9,
+                  "mAdditionalBonusAtThisLevel": -1.0,
+                  "__type": "Breakpoint"
+                },
+                {
+                  "mLevel": 11,
+                  "mAdditionalBonusAtThisLevel": -1.0,
+                  "__type": "Breakpoint"
+                },
+                {
+                  "mLevel": 13,
+                  "mAdditionalBonusAtThisLevel": -1.0,
+                  "__type": "Breakpoint"
+                }
+              ],
+              "__type": "ByCharLevelBreakpointsCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "AOEDamageModifier": {
+          "mFormulaParts": [
+            {
+              "mLevel1Value": 0.6600000262260437,
+              "mInitialBonusPerLevel": -0.019999999552965164,
+              "mBreakpoints": [
+                {
+                  "mLevel": 15,
+                  "__type": "Breakpoint"
+                }
+              ],
+              "__type": "ByCharLevelBreakpointsCalculationPart"
+            }
+          ],
+          "mDisplayAsPercent": true,
+          "__type": "GameCalculation"
+        },
+        "BonusAttackSpeed": {
+          "mFormulaParts": [
+            {
+              "mStartValue": 0.07999999821186066,
+              "mEndValue": 0.800000011920929,
+              "mScaleByStatProgressionMultiplier": true,
+              "__type": "ByCharLevelInterpolationCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "__type": "SpellDataResource"
+    },
+    "mBuff": {
+      "mDescription": "game_buff_tooltip_YorickPassive",
+      "mFloatVarsDecimals": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "__type": "BuffData"
+    },
+    "__type": "SpellObject"
+  },
+  "Characters/Yorick/CharacterRecords/Root": {
+    "mCharacterName": "Yorick",
+    "baseHPModifiable": {
+      "baseValue": 650.0,
+      "__type": "ModifiableFloat"
+    },
+    "hpPerLevelModifiable": {
+      "baseValue": 114.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseStaticHPRegenModifiable": {
+      "baseValue": 1.600000023841858,
+      "__type": "ModifiableFloat"
+    },
+    "hpRegenPerLevelModifiable": {
+      "baseValue": 0.1599999964237213,
+      "__type": "ModifiableFloat"
+    },
+    "healthBarHeight": 110.0,
+    "baseDamageModifiable": {
+      "baseValue": 62.0,
+      "__type": "ModifiableFloat"
+    },
+    "damagePerLevelModifiable": {
+      "baseValue": 5.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseArmorModifiable": {
+      "baseValue": 36.0,
+      "__type": "ModifiableFloat"
+    },
+    "armorPerLevelModifiable": {
+      "baseValue": 4.5,
+      "__type": "ModifiableFloat"
+    },
+    "baseMR": {
+      "baseValue": 32.0,
+      "__type": "ModifiableFloat"
+    },
+    "mrPerLevel": {
+      "baseValue": 2.049999952316284,
+      "__type": "ModifiableFloat"
+    },
+    "baseMoveSpeedModifiable": {
+      "baseValue": 340.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackRangeModifiable": {
+      "baseValue": 175.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedModifiable": {
+      "baseValue": 0.625,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedRatioModifiable": {
+      "baseValue": 0.625,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedPerLevelModifiable": {
+      "baseValue": 2.0,
+      "__type": "ModifiableFloat"
+    },
+    "spellNames": [
+      "YorickQAbility/YorickQ",
+      "YorickWAbility/YorickW",
+      "YorickEAbility/YorickE",
+      "YorickRAbility/YorickR"
+    ],
+    "spells": [
+      "Characters/Yorick/Spells/YorickQAbility/YorickQ",
+      "Characters/Yorick/Spells/YorickWAbility/YorickW",
+      "Characters/Yorick/Spells/YorickEAbility/YorickE",
+      "Characters/Yorick/Spells/YorickRAbility/YorickR"
+    ],
+    "mAbilities": [
+      "Characters/Yorick/Spells/YorickRAbility",
+      "Characters/Yorick/Spells/YorickQAbility",
+      "Characters/Yorick/Spells/YorickWAbility",
+      "Characters/Yorick/Spells/YorickEAbility",
+      "Characters/Yorick/Spells/YorickPassiveAbility"
+    ],
+    "characterToolData": {
+      "{d1df3c3f}": "fighter",
+      "{f693457b}": "tank"
+    },
+    "mCharacterPassiveSpell": "Characters/Yorick/Spells/YorickPassiveAbility/YorickPassive",
+    "__type": "CharacterRecord"
+  }
+}
