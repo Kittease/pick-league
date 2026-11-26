@@ -78,9 +78,14 @@ const key = (championId: number, position: Position) => `${championId}|${positio
 
 /**
  * The mastery model of `rows`. Rows of every patch given are pooled (the curve is stable across
- * patches); rows whose bucket is not an integer in 0–6 are ignored.
+ * patches); rows whose bucket is not an integer in 0–6 are ignored. `shrinkK` is the prior
+ * strength of a champion's own deviation (`ENGINE_CONFIG.mastery.shrinkK`; the calibration
+ * script tries others).
  */
-export function buildMasteryModel(rows: readonly MasteryRow[]): MasteryModel {
+export function buildMasteryModel(
+  rows: readonly MasteryRow[],
+  shrinkK: number = M.shrinkK,
+): MasteryModel {
   const curves = new Map<string, ChampionCurve>();
   for (const r of rows) {
     if (!Number.isInteger(r.bucket) || r.bucket < 0 || r.bucket >= BUCKETS) continue;
@@ -116,7 +121,7 @@ export function buildMasteryModel(rows: readonly MasteryRow[]): MasteryModel {
       const n = c ? at(c.games, bucket) : 0;
       const d = c && n > 0 ? at(c.wins, bucket) / n - c.winRate : 0;
       return {
-        delta: g + shrink(d - g, n, M.shrinkK),
+        delta: g + shrink(d - g, n, shrinkK),
         championGames: n,
         allGames: at(allGames, bucket),
       };

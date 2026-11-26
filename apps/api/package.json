@@ -8,7 +8,8 @@
     "dev": "bun --env-file=../../.env --watch run src/index.ts",
     "typecheck": "tsc --noEmit -p .",
     "perf": "bun run scripts/perf.ts",
-    "calibrate": "bun run scripts/calibrate.ts"
+    "calibrate": "bun run scripts/calibrate.ts",
+    "calibrate:mastery": "bun run scripts/calibrate-mastery.ts"
   },
   "dependencies": {
     "@pick-league/db": "workspace:*",
