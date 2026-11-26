@@ -88,6 +88,11 @@ const NOISE_KEYS = new Set(
     'LastMajorChangeMinorPatchVersion',
     'mMinimapIconRotation',
     'mUseMinimapTargeting',
+    'RemoveOnPopCharacterData',
+    'RemoveOnPushCharacterData',
+    'bHaveHitBone',
+    'bHaveHitEffect',
+    'outlineBBoxExpansion',
   ].map((k) => k.toLowerCase()),
 );
 
@@ -142,14 +147,23 @@ function readable(key: string): string {
   return k.replace(/Modifiable$/, '');
 }
 
-/** One compared value: per rank (or one value), its readable name, its spell calculation if any. */
-export type SnapshotLeaf = [values: number[], valueName: string, calculation?: string];
+/**
+ * One compared value: its values as in the file, its readable name, its spell calculation if any,
+ * and 1 when the values are a spell's per-rank array (sliced to the ranks when diffed, with the
+ * newer build's max rank: a spell moved to another ability keeps comparable values).
+ */
+export type SnapshotLeaf = [
+  values: number[],
+  valueName: string,
+  calculation?: string | null,
+  perRank?: 1,
+];
 /** Values of one object by stable path. */
 export type Leaves = Record<string, SnapshotLeaf>;
 
 interface WalkContext {
-  /** Max rank of the spell being walked (per-rank arrays are sliced to 1..maxRank), null outside spells. */
-  maxRank: number | null;
+  /** Inside a spell: its 7- and 6-slot arrays are per rank. */
+  spell: boolean;
   calculation: string | null;
   /** Appended to the value names (`Level6` inside a level breakpoint). */
   nameSuffix: string;
@@ -161,11 +175,15 @@ const HASH_KEY = /^\{[0-9a-f]{8}\}$/;
  * A spell's per-rank values, rank 1 first: 7-slot arrays (data values, cooldowns) start with an
  * unused slot 0, 6-slot arrays (costs) start at rank 1; slots above the max rank are padding.
  */
-function perRank(nums: number[], maxRank: number | null): number[] {
-  if (maxRank === null) return nums;
+function perRank(nums: number[], maxRank: number): number[] {
   if (nums.length === 7) return nums.slice(1, maxRank + 1);
   if (nums.length === 6) return nums.slice(0, maxRank);
   return nums;
+}
+
+/** A leaf's compared values: a per-rank array sliced to ranks 1..maxRank. */
+function leafValues(leaf: SnapshotLeaf, maxRank: number | null): number[] {
+  return leaf[3] === 1 && maxRank !== null ? perRank(leaf[0], maxRank) : leaf[0];
 }
 
 /**
@@ -173,11 +191,18 @@ function perRank(nums: number[], maxRank: number | null): number[] {
  * item data values) and formula parts are keyed by name rather than position, so an inserted entry
  * does not shift the others.
  */
-function flatten(root: JsonObject, maxRank: number | null): Leaves {
+function flatten(root: JsonObject, spell: boolean): Leaves {
   const leaves: Leaves = {};
-  const add = (path: string, values: number[], valueName: string, ctx: WalkContext) => {
+  const add = (
+    path: string,
+    values: number[],
+    valueName: string,
+    ctx: WalkContext,
+    ranked = false,
+  ) => {
     const leaf: SnapshotLeaf = [values.map(clean), `${valueName}${ctx.nameSuffix}`];
-    if (ctx.calculation !== null) leaf.push(ctx.calculation);
+    if (ctx.calculation !== null || ranked) leaf.push(ctx.calculation);
+    if (ranked) leaf.push(1);
     leaves[path] = leaf;
   };
 
@@ -189,7 +214,8 @@ function flatten(root: JsonObject, maxRank: number | null): Leaves {
     if (Array.isArray(node)) {
       if (node.length > 0 && node.every((v) => typeof v === 'number')) {
         // A spell's per-rank array: slot 0 unused, ranks 1..max.
-        add(path, perRank(node as number[], ctx.maxRank), name, ctx);
+        const ranked = ctx.spell && (node.length === 7 || node.length === 6);
+        add(path, node as number[], name, ctx, ranked);
         return;
       }
       const used = new Map<string, number>();
@@ -264,7 +290,7 @@ function flatten(root: JsonObject, maxRank: number | null): Leaves {
     }
   };
 
-  walk(root, '', '', { maxRank, calculation: null, nameSuffix: '' });
+  walk(root, '', '', { spell, calculation: null, nameSuffix: '' });
   return leaves;
 }
 
@@ -298,28 +324,66 @@ function diffLeaves(
   pathPrefix: string,
   slot: ChangeSlot | null,
   spellName: string | null,
+  maxRank: number | null,
 ): ValueChange[] {
   const out: ValueChange[] = [];
   const keys = new Set([...Object.keys(oldLeaves), ...Object.keys(newLeaves)]);
   for (const key of keys) {
-    const a = oldLeaves[key];
-    const b = newLeaves[key];
-    if (a && b && sameValues(a[0], b[0])) continue;
+    const leafA = oldLeaves[key];
+    const leafB = newLeaves[key];
+    const a = leafA && leafValues(leafA, maxRank);
+    const b = leafB && leafValues(leafB, maxRank);
+    if (a && b && sameValues(a, b)) continue;
     // A value left out of the file is the type's default: 0 (or false).
-    if (!a && b && isZero(b[0])) continue;
-    if (!b && a && isZero(a[0])) continue;
-    const leaf = (b ?? a) as SnapshotLeaf;
+    if (!a && b && isZero(b)) continue;
+    if (!b && a && isZero(a)) continue;
+    const leaf = (leafB ?? leafA) as SnapshotLeaf;
+    const valueName = leaf[1] || key.split('/').pop() || key;
+    // A field known only by its hash that appears or disappears: the file's layout, not a value.
+    if ((!a || !b) && HASH_KEY.test(valueName)) continue;
     out.push({
       slot,
       spellName,
       calculation: leaf[2] ?? null,
-      valueName: leaf[1] || key.split('/').pop() || key,
-      oldValues: a?.[0] ?? null,
-      newValues: b?.[0] ?? null,
+      valueName,
+      oldValues: a ?? null,
+      newValues: b ?? null,
       path: `${pathPrefix}${key}`,
     });
   }
-  return out;
+  return withoutMoves(out);
+}
+
+/**
+ * Drops a value that only moved inside its object (an unnamed list entry at another position):
+ * a removed and an added value with the same name and values cancel out.
+ */
+function withoutMoves(changes: ValueChange[]): ValueChange[] {
+  const key = (c: ValueChange, values: number[] | null) =>
+    JSON.stringify([c.calculation, c.valueName, values]);
+  const added = new Map<string, number>();
+  for (const c of changes) {
+    if (c.oldValues === null)
+      added.set(key(c, c.newValues), (added.get(key(c, c.newValues)) ?? 0) + 1);
+  }
+  const cancelled = new Map<string, number>();
+  const kept = changes.filter((c) => {
+    if (c.newValues !== null || c.oldValues === null) return true;
+    const k = key(c, c.oldValues);
+    const left = added.get(k) ?? 0;
+    if (left === 0) return true;
+    added.set(k, left - 1);
+    cancelled.set(k, (cancelled.get(k) ?? 0) + 1);
+    return false;
+  });
+  return kept.filter((c) => {
+    if (c.oldValues !== null) return true;
+    const k = key(c, c.newValues);
+    const left = cancelled.get(k) ?? 0;
+    if (left === 0) return true;
+    cancelled.set(k, left - 1);
+    return false;
+  });
 }
 
 /** Drops a value stored twice (`cooldownTime` and `Cooldown.values`) with the same change. */
@@ -429,6 +493,8 @@ export interface SpellSnapshot {
   key: string;
   name: string;
   slot: ChangeSlot;
+  /** Of its ability (from the file's tooltip data, else 5 for Q/W/E, 3 for R, 6 otherwise). */
+  maxRank: number;
   leaves: Leaves;
 }
 
@@ -464,12 +530,13 @@ export function extractChampion(alias: string, file: unknown): ChampionSnapshot 
       key,
       name,
       slot,
-      leaves: flatten(value.mSpell, layout.maxRank[slot]),
+      maxRank: layout.maxRank[slot],
+      leaves: flatten(value.mSpell, true),
     };
   }
   return {
     rootKey: layout.rootKey,
-    base: flatten(f[layout.rootKey] as JsonObject, null),
+    base: flatten(f[layout.rootKey] as JsonObject, false),
     spells,
   };
 }
@@ -486,7 +553,7 @@ export function diffChampionSnapshots(
   after: ChampionSnapshot,
 ): EntityChanges<string> | null {
   if (!before) return { key: alias, status: 'new', changes: [] };
-  const changes = diffLeaves(before.base, after.base, after.rootKey, 'base', null);
+  const changes = diffLeaves(before.base, after.base, after.rootKey, 'base', null, null);
   for (const id of new Set([...Object.keys(before.spells), ...Object.keys(after.spells)])) {
     const a = before.spells[id];
     const b = after.spells[id];
@@ -504,7 +571,7 @@ export function diffChampionSnapshots(
       });
       continue;
     }
-    changes.push(...diffLeaves(a.leaves, b.leaves, `${b.key}/mSpell`, b.slot, b.name));
+    changes.push(...diffLeaves(a.leaves, b.leaves, `${b.key}/mSpell`, b.slot, b.name, b.maxRank));
   }
   const out = dedupe(changes).sort(
     (x, y) =>
@@ -539,7 +606,7 @@ export function extractItems(file: unknown): ItemsSnapshot {
     if (!isObject(value) || value.__type !== 'ItemData') continue;
     const id = value.itemID;
     if (typeof id !== 'number' || id <= 0 || id >= MAX_ITEM_ID) continue;
-    out[String(id)] = flatten(value, null);
+    out[String(id)] = flatten(value, false);
   }
   return out;
 }
@@ -561,7 +628,7 @@ export function diffItems(before: ItemsSnapshot, after: ItemsSnapshot): EntityCh
       out.push({ key: id, status: 'removed', changes: [] });
       continue;
     }
-    const changes = diffLeaves(a, b, `Items/${id}`, null, null).sort((x, y) =>
+    const changes = diffLeaves(a, b, `Items/${id}`, null, null, null).sort((x, y) =>
       x.path.localeCompare(y.path),
     );
     if (changes.length > 0) out.push({ key: id, status: 'changed', changes });

@@ -182,6 +182,55 @@ describe('diffChampion', () => {
     );
   });
 
+  test('a field known only by its hash that appears or disappears is not a change', () => {
+    const file = (extra: Record<string, unknown>) => ({
+      ...root(SPELLS),
+      [SPELLS[1] as string]: spell('FakeW', { flags: 4, ...extra }),
+    });
+    expect(diffChampion('fake', file({ '{bffdf499}': [18, 17, 16] }), file({}))).toBeNull();
+    expect(
+      diffChampion('fake', file({ '{bffdf499}': 1 }), file({ '{bffdf499}': 2 }))?.changes,
+    ).toHaveLength(1);
+  });
+
+  test('an unnamed list entry that moved is not a change', () => {
+    const file = (conditions: unknown[]) => ({
+      ...root(SPELLS),
+      [SPELLS[2] as string]: spell('FakeE', { mConditions: conditions }),
+    });
+    const a = { level: 1, __type: 'A' };
+    const b = { InvertResult: true, __type: 'B' };
+    expect(diffChampion('fake', file([a, b]), file([b, a]))).toBeNull();
+    expect(diffChampion('fake', file([a, b]), file([b, { level: 2 }]))?.changes.map(brief)).toEqual(
+      [
+        {
+          slot: 'E',
+          spellName: 'FakeE',
+          calculation: null,
+          valueName: 'level',
+          oldValues: [1],
+          newValues: null,
+        },
+        {
+          slot: 'E',
+          spellName: 'FakeE',
+          calculation: null,
+          valueName: 'level',
+          oldValues: null,
+          newValues: [2],
+        },
+      ],
+    );
+  });
+
+  test('a spell moved under its ultimate is compared on the ultimate ranks', () => {
+    const missile = spell('FakeRMis', { cooldownTime: [10, 60, 60, 60, 10, 10, 10] });
+    const moved = spell('FakeRMis', { cooldownTime: [10, 60, 60, 60, 0, 0, 0] });
+    const before = { ...root(SPELLS), 'Characters/Fake/Spells/FakeRMis': missile };
+    const after = { ...root(SPELLS), 'Characters/Fake/Spells/FakeRAbility/FakeRMis': moved };
+    expect(diffChampion('fake', before, after)).toBeNull();
+  });
+
   test('a transformed form ability takes its letter, the passive ability is P', () => {
     const file = (ratio: number) => ({
       ...root(SPELLS, {
