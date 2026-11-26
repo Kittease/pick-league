@@ -507,7 +507,7 @@ describe('mastery', () => {
     expect(deltas[0]).toBeCloseTo(-0.1, 4);
     const naut = others.find((c) => c.championId === 111);
     expect(naut?.reasons.find((r) => r.kind === 'mastery')?.label).toBe(
-      "−10.0% at your mastery (no points yet): Nautilus players with under 5k points vs Nautilus's average (100 games)",
+      '−10.0% at your mastery (no points yet): players with under 5k points on their champion vs its average (all champions, 400 games)',
     );
   });
 

@@ -233,24 +233,37 @@ export const ENGINE_CONFIG = {
   /**
    * Mastery term of the picks (only when the request carries the player's masteries): how
    * players with that many mastery points on the champion do compared with the champion's
-   * average, from stats_champion_mastery. On 16.22 (3.0M participants): −9.2 points under 5k,
-   * −2.3 for 5k–20k, about 0 for 50k–100k, +1.5 from 500k. Added to the score as is: a held-out
-   * fit put its weight at 1.04 ± 0.03.
+   * average, from stats_champion_mastery, counted on the masteries fetched before the game only
+   * (0035): the points fetched after it include the game (a lost first game on a champion stays
+   * under 1k points), which made the curve about 2.8× too steep (−9.2 points under 5k … +1.3
+   * from 500k). On 16.22 + 16.23 (548k pre-game participants): −2.8 under 5k, −2.2 for 5k–20k,
+   * −1.0 for 20k–50k, −0.6 for 50k–100k, +0.2 for 100k–200k, +0.6 for 200k–500k, +0.9 from 500k.
+   * Added to the score as is: on the latest 20 % of 16.23 by start time (275k pre-game
+   * participants, statistics from the earlier matches) its weight is 1.17 ± 0.11 (1.08 ± 0.13
+   * on the latest 10 %, 1.31 ± 0.12 on the latest 40 %), where the curve with the post-game
+   * rows weighed 0.53–0.57 (`apps/api/scripts/calibrate-mastery.ts`).
    */
   mastery: {
     /**
      * Upper bounds (exclusive) of buckets 0–5 in mastery points; bucket 6 is the rest. Mirrors
-     * the `width_bucket` of 0018_mastery_curve.sql: keep them in sync.
+     * the `width_bucket` of 0018_mastery_curve.sql / 0035_mastery_pre_game.sql: keep them in sync.
      */
     bucketEdges: [5_000, 20_000, 50_000, 100_000, 200_000, 500_000],
     weight: 1,
     /**
      * Prior strength (games of the champion in the bucket) of a champion's own curve around the
-     * curve of all champions: the low-vs-high mastery gap really differs between champions by
-     * ~1.6 points (steep for Rengar or Master Yi, flat for Milio or Bard).
+     * curve of all champions. Infinity: every champion gets the curve. On the pre-game rows, a
+     * champion's own deviation weighs −0.05 ± 0.17 next to the curve at k = 1,000 (0.15 ± 0.20
+     * and −0.16 ± 0.16 with 10 % and 40 % held out) and adds nothing at any k; at k = 1,000 it
+     * dragged the term's weight down to 0.81 (log-loss gain 1.3e-4 instead of 2.0e-4). The
+     * champions' differences seen on every mastery row (steep for Rengar or Master Yi, flat for
+     * Milio or Bard) do not carry over to the masteries fetched before the game.
      */
-    shrinkK: 1000,
-    /** From this many games of the champion in the bucket, the reason quotes the champion's own sample. */
+    shrinkK: Number.POSITIVE_INFINITY,
+    /**
+     * From this many games of the champion in the bucket, the reason quotes the champion's own
+     * sample (only with a finite `shrinkK`: otherwise the delta is the curve of all champions).
+     */
     minChampionGames: 100,
   },
 

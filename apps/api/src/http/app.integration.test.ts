@@ -1353,10 +1353,10 @@ describe.skipIf(!API_TEST_DATABASE_URL)('API endpoints (Postgres)', () => {
     const highDelta = highReasons[0]?.delta ?? Number.NaN;
     expect(lowDelta).toBeLessThan(0);
     expect(highDelta - lowDelta).toBeGreaterThan(0.02);
-    // Leona support has well over 100 games under 5k points on the seed: her own sample.
-    expect(lowReasons[0]?.games).toBeGreaterThanOrEqual(ENGINE_CONFIG.mastery.minChampionGames);
+    // Every champion gets the curve of all champions (shrinkK = Infinity), Leona too although
+    // she has well over 100 games under 5k points on the seed.
     expect(lowReasons[0]?.label).toMatch(
-      /^−\d+\.\d% at your mastery \(1k points\): Leona players with under 5k points vs Leona's average \([\d,]+ games\)$/,
+      /^−\d+\.\d% at your mastery \(1k points\): players with under 5k points on their champion vs its average \(all champions, [\d,]+ games\)$/,
     );
 
     // Braum has no mastery rows of his own: the curve of every champion.

@@ -1,8 +1,10 @@
 /**
  * Mastery term of the picks: how players with the user's mastery points on a champion do compared
- * with the champion's average (stats_champion_mastery). The curve of all champions is the prior;
- * each champion's own deviation from it is shrunk toward it by its games in the bucket, since the
- * low-vs-high mastery gap really differs between champions.
+ * with the champion's average (stats_champion_mastery, masteries fetched before the game). The
+ * curve of all champions is the prior; a champion's own deviation from it can be shrunk toward it
+ * by its games in the bucket (`ENGINE_CONFIG.mastery.shrinkK`). With `shrinkK` = Infinity, the
+ * setting since the pre-game rows (0035), every champion gets the curve: on held-out matches the
+ * champions' own deviations predicted nothing.
  */
 import type { Position, Reason } from '@pick-league/shared';
 import { ENGINE_CONFIG } from './config.ts';
@@ -59,6 +61,8 @@ export interface MasteryEffect {
   delta: number;
   /** Games of the champion + role in the bucket. */
   championGames: number;
+  /** Whether the champion's own deviation is part of `delta` (finite `shrinkK`, games in the bucket). */
+  ownCurve: boolean;
   /** Games of every champion in the bucket. */
   allGames: number;
 }
@@ -123,6 +127,7 @@ export function buildMasteryModel(
       return {
         delta: g + shrink(d - g, n, shrinkK),
         championGames: n,
+        ownCurve: n > 0 && Number.isFinite(shrinkK),
         allGames: at(allGames, bucket),
       };
     },
@@ -135,7 +140,7 @@ export function masteryReason(effect: MasteryEffect, points: number, championNam
   const range = bucketRange(masteryBucket(points));
   const mine = points === 0 ? 'no points yet' : `${formatPoints(points)} points`;
   const head = `${formatDelta(delta)} at your mastery (${mine})`;
-  if (effect.championGames >= M.minChampionGames) {
+  if (effect.ownCurve && effect.championGames >= M.minChampionGames) {
     return {
       kind: 'mastery',
       label: `${head}: ${championName} players with ${range} vs ${championName}'s average (${formatGames(effect.championGames)})`,
