@@ -74,7 +74,12 @@ export async function tierList(q: Queryable, query: TierListQuery): Promise<Tier
   }
   return buildTierList(
     query.role,
-    { currentPatch: ctx.current, previousPatch: ctx.previous, ...rows },
+    {
+      currentPatch: ctx.current,
+      previousPatch: ctx.previous,
+      changedChampions: ctx.changedChampions,
+      ...rows,
+    },
     filters,
   );
 }
@@ -113,6 +118,7 @@ export async function tierListChampion(
   const detail = buildTierListChampion(role, championId, {
     currentPatch: ctx.current,
     previousPatch: ctx.previous,
+    changedChampions: ctx.changedChampions,
     roleStats,
     vs,
     with: withRows,

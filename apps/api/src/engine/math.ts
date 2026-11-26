@@ -61,6 +61,11 @@ export const round = (x: number, digits = 4) => {
 export interface PatchPair {
   current: PatchId;
   previous: PatchId | null;
+  /**
+   * Champions changed (or new) on the current patch, from the game files (patch_changes): their own
+   * strength takes the previous patch as a smaller prior (`previousPatchPrior.changedStrength`).
+   */
+  changedChampions?: ReadonlySet<number>;
 }
 
 /** One statistic measured on one patch: a win rate, a delta, an average… over `games`. */

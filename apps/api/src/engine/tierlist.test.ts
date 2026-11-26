@@ -139,6 +139,29 @@ describe('buildTierList', () => {
     expect(naut?.score).toBeCloseTo((0.05 * 5000) / (5000 + K_BASE), 5);
   });
 
+  test('a champion changed on the current patch: the previous patch counts for 1,000 games', () => {
+    const changed = ENGINE_CONFIG.previousPatchPrior.changedStrength;
+    expect(changed).toBe(1000);
+    const t = buildTierList(
+      'UTILITY',
+      data({
+        roleStats: [
+          role(PREV, 111, 'UTILITY', 20_000, 11_000), // 55 %, nothing on 15.22 yet
+          role(PREV, 117, 'UTILITY', 20_000, 11_000), // the same, not changed
+          role(PREV, 412, 'UTILITY', 40_000, 18_000),
+          role(CUR, 412, 'UTILITY', 1000, 500),
+        ],
+        changedChampions: new Set([111]),
+      }),
+    );
+    const score = (id: number) => t.entries.find((e) => e.championId === id)?.score;
+    // Previous role average 40,000 / 80,000; both at 55 %: the same delta, fewer effective games.
+    const prevDelta = 0.55 - 40_000 / 80_000;
+    expect(score(111)).toBeCloseTo(shrink(prevDelta, changed, K_BASE), 5);
+    expect(t.entries.find((e) => e.championId === 111)?.games).toBe(20_000);
+    expect(score(117)).toBeCloseTo(shrink(prevDelta, CAP, K_BASE), 5);
+  });
+
   test('without a previous patch its rows are ignored', () => {
     const withoutPrevRows = data({
       previousPatch: null,

@@ -30,6 +30,15 @@ export const ENGINE_CONFIG = {
   previousPatchPrior: {
     /** A champion+role's own record. */
     strength: 5000,
+    /**
+     * A champion+role's own record when the champion changed on the current patch (its values in
+     * the game files, any role): the previous patch says less about it. Replaying 16.23 day by
+     * day, 1,000 on the changed champions' own strength was best on the patch day (games with a
+     * changed champion: log-loss 6884.66e-4 → 6884.02e-4, calibration slope 0.84 → 0.87) and
+     * neutral afterwards; a smaller cap on the pairs involving them was always slightly worse, so
+     * pairs keep `pair`.
+     */
+    changedStrength: 1000,
     /** Each pair statistic: a matchup, a duo, another ally or enemy, a composition trait, a lane phase. */
     pair: 5000,
     /**

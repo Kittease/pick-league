@@ -46,6 +46,11 @@ export interface PatchMatchesRow {
 export interface TierListData {
   currentPatch: PatchId;
   previousPatch: PatchId | null;
+  /**
+   * Champions changed (or new) on the current patch, from the game files (patch_changes): their own
+   * strength takes the previous patch as a smaller prior (`previousPatchPrior.changedStrength`).
+   */
+  changedChampions?: ReadonlySet<number>;
   /** stats_champion_roles of the patches (at least the requested role). */
   roleStats: readonly RoleStatRow[];
   bans: readonly BanRow[];
@@ -95,7 +100,8 @@ export interface ChampionBaseline {
 
 /**
  * A champion+role's record on the two patches, the previous one as a prior worth at most
- * `previousPatchPrior.strength` games: the same blend for its tier list entry, its detail and the
+ * `previousPatchPrior.strength` games (`changedStrength` when the champion changed on the current
+ * patch, see `PatchPair.changedChampions`): the same blend for its tier list entry, its detail and the
  * picks engine. The strength is measured inside each patch (vs that patch's role average), so a
  * patch where the whole role wins more does not leak into it.
  */
@@ -114,7 +120,7 @@ export function championBaseline(
   const blend = blendPatches(
     sample(cur, patches.current),
     sample(prev, patches.previous),
-    PRIOR.strength,
+    patches.changedChampions?.has(championId) ? PRIOR.changedStrength : PRIOR.strength,
   );
   return {
     patches: patchesUsedFor(patches, blend.previousShare),
@@ -141,7 +147,7 @@ export function buildTierList(
   data: TierListData,
   filters: TierListFilters = DEFAULT_TIER_LIST_FILTERS,
 ): TierListResponse {
-  const { currentPatch, previousPatch } = data;
+  const { currentPatch, previousPatch, changedChampions } = data;
   const inRole = data.roleStats.filter((r) => r.position === role);
   const roleTotals = new Map<PatchId, GamesWins>();
   for (const p of [currentPatch, previousPatch])
@@ -152,7 +158,7 @@ export function buildTierList(
   const matches = new Map(data.patchMatches.map((m) => [m.patch, m.matches]));
 
   const roleWinRate = (p: PatchId) => winRate(roleTotals.get(p));
-  const pair = { current: currentPatch, previous: previousPatch };
+  const pair: PatchPair = { current: currentPatch, previous: previousPatch, changedChampions };
 
   const scored: Omit<TierListEntry, 'tier'>[] = [];
   for (const championId of new Set(inRole.map((r) => r.championId))) {

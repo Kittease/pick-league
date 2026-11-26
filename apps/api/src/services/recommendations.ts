@@ -1,5 +1,5 @@
 /** Loads the stats rows a request needs, then runs the pure engine. */
-import { listPatches, type Queryable } from '@pick-league/db';
+import { changedChampionIds, listPatches, type Queryable } from '@pick-league/db';
 import type {
   BuildRequest,
   BuildResponse,
@@ -34,6 +34,12 @@ export interface PatchContext {
   previous: PatchId | null;
   /** current + previous (when any). */
   patches: PatchId[];
+  /**
+   * Champions changed (or new) on the current patch per the game files (patch_changes): their own
+   * strength takes a smaller previous-patch prior. Empty when the patch is forced (no previous
+   * patch) or has no change set yet.
+   */
+  changedChampions: ReadonlySet<number>;
 }
 
 /**
@@ -44,12 +50,17 @@ export async function patchContext(q: Queryable, forced?: PatchId): Promise<Patc
   const kept = (await listPatches(q)).map((p) => p.id);
   if (forced !== undefined) {
     if (!kept.includes(forced)) throw new ApiError('NOT_FOUND', `Unknown patch ${forced}`);
-    return { current: forced, previous: null, patches: [forced] };
+    return { current: forced, previous: null, patches: [forced], changedChampions: new Set() };
   }
-  const stats = await statsPatches(q, kept);
+  const [stats, changed] = await Promise.all([statsPatches(q, kept), changedChampionIds(q, kept)]);
   if (!stats) throw new ApiError('NO_DATA', 'No patch ingested yet');
   const { current, previous } = stats;
-  return { current, previous, patches: previous ? [current, previous] : [current] };
+  return {
+    current,
+    previous,
+    patches: previous ? [current, previous] : [current],
+    changedChampions: new Set(changed.get(current) ?? []),
+  };
 }
 
 export async function picks(q: Queryable, req: PicksRequest): Promise<PicksResponse> {
@@ -84,6 +95,7 @@ export async function picks(q: Queryable, req: PicksRequest): Promise<PicksRespo
   return recommendPicks(req, {
     currentPatch: ctx.current,
     previousPatch: ctx.previous,
+    changedChampions: ctx.changedChampions,
     roleStats,
     vs,
     with: withRows,
@@ -234,6 +246,7 @@ export async function draft(q: Queryable, req: DraftRequest): Promise<DraftEvalu
     {
       currentPatch: ctx.current,
       previousPatch: ctx.previous,
+      changedChampions: ctx.changedChampions,
       roleStats,
       vs,
       with: withRows,

@@ -69,6 +69,11 @@ import type {
 export interface PicksData {
   currentPatch: PatchId;
   previousPatch: PatchId | null;
+  /**
+   * Champions changed (or new) on the current patch, from the game files (patch_changes): their own
+   * strength takes the previous patch as a smaller prior (`previousPatchPrior.changedStrength`).
+   */
+  changedChampions?: ReadonlySet<number>;
   /** stats_champion_roles of both patches (all champions, all roles). */
   roleStats: readonly RoleStatRow[];
   /** stats_champion_vs with position = request role and enemy in the request's enemies. */
@@ -206,7 +211,11 @@ export function recommendPicks(req: PicksRequest, data: PicksData): PicksRespons
   const baselineOn = (championId: number, patch: PatchId): GamesWins | undefined =>
     roleRow.get(`${patch}|${championId}|${role}`);
   const inRole = rowsByPatchAndChampion(data.roleStats, role);
-  const patchPair: PatchPair = { current: data.currentPatch, previous: data.previousPatch };
+  const patchPair: PatchPair = {
+    current: data.currentPatch,
+    previous: data.previousPatch,
+    changedChampions: data.changedChampions,
+  };
   const roleHasCurrentGames = data.roleStats.some(
     (r) => r.patch === data.currentPatch && r.position === role && r.games > 0,
   );

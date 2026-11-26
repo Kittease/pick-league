@@ -63,6 +63,11 @@ export interface SideRow extends GamesWins {
 export interface DraftData {
   currentPatch: PatchId;
   previousPatch: PatchId | null;
+  /**
+   * Champions changed (or new) on the current patch, from the game files (patch_changes): their own
+   * strength takes the previous patch as a smaller prior (`previousPatchPrior.changedStrength`).
+   */
+  changedChampions?: ReadonlySet<number>;
   /** stats_champion_roles of both patches (all champions, all roles). */
   roleStats: readonly RoleStatRow[];
   /** stats_champion_vs for the pairs of `draftPairs` (every champion of each role). */
@@ -151,7 +156,11 @@ export function evaluateDraft(
       sumStats(data.roleStats.filter((r) => r.position === role && r.patch === patch)),
     );
   });
-  const patchPair: PatchPair = { current: data.currentPatch, previous: data.previousPatch };
+  const patchPair: PatchPair = {
+    current: data.currentPatch,
+    previous: data.previousPatch,
+    changedChampions: data.changedChampions,
+  };
   const inRole = new Map<Position, ReturnType<typeof rowsByPatchAndChampion>>();
   const rowsOfRole = (role: Position) => {
     const rows = inRole.get(role) ?? rowsByPatchAndChampion(data.roleStats, role);

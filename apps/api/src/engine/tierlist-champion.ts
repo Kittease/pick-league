@@ -39,6 +39,11 @@ import type {
 export interface TierListChampionData {
   currentPatch: PatchId;
   previousPatch: PatchId | null;
+  /**
+   * Champions changed (or new) on the current patch, from the game files (patch_changes): their own
+   * strength takes the previous patch as a smaller prior (`previousPatchPrior.changedStrength`).
+   */
+  changedChampions?: ReadonlySet<number>;
   /** stats_champion_roles of the patches (at least the champion in the role). */
   roleStats: readonly RoleStatRow[];
   /** stats_champion_vs of the champion in the role (lane opponents are filtered here). */
@@ -116,8 +121,8 @@ export function buildTierListChampion(
   championId: number,
   data: TierListChampionData,
 ): TierListChampionDetail {
-  const { currentPatch, previousPatch } = data;
-  const pair: PatchPair = { current: currentPatch, previous: previousPatch };
+  const { currentPatch, previousPatch, changedChampions } = data;
+  const pair: PatchPair = { current: currentPatch, previous: previousPatch, changedChampions };
   const rows = rowsByPatchAndChampion(data.roleStats, role);
   const roleWinRate = (patch: PatchId) =>
     winRate(sumStats(data.roleStats.filter((r) => r.position === role && r.patch === patch)));
