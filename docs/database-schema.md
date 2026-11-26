@@ -35,6 +35,8 @@ listing_skip_misses                   (LISTING_SKIP=shadow: what a skipped listi
 worker_runs                           (monitoring)
 worker_status                         (health of each platform loop)
 diamond_tracking                      (how many Diamond players each platform tracks: a target the worker sizes by itself)
+
+game_builds ──< patch_change_sets ──< patch_changes   (champion / item changes per game build, from Community Dragon; 6 patches, no link to patches)
 ```
 
 ## Enums
@@ -492,6 +494,67 @@ CREATE TABLE diamond_tracking (
 -- 0032 emptied `cycles` and set settle_cycles_left to 48: the cycles of the daily pass meant
 -- nothing under the new rules, and the first two days of checks are a burst of their own.
 ```
+
+## Patch changes
+
+`0036_patch_changes.sql`. Which champion and item values each game build changed, read by the worker from Community Dragon's game files (docs/architecture.md, Worker, patch changes) and served by `GET /patch-changes`. **Not tied to `patches`**: no foreign key, kept for the 6 newest patches (the stats keep 2), names stored in the rows (the patch's static data may be gone).
+
+```sql
+-- Every game build the worker read. `build` is Community Dragon's content version without its
+-- branch ('16.23.8418428' for '16.23.8418428+branch.releases-16-23.content.release'), the same
+-- number as the matches' game_version without its last dot (16.23.841.8428).
+CREATE TABLE game_builds (
+  build         text PRIMARY KEY,
+  patch         text NOT NULL,
+  build_number  bigint NOT NULL,              -- 8418428: orders the builds of a patch
+  version       text NOT NULL,                -- content-metadata.json version, as read
+  first_seen_at timestamptz NOT NULL DEFAULT now(),
+  champions     smallint NOT NULL,            -- champion files read
+  items         smallint NOT NULL,            -- items compared
+  snapshot      bytea                         -- gzipped JSON of the extracted values (below)
+);
+CREATE INDEX game_builds_patch_idx ON game_builds (patch, build_number);
+
+CREATE TABLE patch_change_sets (
+  id                integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  patch             text NOT NULL,
+  build             text NOT NULL UNIQUE REFERENCES game_builds ON DELETE CASCADE,
+  kind              text NOT NULL CHECK (kind IN ('patch', 'hotfix')),
+  source            text NOT NULL CHECK (source IN ('live', 'backfill')),
+  base_patch        text NOT NULL,
+  base_build        text NOT NULL,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  changed_champions smallint NOT NULL,
+  changed_items     smallint NOT NULL
+);
+CREATE INDEX patch_change_sets_patch_idx ON patch_change_sets (patch);
+
+CREATE TABLE patch_changes (
+  set_id      integer  NOT NULL REFERENCES patch_change_sets ON DELETE CASCADE,
+  ord         smallint NOT NULL,              -- order inside the set (entity, then slot, spell, path)
+  kind        text     NOT NULL CHECK (kind IN ('champion', 'item')),
+  champion_id smallint,                       -- Data Dragon key (kind = champion)
+  item_id     integer,                        -- kind = item
+  name        text     NOT NULL,              -- 'Ezreal', 'Voltaic Cyclosword'
+  status      text     NOT NULL CHECK (status IN ('changed', 'new', 'removed')),
+  slot        text,                           -- Q W E R, P (passive), base (base stats), other; null for items
+  spell_name  text,                           -- game object: 'EzrealR', 'EzrealEMissile'
+  calculation text,                           -- spell calculation of a ratio: 'Damage'
+  value_name  text,                           -- 'BaseDamage', 'Cooldown', 'Cost', 'bonusAdRatio', 'added'…
+  old_values  double precision[],             -- per rank (rank 1 first) or one value; null: absent
+  new_values  double precision[],
+  path        text,                           -- in the game file, for debugging
+  PRIMARY KEY (set_id, ord),
+  CHECK ((kind = 'champion') = (champion_id IS NOT NULL)),
+  CHECK ((kind = 'item') = (item_id IS NOT NULL))
+);
+```
+
+- **Change sets.** One per build at most (`build` unique). `kind = 'patch'`: the first build read of a patch vs the newest build of the previous patch. `kind = 'hotfix'`: a later build of the same patch vs the build before it; most builds change no gameplay value, and such a hotfix is stored anyway with `changed_champions = changed_items = 0` (the page hides it). `source = 'backfill'`: a patch diff made afterwards from both patches' final builds (Community Dragon keeps only the newest build of each patch folder, so the mid-patch changes are merged into it); `live`: captured by the worker when the build came out. A build read only as the base of a diff (the previous patch's final build) has a `game_builds` row and no set.
+- **Rows.** A changed champion or item has one row per changed value; a new or removed one a single row without value (`status` new / removed). A spell object added to or removed from a champion's file is one row, `value_name` `added` / `removed`, without values. Values are rounded to 7 significant digits (the game's float32: 1.100000023841858 → 1.1); a spell's per-rank values hold ranks 1 to its max rank (the file's unused slot 0 and padding dropped). `slot` + `spell_name` + `calculation` + `value_name` say what changed (`R` / `EzrealR` / `Damage` / `bonusAdRatio`); `path` is where in the file.
+- **Snapshot.** The values the diff compares (per champion: base stats and each spell object's values, by stable path; per item: its values), so the next build is diffed without re-reading this one's files (Community Dragon has overwritten them by then): about 4.3 MB of JSON, 0.4 MB gzipped (16.23). Kept only for the newest build of the 2 newest patches (what the next hotfix or the next patch is diffed against); the others are set to NULL.
+- **Retention.** Each store deletes the builds (and, by cascade, the sets and rows) of patches older than the 6 newest in `game_builds`. A set has a few dozen rows (16.23: 13 champions, 2 items, 43 rows; a rework adds about a hundred).
+- **Readers.** The API's engine reads the champions changed or new in the sets of the stats' current patch (patch diff and hotfixes; `changedChampionIds`) with every request's patch context: their own strength gets a smaller previous-patch prior. `GET /patch-changes` and `GET /patch-changes/index` read the sets and rows.
 
 ## Removed tables and columns
 

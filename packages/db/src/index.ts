@@ -17,6 +17,7 @@ export {
 export * from './queries/maintenance.ts';
 export * from './queries/matches.ts';
 export * from './queries/outside-masters.ts';
+export * from './queries/patch-changes.ts';
 export * from './queries/patches.ts';
 export * from './queries/players.ts';
 export * from './queries/queues.ts';
