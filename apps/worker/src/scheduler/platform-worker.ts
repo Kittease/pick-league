@@ -748,8 +748,11 @@ export class PlatformWorker {
   };
   /** Whether an outside Master is waiting for a listing, as last read (null: read again). */
   private outsideDue: { checkedAt: number; due: boolean } | null = null;
-  /** Checks refused with a 401/403 in a row (a single one is the player's, not the key's). */
-  private checksRefused = 0;
+  /**
+   * Per-player requests (outside-Master checks, mastery refresh, enrichment) refused with a
+   * 401/403 in a row: Riot refuses some players whatever the key, so a single one is the player's.
+   */
+  private playerRequestsRefused = 0;
   /** What is left of the hourly allowance of outside-Master checks (`outsideCheckMaxPerHour`). */
   private readonly checkBudget = { tokens: 0, at: 0 };
   /** Whether a ladder refresh succeeded in this process. */
@@ -2234,15 +2237,11 @@ export class PlatformWorker {
       // rejected shows on every request: another kind of work has seen it already, or the checks
       // are refused one after the other.
       if (err instanceof RiotAuthError) {
-        this.checksRefused += 1;
-        const keyRejected = this.authState === 'rejected' || this.checksRefused >= 3;
-        if (!keyRejected) {
-          throw new Error(`league entry of an outside Master refused (HTTP ${err.status})`);
-        }
+        throw this.playerRequestRefused(err, 'league entry of an outside Master');
       }
       throw err;
     }
-    this.checksRefused = 0;
+    this.playerRequestsRefused = 0;
     const now = this.clock.now();
     const safety = this.opts.listingSkipSafetyMs.outsideMaster;
     const outcome = await recordOutsideMasterCheck(this.db, puuid, toSoloRank(entries ?? []), {
@@ -2290,12 +2289,20 @@ export class PlatformWorker {
 
   /** Fetches a tracked player's masteries again (due every `masteryRefreshIntervalMs`). */
   async dailyRefresh(c: DailyRefreshCandidate, signal?: AbortSignal): Promise<void> {
-    const masteries = await this.riot.getMasteries(
-      this.platform,
-      c.puuid,
-      PRIORITY.DAILY_REFRESH,
-      signal,
-    );
+    let masteries: Awaited<ReturnType<RiotApi['getMasteries']>>;
+    try {
+      masteries = await this.riot.getMasteries(
+        this.platform,
+        c.puuid,
+        PRIORITY.DAILY_REFRESH,
+        signal,
+      );
+    } catch (err) {
+      // The player waits an hour (the loop's cooldown), the platform does not pause.
+      if (err instanceof RiotAuthError) throw this.playerRequestRefused(err, 'masteries');
+      throw err;
+    }
+    this.playerRequestsRefused = 0;
     await replaceMasteries(
       this.db,
       c.puuid,
@@ -2336,12 +2343,20 @@ export class PlatformWorker {
         if (!rankFresh) await updatePlayerRank(tx, e.puuid, toSoloRank(entries ?? []), now);
         await completeEnrichment(tx, e.puuid);
       });
+      this.playerRequestsRefused = 0;
       this.counters.enriched++;
       if (rankFresh) this.counters.enrichedRankFresh++;
     } catch (err) {
-      if (isAbortError(err) || err instanceof RiotAuthError) throw err;
-      await failEnrichment(this.db, e.puuid, errorMessage(err));
-      throw err;
+      if (isAbortError(err)) throw err;
+      // A refusal for this player fails their enrichment (dropped after three tries) instead of
+      // pausing the platform each time the queue comes back to them.
+      const failure =
+        err instanceof RiotAuthError
+          ? this.playerRequestRefused(err, 'masteries / rank of a queued player')
+          : err;
+      if (failure instanceof RiotAuthError) throw failure;
+      await failEnrichment(this.db, e.puuid, errorMessage(failure));
+      throw failure;
     }
   }
 
@@ -2640,6 +2655,19 @@ export class PlatformWorker {
         transientStreak = 0;
       }
     }
+  }
+
+  /**
+   * A 401/403 on a request about one player: the error to throw. Riot answers 403 for some
+   * players whatever the key, so that fails only this player's item, and the platform does not
+   * pause each time a queue comes back to them. A key that is really rejected shows on every
+   * request: another kind of work has seen it already, or three per-player requests are refused
+   * in a row; then it is the key's error (the platform pauses).
+   */
+  private playerRequestRefused(err: RiotAuthError, what: string): Error {
+    this.playerRequestsRefused += 1;
+    if (this.authState === 'rejected' || this.playerRequestsRefused >= 3) return err;
+    return new Error(`${what} refused for this player (HTTP ${err.status})`);
   }
 
   private recordError(kind: string, err: unknown): void {

@@ -875,6 +875,48 @@ d('PlatformWorker (Postgres)', () => {
     expect(riot.calls).toContain(`entries:${e?.puuid}:1`);
   });
 
+  test('a player Riot answers 403 for fails their enrichment or mastery refresh, not the key; three in a row are the key', async () => {
+    const refused = () => new RiotAuthError(403, 'champion-mastery-v4', '/x');
+    riot.leagues.CHALLENGER.entries = ladder(1, () => 50);
+    await worker.refreshLadder();
+    riot.matches.set('EUW1_7000000500', makeMatch('EUW1_7000000500', '15.22.715.1234'));
+    await worker.processMatch({ matchId: 'EUW1_7000000500', platform: 'EUW1', attempts: 0 });
+    const queued = (
+      await db<{ puuid: string }[]>`SELECT puuid FROM player_enrichment_queue ORDER BY puuid`
+    ).map((r) => r.puuid);
+    const [a, b, c, d] = queued;
+    if (!a || !b || !c || !d) throw new Error('expected four queued players');
+
+    // One refusal: this player's enrichment fails (tried again later, dropped after three), the
+    // error is not the key's, so the platform does not pause.
+    riot.errors.set(`mastery:${a}`, [refused()]);
+    const first = await worker.enrich({ puuid: a, platform: 'EUW1', attempts: 0 }).catch((e) => e);
+    expect(first).not.toBeInstanceOf(RiotAuthError);
+    expect(String(first)).toContain('refused for this player (HTTP 403)');
+    const [row] = await db`SELECT attempts FROM player_enrichment_queue WHERE puuid = ${a}`;
+    expect(row?.attempts).toBe(1);
+    // A success in between starts the count over.
+    await worker.enrich({ puuid: b, platform: 'EUW1', attempts: 0 });
+
+    // The mastery refresh of a tracked player follows the same rule.
+    riot.errors.set(`mastery:${ladderPuuid(0)}`, [refused()]);
+    const daily = await worker.dailyRefresh({ puuid: ladderPuuid(0) }).catch((e) => e);
+    expect(daily).not.toBeInstanceOf(RiotAuthError);
+
+    // Two more refusals in a row: three, the key is rejected.
+    riot.errors.set(`mastery:${c}`, [refused()]);
+    riot.errors.set(`mastery:${d}`, [refused()]);
+    expect(
+      await worker.enrich({ puuid: c, platform: 'EUW1', attempts: 0 }).catch((e) => e),
+    ).not.toBeInstanceOf(RiotAuthError);
+    expect(
+      await worker.enrich({ puuid: d, platform: 'EUW1', attempts: 0 }).catch((e) => e),
+    ).toBeInstanceOf(RiotAuthError);
+    // The key's error leaves the player's item untouched.
+    const [untouched] = await db`SELECT attempts FROM player_enrichment_queue WHERE puuid = ${d}`;
+    expect(untouched?.attempts).toBe(0);
+  });
+
   test('masteries are kept for champions with a stored game, and fetched again for a first game', async () => {
     const masteries = async (puuid: string) =>
       (

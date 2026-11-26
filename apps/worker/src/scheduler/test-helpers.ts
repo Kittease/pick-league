@@ -190,6 +190,7 @@ export class FakeRiot implements RiotApi {
     priority: Priority,
   ): Promise<ChampionMasteryDto[]> {
     this.calls.push(`mastery:${puuid}:${priority}`);
+    this.maybeThrow(`mastery:${puuid}`);
     return this.masteryChampionIds.map((championId) => ({
       puuid,
       championId,
