@@ -410,26 +410,9 @@ export function groupBySlot(
   });
 }
 
-const VERDICT_RANK: Record<PatchNoteVerdict, number> = {
-  buff: 0,
-  new: 1,
-  reworked: 2,
-  mixed: 3,
-  adjusted: 4,
-  nerf: 5,
-  removed: 6,
-};
-
-/** Buffs first (biggest first), then new, reworked, mixed, adjusted, nerfs (biggest last), removed. */
-export function compareVerdicts(
-  a: PatchNoteVerdictSummary & { name: string },
-  b: PatchNoteVerdictSummary & { name: string },
-): number {
-  return (
-    VERDICT_RANK[a.verdict] - VERDICT_RANK[b.verdict] ||
-    b.score - a.score ||
-    a.name.localeCompare(b.name)
-  );
+/** Alphabetical by name (accents and case ignored), so a champion or an item is easy to find. */
+export function compareNames(a: { name: string }, b: { name: string }): number {
+  return a.name.localeCompare(b.name, 'en', { sensitivity: 'base' });
 }
 
 /** Thresholds of the stats shown next to the changes. */

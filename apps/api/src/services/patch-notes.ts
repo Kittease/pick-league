@@ -14,7 +14,7 @@ import type {
 } from '@pick-league/shared';
 import {
   classifyChanges,
-  compareVerdicts,
+  compareNames,
   damageSplitOf,
   groupBySlot,
   itemUsersOf,
@@ -103,8 +103,8 @@ export async function patchNotes(
       changes: classified,
     };
   });
-  notesChampions.sort(compareVerdicts);
-  notesItems.sort(compareVerdicts);
+  notesChampions.sort(compareNames);
+  notesItems.sort(compareNames);
 
   const users = itemUsersOf(itemRows);
   return {

@@ -3,7 +3,7 @@ import type { PatchValueChange } from '@pick-league/shared';
 import {
   classifyChange,
   classifyChanges,
-  compareVerdicts,
+  compareNames,
   damageSplitOf,
   groupBySlot,
   humanize,
@@ -321,15 +321,21 @@ describe('verdictOf', () => {
     expect(verdictOf('new', []).verdict).toBe('new');
   });
 
-  test('order: buffs (biggest first), …, nerfs (biggest last)', () => {
+  test('order: alphabetical, accents and case ignored', () => {
     const list = [
-      { name: 'A', verdict: 'nerf', score: -0.3, buffWeight: 0, nerfWeight: 0.3 },
-      { name: 'B', verdict: 'buff', score: 0.1, buffWeight: 0.1, nerfWeight: 0 },
-      { name: 'C', verdict: 'mixed', score: 0, buffWeight: 0.1, nerfWeight: 0.1 },
-      { name: 'D', verdict: 'buff', score: 0.4, buffWeight: 0.4, nerfWeight: 0 },
-      { name: 'E', verdict: 'nerf', score: -0.1, buffWeight: 0, nerfWeight: 0.1 },
-    ] as const;
-    expect([...list].sort(compareVerdicts).map((x) => x.name)).toEqual(['D', 'B', 'C', 'E', 'A']);
+      { name: "Vel'Koz" },
+      { name: 'annie' },
+      { name: "Kai'Sa" },
+      { name: 'Évelynn' },
+      { name: 'Bard' },
+    ];
+    expect([...list].sort(compareNames).map((x) => x.name)).toEqual([
+      'annie',
+      'Bard',
+      'Évelynn',
+      "Kai'Sa",
+      "Vel'Koz",
+    ]);
   });
 });
 
