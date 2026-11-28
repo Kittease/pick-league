@@ -6,7 +6,8 @@ import {
   formatValues,
   itemsByChampion,
   patchSelection,
-  sameSelection,
+  selectionValue,
+  selectorOptions,
   selectorPatches,
   shortDate,
   visibleChanges,
@@ -67,10 +68,36 @@ describe('selectorPatches', () => {
     expect(entry && patchSelection(entry)).toEqual({ patch: '15.22', build: '15.22.300' });
   });
 
-  test('sameSelection', () => {
-    expect(sameSelection({ patch: '15.22' }, { patch: '15.22' })).toBe(true);
-    expect(sameSelection({ patch: '15.22' }, { patch: '15.22', build: '15.22.300' })).toBe(false);
-    expect(sameSelection(null, { patch: '15.22' })).toBe(false);
+  test('dropdown lines: each patch, then its gameplay hotfixes', () => {
+    const options = selectorOptions(
+      selectorPatches({
+        patches: [
+          {
+            patch: '15.22',
+            sets: [
+              set({}),
+              set({ build: '15.22.300', kind: 'hotfix', gameplayChanged: false }),
+              set({
+                build: '15.22.400',
+                kind: 'hotfix',
+                changedChampions: 1,
+                changedItems: 1,
+                detectedAt: '2026-11-21T09:00:00.000Z',
+              }),
+            ],
+          },
+          { patch: '15.21', sets: [set({ patch: '15.21', kind: 'hotfix', build: '15.21.100' })] },
+        ],
+      }),
+    );
+    expect(options.map((o) => [o.value, o.hotfix, o.label])).toEqual([
+      ['15.22', false, 'Patch 15.22 (latest)'],
+      ['15.22@15.22.400', true, 'Patch 15.22 · hotfix Nov 21'],
+      ['15.21@15.21.100', false, 'Patch 15.21'],
+    ]);
+    expect(options[0]?.title).toBe('1 build without gameplay change');
+    expect(options[1]?.detail).toBe('· 2 changed');
+    expect(selectionValue({ patch: '15.22', build: '15.22.400' })).toBe('15.22@15.22.400');
   });
 });
 

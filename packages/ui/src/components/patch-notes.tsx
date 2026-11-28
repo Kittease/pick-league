@@ -14,6 +14,13 @@ import { ChampionIcon, GameIcon } from '@pick-league/ui/components/game-icon';
 import { Notice } from '@pick-league/ui/components/notice';
 import { DeltaText } from '@pick-league/ui/components/reasons';
 import { Label } from '@pick-league/ui/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@pick-league/ui/components/ui/select';
 import { Skeleton } from '@pick-league/ui/components/ui/skeleton';
 import { Switch } from '@pick-league/ui/components/ui/switch';
 import { useApiCall } from '@pick-league/ui/hooks/use-api-call';
@@ -29,7 +36,8 @@ import {
   plural,
   type SelectorPatch,
   SLOT_LABEL,
-  sameSelection,
+  selectionValue,
+  selectorOptions,
   selectorPatches,
   shortDate,
   spellSlotNumber,
@@ -132,72 +140,55 @@ function PatchSelector({
   selected: PatchNotesSelection | null;
   onSelect: (s: PatchNotesSelection) => void;
 }) {
+  const options = useMemo(() => selectorOptions(entries), [entries]);
+  const labels = useMemo(
+    () => Object.fromEntries(options.map((o) => [o.value, o.label])),
+    [options],
+  );
+  const value = selected ? selectionValue(selected) : null;
   return (
-    <nav aria-label="Patches" className="flex flex-col gap-0.5 p-2">
-      {entries.map((entry, i) => {
-        const own = patchSelection(entry);
-        const active = sameSelection(selected, own);
-        return (
-          <div key={entry.patch} className="flex flex-col">
-            <button
-              type="button"
-              aria-current={active ? 'true' : undefined}
-              onClick={() => onSelect(own)}
-              className={cn(
-                'flex flex-col items-start gap-0.5 px-2 py-1.5 text-left hover:bg-accent',
-                active && 'bg-card shadow-[inset_2px_0_0_var(--primary)]',
-              )}
-            >
-              <span className="flex w-full items-baseline gap-2">
-                <span className="text-sm font-semibold">Patch {entry.patch}</span>
-                {i === 0 && (
-                  <span className="text-[9px] font-semibold tracking-widest text-primary uppercase">
-                    Latest
-                  </span>
-                )}
-              </span>
-              {entry.diff && (
-                <span className="text-[11px] text-muted-foreground">
-                  {plural(entry.diff.changedChampions, 'champion')} ·{' '}
-                  {plural(entry.diff.changedItems, 'item')}
-                  {entry.diff.source === 'backfill' ? ' · final build' : ''}
+    <Select
+      value={value}
+      items={labels}
+      onValueChange={(v) => {
+        const option = options.find((o) => o.value === v);
+        if (option) onSelect(option.selection);
+      }}
+    >
+      <SelectTrigger
+        size="sm"
+        aria-label="Patch or hotfix"
+        className="min-w-56 gap-2 border-b-input text-sm font-semibold"
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent
+        alignItemWithTrigger={false}
+        align="start"
+        className="w-auto max-w-[calc(100vw-2rem)] min-w-(--anchor-width)"
+      >
+        {options.map((o) =>
+          o.hotfix ? (
+            <SelectItem key={o.value} value={o.value} className="pl-6 text-xs" title={o.title}>
+              <CornerDownRightIcon className="size-3 text-muted-foreground" />
+              <HotfixBadge />
+              <span>{o.date}</span>
+              <span className="text-muted-foreground">{o.detail}</span>
+            </SelectItem>
+          ) : (
+            <SelectItem key={o.value} value={o.value} title={o.title}>
+              <span className="font-semibold">Patch {o.patch}</span>
+              {o.latest && (
+                <span className="text-[9px] font-semibold tracking-widest text-primary uppercase">
+                  Latest
                 </span>
               )}
-            </button>
-            {entry.hotfixes.map((h) => {
-              const sel = { patch: entry.patch, build: h.build };
-              const on = sameSelection(selected, sel);
-              return (
-                <button
-                  key={h.build}
-                  type="button"
-                  aria-current={on ? 'true' : undefined}
-                  onClick={() => onSelect(sel)}
-                  className={cn(
-                    'ml-3 flex items-center gap-1.5 px-2 py-1 text-left text-xs hover:bg-accent',
-                    on && 'bg-card shadow-[inset_2px_0_0_var(--primary)]',
-                  )}
-                  title={`Build ${h.build}`}
-                >
-                  <CornerDownRightIcon className="size-3 text-muted-foreground" />
-                  <HotfixBadge />
-                  <span>{shortDate(h.detectedAt)}</span>
-                  <span className="text-muted-foreground">
-                    · {h.changedChampions + h.changedItems} changed
-                  </span>
-                </button>
-              );
-            })}
-            {entry.quietHotfixes > 0 && (
-              <span className="ml-8 px-2 py-0.5 text-[10px] text-muted-foreground/70">
-                {entry.quietHotfixes} {entry.quietHotfixes === 1 ? 'build' : 'builds'} without
-                gameplay change
-              </span>
-            )}
-          </div>
-        );
-      })}
-    </nav>
+              <span className="text-[11px] text-muted-foreground">{o.detail}</span>
+            </SelectItem>
+          ),
+        )}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -635,7 +626,7 @@ function PatchNotesContent({
             {notes.hotfixes.filter((h) => h.gameplayChanged).length === 1
               ? 'a hotfix'
               : `${notes.hotfixes.filter((h) => h.gameplayChanged).length} hotfixes`}{' '}
-            with gameplay changes: see them under the patch in the list.
+            with gameplay changes: pick them in the patch list above.
           </p>
         )}
         <Explanation notes={notes} />
@@ -781,18 +772,16 @@ export function PatchNotesPage({
   }
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
-      <aside className="max-h-44 shrink-0 overflow-y-auto border-b border-border md:max-h-none md:w-60 md:border-r md:border-b-0">
-        {index.status === 'ok' ? (
-          <PatchSelector entries={entries} selected={selected} onSelect={select} />
-        ) : (
-          <div className="flex flex-col gap-2 p-3">
-            {[0, 1, 2].map((i) => (
-              <Skeleton key={i} className="h-10" />
-            ))}
-          </div>
-        )}
-      </aside>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="shrink-0 border-b border-border">
+        <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-1.5">
+          {index.status === 'ok' ? (
+            <PatchSelector entries={entries} selected={selected} onSelect={select} />
+          ) : (
+            <Skeleton className="h-9 w-56" />
+          )}
+        </div>
+      </div>
       <div ref={scroller} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
         {notes.status === 'error' && (
           <Notice

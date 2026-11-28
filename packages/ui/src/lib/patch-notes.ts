@@ -60,8 +60,67 @@ export function patchSelection(entry: SelectorPatch): PatchNotesSelection {
   return { patch: entry.patch, build: entry.hotfixes[0]?.build };
 }
 
-export const sameSelection = (a: PatchNotesSelection | null, b: PatchNotesSelection) =>
-  a !== null && a.patch === b.patch && (a.build ?? null) === (b.build ?? null);
+/** A selection as a dropdown value: "16.23" or "16.23@16.23.841.8428". */
+export const selectionValue = (s: PatchNotesSelection) =>
+  s.build ? `${s.patch}@${s.build}` : s.patch;
+
+/** One line of the patch dropdown: a patch, or one of its hotfixes (indented under it). */
+export interface SelectorOption {
+  value: string;
+  selection: PatchNotesSelection;
+  patch: string;
+  hotfix: boolean;
+  latest: boolean;
+  /** Hotfix date ("Nov 21"), empty for a patch. */
+  date: string;
+  /** "13 champions · 1 item", "· 4 changed". */
+  detail: string;
+  /** Label of the closed dropdown. */
+  label: string;
+  /** Tooltip. */
+  title: string;
+}
+
+/** The dropdown's lines: each patch, then its gameplay hotfixes. */
+export function selectorOptions(entries: readonly SelectorPatch[]): SelectorOption[] {
+  return entries.flatMap((entry, i) => {
+    const own = patchSelection(entry);
+    const quiet =
+      entry.quietHotfixes > 0
+        ? `${entry.quietHotfixes} ${entry.quietHotfixes === 1 ? 'build' : 'builds'} without gameplay change`
+        : '';
+    const patchLine: SelectorOption = {
+      value: selectionValue(own),
+      selection: own,
+      patch: entry.patch,
+      hotfix: false,
+      latest: i === 0,
+      date: '',
+      detail: entry.diff
+        ? `${plural(entry.diff.changedChampions, 'champion')} · ${plural(entry.diff.changedItems, 'item')}${entry.diff.source === 'backfill' ? ' · final build' : ''}`
+        : '',
+      label: `Patch ${entry.patch}${i === 0 ? ' (latest)' : ''}`,
+      title: quiet,
+    };
+    const hotfixLines = entry.hotfixes
+      // A patch without its own diff shows its first hotfix as the patch line.
+      .filter((h) => h.build !== own.build)
+      .map(
+        (h): SelectorOption => ({
+          value: selectionValue({ patch: entry.patch, build: h.build }),
+          selection: { patch: entry.patch, build: h.build },
+          patch: entry.patch,
+          hotfix: true,
+          latest: false,
+          date: shortDate(h.detectedAt),
+          detail: `· ${h.changedChampions + h.changedItems} changed`,
+          label: `Patch ${entry.patch} · hotfix ${shortDate(h.detectedAt)}`,
+          title: `Build ${h.build}`,
+        }),
+      );
+    return [patchLine, ...hotfixLines];
+  });
+}
 
 /** "1 champion", "13 champions". */
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
