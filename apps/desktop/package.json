@@ -1,7 +1,7 @@
 {
   "name": "@pick-league/desktop",
   "productName": "PickLeague",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "PickLeague champion-select helper",
   "author": "PickLeague",

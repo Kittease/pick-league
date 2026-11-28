@@ -22,7 +22,7 @@
     },
     "apps/desktop": {
       "name": "@pick-league/desktop",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "devDependencies": {
         "@base-ui/react": "1.9.0",
         "@fontsource-variable/figtree": "5.3.0",
