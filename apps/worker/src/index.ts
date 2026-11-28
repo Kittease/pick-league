@@ -1,18 +1,19 @@
 /**
  * PickLeague worker: crawls high-elo ranked games from the Riot API into Postgres.
  * See docs/architecture.md ("Worker"). Config via env: RIOT_API_KEY, DATABASE_URL, PLATFORMS,
- * LOG_LEVEL, COLLECT_PREVIOUS_PATCH, LISTING_SKIP, DIAMOND_MAX_TRACKED,
+ * LOG_LEVEL, COLLECT_PREVIOUS_PATCH, LISTING_SKIP,
  * OUTSIDE_MASTER_CHECKS_PER_HOUR, MASTERY_REFRESH_DAYS, PATCH_CHANGES.
  */
 import { createDb, migrate } from '@pick-league/db';
 import { createDdragonClient } from '@pick-league/shared';
 import { ConfigError, loadConfig } from './config.ts';
+import { DiskGuard, freeDiskBytes } from './disk-guard.ts';
 import { createLogger, errorMessage } from './log.ts';
 import { createCdragonClient } from './patch-changes/cdragon.ts';
 import { PatchChangesJob } from './patch-changes/job.ts';
 import { PatchTracker } from './patches.ts';
 import { RiotClient } from './riot/client.ts';
-import { PlatformWorker } from './scheduler/platform-worker.ts';
+import { NO_DIAMOND_CEILING, PlatformWorker } from './scheduler/platform-worker.ts';
 
 const PROGRESS_INTERVAL_MS = 60_000;
 const SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -38,7 +39,6 @@ if (config.collectPreviousPatch) {
 }
 log.info('collection settings', {
   listingSkip: config.listingSkip,
-  diamondMaxTracked: config.diamondMaxTracked,
   outsideMasterChecksPerHour: config.outsideMasterChecksPerHour,
   masteryRefreshDays: config.masteryRefreshDays,
   patchChanges: config.patchChanges,
@@ -58,7 +58,7 @@ const workers = config.platforms.map(
       options: {
         collectPreviousPatch: config.collectPreviousPatch,
         listingSkip: config.listingSkip,
-        diamondMaxTracked: config.diamondMaxTracked,
+        diamondMaxTracked: NO_DIAMOND_CEILING,
         outsideCheckMaxPerHour: config.outsideMasterChecksPerHour,
         masteryRefreshIntervalMs: config.masteryRefreshDays * 86_400_000,
       },
@@ -118,9 +118,12 @@ const patchChanges = config.patchChanges
       .catch((err) => log.error('patch changes job stopped', { error: errorMessage(err) }))
   : Promise.resolve();
 
+// The disk: the oldest games of the previous patch make room for the newest ones.
+const diskGuard = new DiskGuard(db, patches, () => freeDiskBytes('/'), log);
+
 let exitCode = 0;
 await Promise.all(
-  [patches.run(signal), ...workers.map((w) => w.start(signal))].map((task) =>
+  [patches.run(signal), diskGuard.run(signal), ...workers.map((w) => w.start(signal))].map((task) =>
     task.catch((err) => {
       log.error('worker crashed', { error: errorMessage(err) });
       exitCode = 1;

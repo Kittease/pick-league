@@ -30,7 +30,7 @@ Runs on any Linux box with Docker (sized for 6 cores, 12 GB RAM, 100 GB disk; se
 `docker-compose.yml`). The database keeps two patches at about 22 KB per match: ~13 GB for two full
 patches of every Master+ player (an estimate, see "Size estimate" in
 [docs/database-schema.md](docs/database-schema.md)), more with Diamond players
-(`DIAMOND_MAX_TRACKED`).
+(as many as the Riot budget allows; the disk guard trims the previous patch when the disk is low).
 
 1. Install Docker Engine with the compose plugin and clone this repository.
 2. `cp .env.example .env`, then set `RIOT_API_KEY`, a strong `POSTGRES_PASSWORD` (**before the
@@ -60,7 +60,7 @@ Riot's budget for match requests (3,000 an hour per region) is spent in three st
    nothing waiting. `outsideMasters` in the `progress` log shows how many are followed, how many
    were checked in the last hour, the age of the oldest check, how many wait for a listing and
    how many of their matches are waiting;
-3. Diamond players, with what is left (see `DIAMOND_MAX_TRACKED`): nothing of theirs is listed or
+3. Diamond players, with what is left: nothing of theirs is listed or
    fetched while tier 1 or tier 2 has something waiting. First the Diamond players seen in a
    Master+ game in the last 7 days, then, once those have nothing waiting, the other Diamond
    players from Diamond I down to Diamond IV.
@@ -81,9 +81,11 @@ Worker settings (in `.env`, applied with `docker compose up -d worker`):
   have brought new match ids
   (`listingSkipMisses`): run it first, then read that table. In both modes a player is listed only
   after the matches brought by better-placed players are stored.
-- `DIAMOND_MAX_TRACKED` = the most Diamond players the worker may track per server (0, the
-  default: none, Diamond is not read). It is a ceiling, there to protect the disk: how many are
-  tracked under it is a target the worker sizes by itself. With each hourly ladder refresh the
+- Diamond players (no setting): how many are tracked per server is a target the worker sizes by
+  itself from the budget, with no ceiling. **Disk guard**: when the disk has less than 20 GB
+  free, the number of stored matches stops growing and each new match replaces the oldest match
+  of the previous patch (lowered by 5 % at a time if the disk falls under 10 GB, free again over
+  30 GB); the latest patch is never trimmed. With each hourly ladder refresh the
   worker reads the Diamond divisions (a few hundred requests on the server's platform host,
   served right after the ladder lists) and tracks the best candidates, as many as the target: first the Diamond players
   seen in a Master+ game in the last 7 days (by division, I down to IV, then LP), then the other

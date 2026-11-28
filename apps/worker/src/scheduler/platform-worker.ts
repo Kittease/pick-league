@@ -458,8 +458,8 @@ export interface DiamondProgress {
   trackedWithMaster: number;
   /** Diamond players to track: sized by the worker, at most `cap`. */
   target: number;
-  /** `diamondMaxTracked`. */
-  cap: number;
+  /** `diamondMaxTracked` (null: no ceiling, the production setting). */
+  cap: number | null;
   /**
    * The last ladder cycles since the target changed (at most `diamondGrowCycles`), oldest first:
    * K kept up, W waiting for patch data, M missed; and how many of them were kept up with.
@@ -670,6 +670,12 @@ const UNRANKED = Number.MAX_SAFE_INTEGER;
 
 /** Cycles kept in `diamond_tracking.cycles` at most. */
 const MAX_RECORDED_CYCLES = 96;
+
+/**
+ * `diamondMaxTracked` of production: Diamond players are tracked as far down the ladder as the
+ * budget allows (the disk is kept by the disk guard, which trims the previous patch instead).
+ */
+export const NO_DIAMOND_CEILING = Number.MAX_SAFE_INTEGER;
 
 /** A ladder cycle in progress, as far as the Diamond target is concerned. */
 interface BudgetCycle {
@@ -1278,7 +1284,7 @@ export class PlatformWorker {
           cycles: '',
           changedAt: new Date(now),
           changedFrom: stored.target,
-          changeReason: 'above the ceiling (DIAMOND_MAX_TRACKED)',
+          changeReason: 'above the ceiling',
         };
         changed = true;
       }
@@ -2534,7 +2540,7 @@ export class PlatformWorker {
       tracked: this.diamond.tracked.length,
       trackedWithMaster: this.diamond.withMaster,
       target: state.target,
-      cap: this.opts.diamondMaxTracked,
+      cap: this.opts.diamondMaxTracked >= NO_DIAMOND_CEILING ? null : this.opts.diamondMaxTracked,
       cycles,
       keptCycles: cycles.split('K').length - 1,
       settleCyclesLeft: state.settleCyclesLeft,

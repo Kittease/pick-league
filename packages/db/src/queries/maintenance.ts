@@ -45,6 +45,29 @@ export async function deleteOldPatches(q: Queryable, keep = 2): Promise<CleanupR
   });
 }
 
+/** Number of stored matches (all patches). */
+export async function countMatches(q: Queryable): Promise<number> {
+  const [row] = await q<{ n: number }[]>`SELECT count(*)::int AS n FROM matches`;
+  return row?.n ?? 0;
+}
+
+/**
+ * Deletes the `limit` oldest stored matches (by start) of `patch`; everything of a match goes
+ * with it (the foreign keys cascade, incremental stats rows included). Their DONE rows stay in
+ * `match_fetch_queue`, so they are not fetched again. Returns how many were deleted.
+ */
+export async function deleteOldestMatchesOfPatch(
+  q: Queryable,
+  patch: PatchId,
+  limit: number,
+): Promise<number> {
+  if (limit <= 0) return 0;
+  const res = await q`
+    DELETE FROM matches WHERE id IN (
+      SELECT id FROM matches WHERE patch = ${patch} ORDER BY started_at, id LIMIT ${limit})`;
+  return res.count;
+}
+
 /**
  * Deletes non-tracked players present in no kept match (with their masteries/enrichment), in
  * batches of `batchSize` (default 1000), each in its own short transaction. Safe while matches are

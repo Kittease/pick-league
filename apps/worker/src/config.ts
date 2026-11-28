@@ -15,11 +15,6 @@ export interface WorkerConfig {
    */
   listingSkip: ListingSkipMode;
   /**
-   * Ceiling of the Diamond target, per platform (default 0: Diamond is not read at all). How many
-   * Diamond players are tracked under it is sized by the worker.
-   */
-  diamondMaxTracked: number;
-  /**
    * Most checks an hour, per platform, of the Masters outside Riot's list (their own solo queue
    * entry, on the platform host; default 1500, 0: they are not followed). What is left of that
    * host's 3,000 requests an hour goes to the mastery refresh and enrichment.
@@ -80,15 +75,6 @@ export function loadConfig(env: Record<string, string | undefined>): WorkerConfi
     );
   }
 
-  const rawDiamond = (env.DIAMOND_MAX_TRACKED ?? '').trim() || '0';
-  let diamondMaxTracked = 0;
-  if (/^\d{1,7}$/.test(rawDiamond)) diamondMaxTracked = Number(rawDiamond);
-  else {
-    problems.push(
-      `DIAMOND_MAX_TRACKED must be a whole number of players, 0 to 9999999 (got "${rawDiamond}")`,
-    );
-  }
-
   const rawChecks = (env.OUTSIDE_MASTER_CHECKS_PER_HOUR ?? '').trim() || '1500';
   let outsideMasterChecksPerHour = 1500;
   if (/^\d{1,4}$/.test(rawChecks) && Number(rawChecks) <= 3000) {
@@ -126,7 +112,6 @@ export function loadConfig(env: Record<string, string | undefined>): WorkerConfi
     logLevel,
     collectPreviousPatch,
     listingSkip,
-    diamondMaxTracked,
     outsideMasterChecksPerHour,
     masteryRefreshDays,
     patchChanges,

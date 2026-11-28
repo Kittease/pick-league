@@ -47,7 +47,7 @@ CREATE TYPE platform AS ENUM ('KR', 'EUW1', 'NA1', 'VN2');
 
 CREATE TYPE ladder_tier AS ENUM ('CHALLENGER', 'GRANDMASTER', 'MASTER', 'DIAMOND');
 -- In ladder order. MASTER: the top N by LP, N growing as the worker catches up.
--- DIAMOND (0023): only with DIAMOND_MAX_TRACKED, with ladder_entries.division.
+-- DIAMOND (0023): the tracked Diamond players, with ladder_entries.division.
 
 CREATE TYPE position AS ENUM ('TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY');
 
@@ -165,7 +165,7 @@ CREATE TABLE players (
 -- last_seen_with_master_at is set for all 10 participants when a match is stored and at least one
 -- of them is known as Master, Grandmaster or Challenger at that moment (an apex row in
 -- ladder_entries, or players.solo_tier); the greatest start is kept. Diamond players with one in
--- the last 7 days are tracked first (DIAMOND_MAX_TRACKED); a Diamond lobby found through a tracked
+-- the last 7 days are tracked first; a Diamond lobby found through a tracked
 -- Diamond player sets nothing. 0024 backfilled it with last_seen_in_match_at (every match stored
 -- until then was found through a Master+ player).
 -- Cleanup: players that are neither tracked nor present in a kept match are deleted after an old
@@ -177,7 +177,7 @@ CREATE INDEX players_listing_requested_idx ON players (listing_requested_at)
 
 -- Current Challenger/GM/top Master state. One league-v4 call per tier per platform refreshes it;
 -- a change in wins+losses since the previous run means the player played → fetch their match ids.
--- With DIAMOND_MAX_TRACKED also the tracked Diamond players, refreshed by a sweep of the Diamond
+-- Also the tracked Diamond players, refreshed by a sweep of the Diamond
 -- division pages after each apex refresh (each row with the time of its own page).
 CREATE TABLE ladder_entries (
   puuid         text PRIMARY KEY REFERENCES players ON DELETE CASCADE,
@@ -474,8 +474,8 @@ CREATE TABLE worker_status (
 ```
 
 ```sql
--- The Diamond target of a platform (0031): how many Diamond players the worker tracks, under
--- DIAMOND_MAX_TRACKED. One row per platform, written by the worker: created at its first start
+-- The Diamond target of a platform (0031): how many Diamond players the worker tracks (no
+-- ceiling since 2026-11-28; DIAMOND_MAX_TRACKED was one until then). One row per platform, written by the worker: created at its first start
 -- with the number of Diamond players tracked then, read back at every start.
 CREATE TABLE diamond_tracking (
   platform           platform    PRIMARY KEY,

@@ -544,7 +544,7 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
     expect(await diamond(w)).toMatchObject({ target: 4, cycles: 'K', settleCyclesLeft: 0 });
     await hours(w, 22);
     expect(await diamond(w)).toMatchObject({ target: 4, keptCycles: 23 });
-    // The next step stops at the ceiling (DIAMOND_MAX_TRACKED = 5).
+    // The next step stops at the ceiling (diamondMaxTracked = 5).
     await hour(w);
     expect(await diamond(w)).toMatchObject({ target: 5, tracked: 5, cycles: '' });
     await w.listTrackedPlayer(dia('d-50'));
@@ -829,7 +829,7 @@ d('PlatformWorker: budget tiers (Postgres)', () => {
     expect(await diamond(capped)).toMatchObject({
       target: 2,
       cap: 2,
-      lastChange: { from: 3, reason: 'above the ceiling (DIAMOND_MAX_TRACKED)' },
+      lastChange: { from: 3, reason: 'above the ceiling' },
     });
     await capped.refreshLadder();
     await capped.refreshDiamonds();
