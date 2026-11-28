@@ -57,7 +57,7 @@ describe('selectDiamondPlayers', () => {
     ]);
   });
 
-  test('seen in a Master+ game first (any division, by division then LP), then the other Diamond I players by LP', () => {
+  test('seen in a Master+ game first (any division, by division then LP), then every other Diamond player by division then LP', () => {
     const s = selectDiamondPlayers(candidates, withMaster, 10);
     expect(puuids(s.tracked)).toEqual([
       'fake-one-40',
@@ -71,7 +71,7 @@ describe('selectDiamondPlayers', () => {
     expect(s.withMaster).toBe(4);
   });
 
-  test('nobody else is a candidate: the lower divisions only through a Master+ game', () => {
+  test('down the ladder to Diamond IV: the lower divisions after the higher ones', () => {
     const all = [...candidates, entry('fake-three-50', 3, 50), entry('fake-two-60', 2, 60)];
     const s = selectDiamondPlayers(all, new Set(['fake-four-80']), 100);
     expect(puuids(s.tracked)).toEqual([
@@ -80,8 +80,21 @@ describe('selectDiamondPlayers', () => {
       'fake-one-70',
       'fake-one-40',
       'fake-one-20',
+      'fake-two-99',
+      'fake-two-60',
+      'fake-two-10',
+      'fake-three-50',
     ]);
     expect(s.withMaster).toBe(1);
+    // A smaller target stops higher up the ladder.
+    expect(puuids(selectDiamondPlayers(all, new Set(['fake-four-80']), 6).tracked)).toEqual([
+      'fake-four-80',
+      'fake-one-90',
+      'fake-one-70',
+      'fake-one-40',
+      'fake-one-20',
+      'fake-two-99',
+    ]);
   });
 
   test('the target holds for everyone: the best candidates of that order', () => {

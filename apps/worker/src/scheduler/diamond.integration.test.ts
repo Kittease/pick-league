@@ -169,7 +169,7 @@ d('PlatformWorker: Diamond players (Postgres)', () => {
     expect(await db`SELECT 1 FROM diamond_tracking`).toHaveLength(0);
   });
 
-  test('a sweep reads every page; the best candidates are tracked, as many as the target: seen in a Master+ game first (by division then LP), then the other Diamond I players', async () => {
+  test('a sweep reads every page; the best candidates are tracked, as many as the target: seen in a Master+ game first (by division then LP), then the other Diamond players', async () => {
     await sevenPlayers();
     await setTarget(4);
     const w = makeWorker({ diamondMaxTracked: 10 });
@@ -262,7 +262,7 @@ d('PlatformWorker: Diamond players (Postgres)', () => {
     expect(riot.idQueries.map((q) => q.priority)).toEqual([PRIORITY.DIAMOND_ONE_MATCH_IDS]);
   });
 
-  test('only the players seen in a Master+ game and the Diamond I players are candidates', async () => {
+  test('every Diamond player is a candidate: seen in a Master+ game first, then down the ladder by division then LP', async () => {
     setDivision('I', [
       ['one-10', 10],
       ['one-70', 70],
@@ -287,11 +287,19 @@ d('PlatformWorker: Diamond players (Postgres)', () => {
     };
     expect(await tracked(1)).toEqual(['four-90']);
     expect(await tracked(2)).toEqual(['one-70', 'four-90']);
-    // Nobody of Diamond II to IV without a Master+ game, however large the target.
-    expect(await tracked(10)).toEqual(['one-70', 'one-10', 'four-90']);
-    // A Diamond II player turns up in one: tracked, before the Diamond I players.
+    // Then Diamond I, then Diamond II, and so on down to Diamond IV.
+    expect(await tracked(4)).toEqual(['one-70', 'one-10', 'two-99', 'four-90']);
+    expect(await tracked(10)).toEqual([
+      'one-70',
+      'one-10',
+      'two-99',
+      'two-40',
+      'three-80',
+      'four-95',
+      'four-90',
+    ]);
+    // A Diamond II player turns up in a Master+ game: tracked before the Diamond I players.
     await seenWithMaster(['two-99']);
-    expect(await tracked(10)).toEqual(['one-70', 'one-10', 'two-99', 'four-90']);
     // A smaller target drops the last candidates of that order; their players rows stay.
     expect(await tracked(3)).toEqual(['one-70', 'two-99', 'four-90']);
     expect(await tracked(2)).toEqual(['two-99', 'four-90']);

@@ -1,7 +1,7 @@
 /**
  * The three tiers of the match cluster's budget: tracked apex players, then the Masters outside
  * Riot's list whose counter moved, then the Diamond players (those seen in a Master+ game, then
- * the other Diamond I players), whose number the worker sizes by itself. Needs DATABASE_URL_TEST.
+ * the other Diamond players, top divisions first), whose number the worker sizes by itself. Needs DATABASE_URL_TEST.
  */
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import {

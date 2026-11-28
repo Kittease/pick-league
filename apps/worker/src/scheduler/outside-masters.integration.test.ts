@@ -836,7 +836,7 @@ d('PlatformWorker: Masters outside the ladder lists (Postgres)', () => {
   // Diamond candidates
   // ---------------------------------------------------------------------------
 
-  test('Diamond candidates are the players seen in a Master+ game and the Diamond I players: a lower division tracked before leaves', async () => {
+  test('Diamond candidates: seen in a Master+ game first, then down the ladder; a player tracked before whom better candidates pass leaves', async () => {
     // As the previous version left them: a Diamond II and a Diamond I player, neither seen in a
     // Master+ game; and a Diamond IV player who was, an hour ago.
     await upsertDiamondLadder(
@@ -860,13 +860,15 @@ d('PlatformWorker: Masters outside the ladder lists (Postgres)', () => {
       ['other-two', 99],
     ]);
     setDivision('IV', [['four', 5]]);
-    await setTarget(10);
+    // Three: the Diamond IV player seen in a Master+ game, then the two Diamond I players; the
+    // Diamond II players come after them.
+    await setTarget(3);
     const w = makeWorker({ diamondMaxTracked: 10 });
     await w.refreshLadder();
     await w.refreshDiamonds();
     expect(await trackedDiamonds()).toEqual(['other-one', 'one', 'four']);
     expect((await w.progress()).diamond).toMatchObject({
-      target: 10,
+      target: 3,
       tracked: 3,
       trackedWithMaster: 1,
     });

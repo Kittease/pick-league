@@ -16,8 +16,8 @@
  *    entry is checked in rotation on the platform host, and those whose wins + losses moved are
  *    listed, only once tier 1 has caught up (their matches 0, their listings -1);
  * 3. the tracked Diamond players, only once tier 1 has caught up and tier 2 has nothing waiting:
- *    3a those seen in a Master+ game lately (listings -2, matches -3), then 3b the other Diamond I
- *    players, only once 3a has nothing waiting (listings -4, matches -5). How many are tracked is
+ *    3a those seen in a Master+ game lately (listings -2, matches -3), then 3b the other Diamond
+ *    players (division I first, down to IV), only once 3a has nothing waiting (listings -4, matches -5). How many are tracked is
  *    a target the worker sizes by itself.
  *
  * A tier is held back twice: its work is not handed out before its turn (below), and its requests
@@ -35,7 +35,8 @@
  * Diamond tracking (`diamondMaxTracked` > 0): after each hourly ladder refresh the four Diamond
  * divisions are read page by page (the rank of every player already known is stored on the way),
  * and the best candidates are tracked, as many as the target says: first those seen in a Master+
- * game lately, by division then LP, then the other Diamond I players by LP; nobody else. The
+ * game lately, by division then LP, then the other Diamond players by division (I down to IV)
+ * then LP. The
  * target is sized on the day: it grows a step when the tiers ran out of work in a few hours of
  * the last day, and shrinks a step when they did not catch up once in a full day
  * (`startBudgetCycle`).
@@ -263,7 +264,8 @@ export interface SchedulerOptions {
    * Diamond request is made). The target itself is sized by the worker, `diamondStep` players
    * at a time (default 500), and kept in `diamond_tracking`. Tracked first (3a): those seen in a
    * Master+ game during `diamondWithMasterWindowMs` (default 7 days), by division then LP; then
-   * (3b) the other Diamond I players by LP. Nobody else.
+   * (3b) every other Diamond player, by division (I down to IV) then LP: top players first,
+   * nobody below Diamond IV.
    */
   diamondMaxTracked: number;
   diamondStep: number;
@@ -452,7 +454,7 @@ export interface DiamondProgress {
   seen: [number, number, number, number] | null;
   /** Diamond players tracked. */
   tracked: number;
-  /** Of them, seen in a Master+ game lately (3a); the others are Diamond I players (3b). */
+  /** Of them, seen in a Master+ game lately (3a); the others are of 3b (every other Diamond player). */
   trackedWithMaster: number;
   /** Diamond players to track: sized by the worker, at most `cap`. */
   target: number;
@@ -544,8 +546,8 @@ export interface DiamondSelection {
 
 /**
  * Which Diamond players to track, `target` at most. Two groups, in this order: (3a) those of
- * `seenWithMaster`, whatever their division, by division (I first) then LP; (3b) the other
- * Diamond I players by LP. Nobody else is a candidate.
+ * `seenWithMaster`, whatever their division, by division (I first) then LP; (3b) every other
+ * Diamond player, by division (I down to IV) then LP.
  */
 export function selectDiamondPlayers(
   candidates: readonly DiamondEntry[],
@@ -556,7 +558,7 @@ export function selectDiamondPlayers(
   const others: DiamondEntry[] = [];
   for (const c of candidates) {
     if (seenWithMaster.has(c.puuid)) first.push(c);
-    else if (c.division === 1) others.push(c);
+    else others.push(c);
   }
   first.sort(byDivisionThenLp);
   others.sort(byDivisionThenLp);
@@ -733,7 +735,7 @@ export class PlatformWorker {
   private readonly diamond = {
     /**
      * Tracked Diamond players: those seen in a Master+ game lately (3a; division, then LP), then
-     * the other Diamond I players (3b; by LP).
+     * the other Diamond players (3b; division, then LP).
      */
     tracked: [] as DiamondRank[],
     /** How many of `tracked`, from its start, are of 3a. */
@@ -1027,7 +1029,7 @@ export class PlatformWorker {
 
   /**
    * Of tier 3, a Diamond player seen in a Master+ game lately (3a); the others (3b) are the
-   * Diamond I players, and those who left the tracked ladder while waiting.
+   * other Diamond players, and those who left the tracked ladder while waiting.
    */
   private isDiamondWithMaster(puuid: string): boolean {
     const rank = this.rankOf(puuid);
@@ -1175,7 +1177,7 @@ export class PlatformWorker {
   }
 
   /**
-   * Turn of the Diamond I players (3b), inside tier 3: the Diamond players seen in a Master+ game
+   * Turn of the other Diamond players (3b), inside tier 3: the Diamond players seen in a Master+ game
    * (3a) have nothing waiting. None of their listings is waiting or running (players cooling
    * down after a failed listing aside) and at most `expandBelowPendingMatches` of their matches
    * are PENDING.
@@ -1194,8 +1196,8 @@ export class PlatformWorker {
 
   /**
    * The first band of `fetch_rank` whose matches must wait now, up to the back of the queue
-   * (null: none): every Diamond player's when it is not tier 3's turn, those of the Diamond I
-   * players when the players seen in a Master+ game still have something waiting.
+   * (null: none): every Diamond player's when it is not tier 3's turn, those of the other
+   * Diamond players (3b) when the players seen in a Master+ game still have something waiting.
    */
   private async matchesHeldFrom(): Promise<number | null> {
     if (!(await this.diamondTurn())) return DIAMOND_FETCH_RANK;
@@ -1418,8 +1420,7 @@ export class PlatformWorker {
    * Reads the four Diamond divisions page by page and tracks the best candidates, as many as the
    * target says (`diamond_tracking`, at most `diamondMaxTracked`): first (3a) those seen in a
    * Master+ game during `diamondWithMasterWindowMs`, whatever their division, by division then
-   * LP; then (3b) the other Diamond I players by LP. A Diamond II to IV player not seen in a
-   * Master+ game is not a candidate, tracked so far or not. Marks who played; returns how many
+   * LP; then (3b) every other Diamond player by division (I down to IV) then LP. Marks who played; returns how many
    * (null: tracking is off, or Riot answered with no player at all and nothing was changed).
    *
    * On the way, each page's tier, division, LP and counters are stored for the players already
@@ -1451,15 +1452,15 @@ export class PlatformWorker {
     const seenWithMaster = new Set(withMaster);
     const storedPuuids = new Set(stored.map((r) => r.puuid));
     // A sweep is up to 140,000 entries. Only those who can end up tracked are kept in memory:
-    // the players seen in a Master+ game and the tracked ones, and of the other Diamond I players
-    // the best by LP, as many as the target (and a margin for players seen twice).
+    // the players seen in a Master+ game and the tracked ones, and of the other Diamond players
+    // the best by division then LP, as many as the target (and a margin for players seen twice).
     const first: DiamondEntry[] = [];
     const others = new BestDiamonds(target + this.opts.diamondStep);
     this.diamond.ranksWritten = 0;
     const seen = await this.sweepDiamond((e) => {
       if (this.apexPuuids.has(e.puuid)) return;
       if (seenWithMaster.has(e.puuid) || storedPuuids.has(e.puuid)) first.push(e);
-      else if (e.division === 1) others.add(e);
+      else others.add(e);
     }, signal);
     if (seen.every((n) => n === 0)) {
       this.log.warn('empty Diamond sweep from Riot, not applied');
@@ -1668,8 +1669,8 @@ export class PlatformWorker {
 
   /**
    * The player to list next whose tier may be listed now: an apex player always, a Diamond
-   * player seen in a Master+ game only when it is tier 3's turn, a Diamond I player (or one who
-   * left the tracked ladder) only when those have nothing waiting either.
+   * player seen in a Master+ game only when it is tier 3's turn, another Diamond player (3b, or one
+   * who left the tracked ladder) only when those have nothing waiting either.
    */
   private async peekListablePlayer(): Promise<string | null> {
     const next = this.peekPlayedPlayer();
@@ -1884,7 +1885,7 @@ export class PlatformWorker {
    * Lists a player's ranked match ids since `matches_synced_until`; returns how many were new
    * (and adds them to `newIds`). The request and the matches it queues take the priority of the
    * player's tier: an apex player's ladder position, then the Masters outside Riot's list
-   * (`extra`), then the Diamond players seen in a Master+ game, then the Diamond I players.
+   * (`extra`), then the Diamond players seen in a Master+ game, then the other Diamond players.
    */
   async listPlayerMatches(
     puuid: string,
@@ -2483,7 +2484,7 @@ export class PlatformWorker {
 
   /**
    * The next queued match for a match loop. A Diamond player's match is only handed out when it
-   * is its turn: tier 3's, and for a Diamond I player's when the players seen in a Master+ game
+   * is its turn: tier 3's, and for a 3b player's when the players seen in a Master+ game
    * have nothing waiting either (checked again here: what was claimed a moment ago may have to
    * wait now); otherwise the queue is read again without them.
    */

@@ -199,13 +199,13 @@ CREATE TABLE ladder_entries (
 -- their baseline; their players row and the matches they appear in are kept.
 -- Ladder order (listings, fetch_rank): tier, division NULLS FIRST, league_points DESC for the apex
 -- rows. The DIAMOND rows are two groups: first the players seen in a Master+ game in the last 7
--- days (players.last_seen_with_master_at), by division then LP, then the others (Diamond I), by LP.
+-- days (players.last_seen_with_master_at), by division then LP, then the others, by division then LP.
 -- A tracked Diamond player a complete sweep did not see keeps their row untouched, and loses it
 -- once updated_at is 24 h old; one who shows up on an apex list becomes an apex row. The DIAMOND
 -- rows are the best candidates of a sweep, as many as diamond_tracking.target: the Diamond
--- players (any division) seen in a Master+ game lately, then the other Diamond I players, nobody
--- else. A player who is no longer among them (the target shrank, others passed them, a lower
--- division without a Master+ game) loses their row like any player leaving the ladder.
+-- players (any division) seen in a Master+ game lately, then the other Diamond players by
+-- division then LP (nobody below Diamond IV). A player who is no longer among them (the target
+-- shrank, others passed them) loses their row like any player leaving the ladder.
 -- Skip rule: with expected = wins + losses - listed_games, a player about to be listed is skipped
 -- when expected > 0 and at least that many of their stored non-remake matches ended after
 -- listed_snapshot_at and at least 15 minutes before games_changed_at (Riot's ladder counts a
@@ -402,7 +402,7 @@ CREATE INDEX match_fetch_queue_pending_idx
   ON match_fetch_queue (platform, fetch_rank, discovered_at, match_id) WHERE status = 'PENDING';
 -- Claimed lowest fetch_rank first, so better-placed players' matches are fetched first: apex
 -- players', then outside Masters', then Diamond players' (those bands only when the first two are
--- nearly empty and no outside Master waits for a listing, the Diamond I band only when the band
+-- nearly empty and no outside Master waits for a listing, the band of the other Diamond players only when the band
 -- before it is nearly empty too: docs/architecture.md, Worker). A match that fails or is deferred
 -- leaves its band for the back of the queue at once. Rows queued before the two Diamond bands
 -- existed are all in the first one.

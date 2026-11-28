@@ -62,8 +62,8 @@ Riot's budget for match requests (3,000 an hour per region) is spent in three st
    how many of their matches are waiting;
 3. Diamond players, with what is left (see `DIAMOND_MAX_TRACKED`): nothing of theirs is listed or
    fetched while tier 1 or tier 2 has something waiting. First the Diamond players seen in a
-   Master+ game in the last 7 days, then, once those have nothing waiting, the other Diamond I
-   players.
+   Master+ game in the last 7 days, then, once those have nothing waiting, the other Diamond
+   players from Diamond I down to Diamond IV.
 
 The platform host serves, in this order: the ladder lists, the Diamond pages, the checks of the
 Masters outside Riot's list, the masteries of tracked players, then masteries and rank of the
@@ -87,11 +87,11 @@ Worker settings (in `.env`, applied with `docker compose up -d worker`):
   worker reads the Diamond divisions (a few hundred requests on the server's platform host,
   served right after the ladder lists) and tracks the best candidates, as many as the target: first the Diamond players
   seen in a Master+ game in the last 7 days (by division, I down to IV, then LP), then the other
-  Diamond I players by LP; nobody else. The target grows by 500 after a full day (24 hourly cycles) in which the worker
-  kept up, that is, in which everything of the three tiers was listed and fetched at least once
-  in each hour; it shrinks by 500
-  (the last candidates leave, their stored matches stay) once six hours were missed since the
-  last one kept up with. A step up first brings the new players' matches of the patch: until that
+  Diamond players by division (I down to IV) then LP, as far down as the budget allows. The target is sized on
+  the day: it grows by 1,000 when, in the last 24 hourly cycles, the three tiers ran out of work
+  in at least 3 (everything listed and fetched: budget was left; at first, two such hours in a
+  row are enough), and shrinks by 1,000 (the last candidates leave, their stored matches stay)
+  once a full day went by without catching up once. A step up first brings the new players' matches of the patch: until that
   burst is absorbed (a day at most) hours are not counted. Their matches are collected like
   everyone's, so Diamond lobbies enter the statistics. `diamond` in the `progress` log shows the
   players seen per division, the target, those tracked, the ceiling, the last hours (`cycles`:
